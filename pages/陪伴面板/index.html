@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>陪伴面板</title>
+  <link rel="stylesheet" href="./app.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>陪伴面板</h1>
+        <p id="subtitle">读取运行态中...</p>
+      </div>
+      <button id="refreshBtn" class="icon-button" title="刷新" aria-label="刷新">↻</button>
+    </header>
+
+    <section class="stats" id="stats"></section>
+
+    <section class="layout">
+      <nav class="tabs" aria-label="视图">
+        <button class="tab is-active" data-tab="dashboard">总览</button>
+        <button class="tab" data-tab="private">私聊</button>
+        <button class="tab" data-tab="group">群聊</button>
+        <button class="tab" data-tab="memory">记忆</button>
+        <button class="tab" data-tab="modules">模块配置</button>
+        <button class="tab" data-tab="config">配置</button>
+        <button class="tab" data-tab="models">模型</button>
+      </nav>
+
+      <section class="panel is-active" id="panel-dashboard">
+        <div class="section-head">
+          <h2>运行总览</h2>
+          <div class="actions compact">
+            <button id="exportSnapshotBtn" type="button">导出快照</button>
+          </div>
+        </div>
+        <div class="dashboard-grid">
+          <article class="wide">
+            <h2>配置健康检查</h2>
+            <div id="healthPanel" class="health-list"></div>
+          </article>
+          <article class="wide">
+            <h2>运行诊断</h2>
+            <div id="diagnosticPanel" class="diagnostic-list"></div>
+          </article>
+          <article>
+            <h2>私聊关系分布</h2>
+            <div id="relationshipChart" class="chart-box"></div>
+          </article>
+          <article>
+            <h2>群聊观测分布</h2>
+            <div id="groupBubbleChart" class="chart-box"></div>
+          </article>
+          <article>
+            <h2>主动额度</h2>
+            <div id="quotaChart" class="chart-box"></div>
+          </article>
+          <article>
+            <h2>能力状态</h2>
+            <div id="featureMatrix" class="feature-matrix"></div>
+          </article>
+          <article class="wide">
+            <h2>最近活跃热力</h2>
+            <div id="activityHeatmap" class="heatmap"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-private">
+        <div class="section-head">
+          <h2>私聊对象</h2>
+          <input id="userFilter" type="search" placeholder="筛选 QQ / 昵称" />
+        </div>
+        <form id="addUserForm" class="inline-form manage-form">
+          <label>QQ 号 <input name="user_id" placeholder="例如 123456789" required /></label>
+          <label>称呼 <input name="nickname" placeholder="可选" /></label>
+          <button type="submit">新增对象</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>关系</th>
+                <th>互动</th>
+                <th>主动</th>
+                <th>最近</th>
+              </tr>
+            </thead>
+            <tbody id="userRows"></tbody>
+          </table>
+        </div>
+        <article class="detail" id="userDetail"></article>
+      </section>
+
+      <section class="panel" id="panel-group">
+        <div class="section-head">
+          <h2>群聊观测</h2>
+          <input id="groupFilter" type="search" placeholder="筛选群号" />
+        </div>
+        <form id="addGroupForm" class="inline-form manage-form">
+          <label>群号 <input name="group_id" placeholder="例如 987654321" required /></label>
+          <label>名单 <select name="list_mode"><option value="none">只创建观测</option><option value="whitelist">加入白名单</option><option value="blacklist">加入黑名单</option></select></label>
+          <button type="submit">新增群聊</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>群</th>
+                <th>模式</th>
+                <th>气氛</th>
+                <th>积累</th>
+                <th>最近</th>
+              </tr>
+            </thead>
+            <tbody id="groupRows"></tbody>
+          </table>
+        </div>
+        <article class="detail" id="groupDetail"></article>
+      </section>
+
+      <section class="panel" id="panel-memory">
+        <div class="memory-grid">
+          <article>
+            <h2>LivingMemory</h2>
+            <pre id="livingMemoryBox">加载中...</pre>
+          </article>
+          <article>
+            <h2>今日状态</h2>
+            <dl id="dailyState"></dl>
+          </article>
+          <article class="wide">
+            <h2>日内状态变化</h2>
+            <div id="dailyTimeline" class="timeline-list"></div>
+          </article>
+          <article class="wide">
+            <h2>用户交互影响</h2>
+            <div id="interactionImpact" class="impact-list"></div>
+          </article>
+          <article>
+            <h2>私聊记忆构成</h2>
+            <div id="memoryComposition" class="chart-box"></div>
+          </article>
+          <article>
+            <h2>群聊黑话词云</h2>
+            <div id="slangCloud" class="word-cloud"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-modules">
+        <div class="section-head">
+          <h2>模块化配置</h2>
+          <span class="muted">这里保存常用配置；更细的高级项仍可在 AstrBot 原配置页调整</span>
+        </div>
+        <div class="notice-grid">
+          <section class="notice">
+            <b>保存范围</b>
+            <p>本页会写入插件运行配置，并尽量调用 AstrBot 的配置保存能力；如果当前 AstrBot 版本不支持热保存，重启后仍以原配置页为准。</p>
+          </section>
+          <section class="notice">
+            <b>推荐顺序</b>
+            <p>先选择配置预设，再补私聊目标和群聊名单，最后按需要调整模型与功能开关。</p>
+          </section>
+        </div>
+        <div class="module-grid">
+          <article class="wide">
+            <h2>配置预设</h2>
+            <p class="section-desc">预设只改常用频率和功能开关，不会覆盖你的名单、Provider、人格或历史记忆。</p>
+            <div id="presetCards" class="preset-grid"></div>
+          </article>
+          <article>
+            <h2>快速启动</h2>
+            <p class="section-desc">决定插件身份、私聊目标和免打扰窗口。私聊目标可以留空，然后在“私聊”页手动添加。</p>
+            <form id="quickModuleForm" class="module-form">
+              <label>Bot 名字 <input name="bot_name" /></label>
+              <label>目标平台 <input name="target_platform" /></label>
+              <label>私聊目标 QQ <textarea name="target_user_ids" rows="4" placeholder="一行一个或逗号分隔"></textarea></label>
+              <label>默认称呼 <input name="default_nickname" /></label>
+              <label>默认语气 <input name="default_style" /></label>
+              <label>免打扰时间 <input name="quiet_hours" placeholder="23:00-08:30" /></label>
+              <button type="submit">保存快速启动</button>
+            </form>
+          </article>
+          <article>
+            <h2>私聊主动</h2>
+            <p class="section-desc">控制主动找你的频率。每日上限为 0 时，私聊主动消息等同关闭，但被动聊天和记忆仍可工作。</p>
+            <form id="privateModuleForm" class="module-form">
+              <label>每日主动上限 <input name="max_daily_messages" type="number" min="0" max="12" /></label>
+              <label>空闲门槛分钟 <input name="idle_minutes" type="number" min="0" /></label>
+              <label>最小主动间隔分钟 <input name="min_interval_minutes" type="number" min="0" /></label>
+              <label>后台检查间隔秒 <input name="check_interval_seconds" type="number" min="30" /></label>
+              <button type="submit">保存私聊主动</button>
+            </form>
+          </article>
+          <article>
+            <h2>群聊观察</h2>
+            <p class="section-desc">控制群聊上下文、黑话和插话频率。若只想学习群氛围，把每日插话上限设为 0。</p>
+            <form id="groupModuleForm" class="module-form">
+              <label>插话最小间隔分钟 <input name="group_interject_min_interval_minutes" type="number" min="0" /></label>
+              <label>每群每日插话上限 <input name="group_interject_max_daily" type="number" min="0" /></label>
+              <label>最近消息保留数 <input name="max_group_recent_messages" type="number" min="20" /></label>
+              <label>黑话保留数 <input name="max_group_slang_terms" type="number" min="8" /></label>
+              <button type="submit">保存群聊观察</button>
+            </form>
+          </article>
+          <article>
+            <h2>记忆学习</h2>
+            <p class="section-desc">控制画像、表达样本和对话片段的整理频率。间隔越短，模型调用量越高。</p>
+            <form id="memoryModuleForm" class="module-form">
+              <label>长期画像整理间隔分钟 <input name="memory_refresh_interval_minutes" type="number" min="30" /></label>
+              <label>片段整理消息阈值 <input name="episode_memory_refresh_messages" type="number" min="1" /></label>
+              <label>片段整理时间阈值分钟 <input name="episode_memory_refresh_minutes" type="number" min="1" /></label>
+              <label>原始记忆上限 <input name="max_companion_memory_items" type="number" min="1" /></label>
+              <label>表达样本上限 <input name="max_learned_expression_items" type="number" min="1" /></label>
+              <label>私聊片段上限 <input name="max_dialogue_episodes" type="number" min="1" /></label>
+              <button type="submit">保存记忆学习</button>
+            </form>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-config">
+        <div class="notice-grid">
+          <section class="notice">
+            <b>名单模式</b>
+            <p>白名单模式只观察列出的群；黑名单模式观察除黑名单外的群。想逐步试用，建议先用白名单。</p>
+          </section>
+          <section class="notice">
+            <b>功能开关</b>
+            <p>关闭功能不会删除已学习数据，只是不再注入或更新对应能力。清空数据请到私聊/群聊详情里操作。</p>
+          </section>
+        </div>
+        <div class="memory-grid">
+          <article>
+            <h2>私聊策略</h2>
+            <dl id="privateConfig"></dl>
+          </article>
+          <article>
+            <h2>群聊策略</h2>
+            <dl id="groupConfig"></dl>
+          </article>
+          <article class="wide">
+            <h2>群聊名单覆盖</h2>
+            <p class="section-desc">这里按当前名单模式预览每个已记录群会被允许还是拦截。</p>
+            <div id="listCoverage" class="coverage-grid"></div>
+          </article>
+          <article class="wide">
+            <h2>群聊名单</h2>
+            <p class="section-desc">名单保存后立即影响后续群消息处理；已经积累的群观察数据不会自动删除。</p>
+            <form id="accessForm" class="form-grid">
+              <label>
+                模式
+                <select id="groupAccessMode">
+                  <option value="whitelist">白名单</option>
+                  <option value="blacklist">黑名单</option>
+                </select>
+              </label>
+              <label>
+                白名单群号
+                <textarea id="groupWhitelist" rows="4" placeholder="一行一个或逗号分隔"></textarea>
+              </label>
+              <label>
+                黑名单群号
+                <textarea id="groupBlacklist" rows="4" placeholder="一行一个或逗号分隔"></textarea>
+              </label>
+              <div class="actions">
+                <button type="submit">保存名单</button>
+              </div>
+            </form>
+          </article>
+          <article class="wide">
+            <h2>功能开关</h2>
+            <p class="section-desc">开关按能力域分组显示。建议保留隐私保护和回复自检，群聊插话可按需要单独打开。</p>
+            <div class="chips" id="featureFlags"></div>
+            <div class="actions">
+              <button id="saveFeaturesBtn" type="button">保存功能开关</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-models">
+        <div class="section-head">
+          <h2>新增能力模型</h2>
+          <span class="muted">留空时按“单项模型 → 陪伴通用模型 → 主模型/默认模型”回退</span>
+        </div>
+        <div class="notice-grid">
+          <section class="notice">
+            <b>模型回退</b>
+            <p>单项模型留空时先用陪伴通用模型；陪伴通用也为空时用主模型；主模型为空则交给 AstrBot 默认会话模型。</p>
+          </section>
+          <section class="notice">
+            <b>成本建议</b>
+            <p>回复自检、关系分析和记忆整理会额外调用模型。可把快模型用于整理，把强模型留给主回复或群聊插话。</p>
+          </section>
+        </div>
+        <div id="providerFlow" class="provider-flow"></div>
+        <div class="actions compact">
+          <button id="testAllProvidersBtn" type="button">测试全部模型</button>
+        </div>
+        <form id="providerForm" class="provider-grid"></form>
+        <div class="actions">
+          <button id="saveProvidersBtn" type="button">保存模型配置</button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="./app.js?v=20260523-daily-timeline1"></script>
+</body>
+</html>

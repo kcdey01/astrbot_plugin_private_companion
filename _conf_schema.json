@@ -1,20 +1,168 @@
 {
+  "_section_00_quick": {
+    "description": "=== 00 快速开始 / 必填 ===",
+    "type": "text",
+    "invisible": true
+  },
   "enabled": {
-    "description": "插件总开关",
+    "description": "启用插件",
     "type": "bool",
-    "hint": "关闭后不会启动后台主动消息循环。",
+    "hint": "总开关。关闭后后台主动消息循环不会启动，但配置仍保留。",
     "default": true
   },
-  "check_interval_seconds": {
-    "description": "检查间隔（秒）",
+  "bot_name": {
+    "description": "Bot 名字 / 页面展示名",
+    "type": "string",
+    "hint": "用于日程、状态、日记和拓展页面展示，不会覆盖 AstrBot 全局人格名。",
+    "default": "小星"
+  },
+  "LLM_PROVIDER_ID": {
+    "description": "主模型 / 日程模型（留空用 AstrBot 默认）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "插件所有未单独指定模型的 LLM 任务都会回退到这里；留空则使用 AstrBot 默认会话模型。"
+  },
+  "target_user_ids": {
+    "description": "私聊主动目标 QQ 号",
+    "type": "list",
+    "hint": "填写后启动时会自动预热这些私聊对象。只想被动聊天也可以留空。",
+    "default": []
+  },
+  "target_platform": {
+    "description": "私聊目标平台名",
+    "type": "string",
+    "hint": "用于拼接未见过用户的 unified_msg_origin，QQ/OneBot 通常是 aiocqhttp。若用户私聊过 Bot，会自动替换成真实会话来源。",
+    "default": "aiocqhttp"
+  },
+  "default_enable_configured_targets": {
+    "description": "启动时预热私聊目标",
+    "type": "bool",
+    "hint": "开启后 target_user_ids 中的用户会自动建立主动私聊来源。首次使用建议开启。",
+    "default": true
+  },
+  "default_nickname": {
+    "description": "默认称呼",
+    "type": "string",
+    "hint": "用户未设置昵称时使用的称呼。",
+    "default": "你"
+  },
+  "default_style": {
+    "description": "默认语气",
+    "type": "string",
+    "hint": "可选：温柔、活泼、工作。用户可用“陪伴 语气”单独覆盖。",
+    "default": "温柔"
+  },
+  "quiet_hours": {
+    "description": "免打扰时间",
+    "type": "string",
+    "hint": "格式：HH:MM-HH:MM，例如 23:00-08:30。跨天时间段会自动处理。",
+    "default": "23:00-08:30"
+  },
+  "_section_01_model": {
+    "description": "=== 01 模型分工（可选，不填会自动回退） ===",
+    "type": "text",
+    "invisible": true
+  },
+  "MAI_STYLE_PROVIDER_ID": {
+    "description": "陪伴风格通用模型（留空跟随主模型）",
+    "type": "string",
+    "hint": "作为新增陪伴能力的通用兜底模型。下方单项模型留空时会先回退到这里，再回退到 LLM_PROVIDER_ID/AstrBot 默认模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "RESPONSE_REVIEW_PROVIDER_ID": {
+    "description": "回复自检改写模型（留空用默认）",
+    "type": "string",
+    "hint": "只用于少数不自然回复的二次改写。留空会回退到 MAI_STYLE_PROVIDER_ID，再回退到主模型。建议选择便宜、短文本能力稳定的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "RELATIONSHIP_ANALYSIS_PROVIDER_ID": {
+    "description": "关系站位分析模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "用于结合 AstrBot 人格和互动样本判断亲近度、打扰边界。留空会回退到 MAI_STYLE_PROVIDER_ID。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "COMPANION_MEMORY_PROVIDER_ID": {
+    "description": "陪伴长期画像整理模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "用于把原始私聊记忆整理成用户画像、兴趣、边界、关系备注和说话习惯。留空会回退到 MAI_STYLE_PROVIDER_ID。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "DIALOGUE_EPISODE_PROVIDER_ID": {
+    "description": "私聊片段记忆整理模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "用于总结共同经历、情绪余味、可续话头和未完成约定。留空会回退到 MAI_STYLE_PROVIDER_ID。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "GROUP_INTERJECT_PROVIDER_ID": {
+    "description": "群聊主动插话模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "仅在 enable_group_interjection 开启时使用，用于生成极短群聊插话。留空会回退到 MAI_STYLE_PROVIDER_ID。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "GROUP_EPISODE_PROVIDER_ID": {
+    "description": "群聊片段记忆整理模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "用于把群聊最近一段整理成话题、梗、活跃群友和短期避免重复内容。留空会回退到 MAI_STYLE_PROVIDER_ID。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "GROUP_SLANG_PROVIDER_ID": {
+    "description": "群内黑话释义模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "用于根据群聊样例解释群内常见词/梗。留空会回退到 MAI_STYLE_PROVIDER_ID。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "DETAIL_ENHANCEMENT_PROVIDER_ID": {
+    "description": "细节强化模型（留空用每日模型/默认模型）",
+    "type": "string",
+    "hint": "用于把某个日程段展开为细节事件和主动意愿。建议选择便宜但稳定、擅长结构化 JSON 的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "DREAM_PROVIDER_ID": {
+    "description": "强化梦境模型（留空用每日模型/默认模型）",
+    "type": "string",
+    "hint": "专门用于生成梦境状态的一句描述。建议选择便宜、擅长短文本意象和 JSON 输出的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "PHOTO_PROMPT_PROVIDER_ID": {
+    "description": "主动生图提示词模型（留空跟随日程模型/默认模型）",
+    "type": "string",
+    "hint": "只用于生成 photo_text 的画面提示词和画面描述。适合单独换成更擅长视觉描述、审美更稳定的模型，不影响普通聊天或每日日程模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "NARRATION_PROVIDER_ID": {
+    "description": "转述模型（留空用每日模型/默认模型）",
+    "type": "string",
+    "hint": "用于把工具结果转成可供最终主动消息使用的自然语言上下文。当前主要用于 screen_peek 这类观察结果转述，不参与主动生图提示词生成。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "_section_02_private": {
+    "description": "=== 02 私聊主动陪伴 ===",
+    "type": "text",
+    "invisible": true
+  },
+  "max_daily_messages": {
+    "description": "每日最多主动消息数",
     "type": "int",
-    "hint": "后台每隔多少秒检查一次是否需要发送主动消息。",
+    "hint": "每个用户每天最多收到多少条主动陪伴消息。设为 0 可完全禁止主动发送。",
     "slider": {
-      "min": 60,
-      "max": 3600,
-      "step": 60
+      "min": 0,
+      "max": 12,
+      "step": 1
     },
-    "default": 300
+    "default": 8
   },
   "idle_minutes": {
     "description": "空闲多久后可主动问候（分钟）",
@@ -38,163 +186,22 @@
     },
     "default": 120
   },
-  "max_daily_messages": {
-    "description": "每日最多主动消息数",
+  "check_interval_seconds": {
+    "description": "检查间隔（秒）",
     "type": "int",
-    "hint": "每个用户每天最多收到多少条主动陪伴消息。设为 0 可完全禁止主动发送。",
+    "hint": "后台每隔多少秒检查一次是否需要发送主动消息。",
     "slider": {
-      "min": 0,
-      "max": 12,
-      "step": 1
+      "min": 60,
+      "max": 3600,
+      "step": 60
     },
-    "default": 8
-  },
-  "quiet_hours": {
-    "description": "免打扰时间",
-    "type": "string",
-    "hint": "格式：HH:MM-HH:MM，例如 23:00-08:30。跨天时间段会自动处理。",
-    "default": "23:00-08:30"
-  },
-  "default_style": {
-    "description": "默认语气",
-    "type": "string",
-    "hint": "可选：温柔、活泼、工作。用户可用“陪伴 语气”单独覆盖。",
-    "default": "温柔"
-  },
-  "default_nickname": {
-    "description": "默认称呼",
-    "type": "string",
-    "hint": "用户未设置昵称时使用的称呼。",
-    "default": "你"
+    "default": 300
   },
   "require_private_opt_in": {
-    "description": "只允许私聊管理",
+    "description": "限制私聊命令管理入口",
     "type": "bool",
-    "hint": "仅限制命令管理入口。配置里的 target_user_ids 会在启动时自动预热，不需要用户私聊开启指令。",
+    "hint": "开启后只限制命令管理入口；不会阻止 target_user_ids 自动预热。",
     "default": true
-  },
-  "target_user_ids": {
-    "description": "主动私聊目标 QQ 号",
-    "type": "list",
-    "hint": "填写后插件启动时会自动为这些 QQ 建立主动私聊来源，不需要对方发送开启指令。",
-    "default": []
-  },
-  "target_platform": {
-    "description": "目标平台名",
-    "type": "string",
-    "hint": "用于拼接私聊 unified_msg_origin，例如 aiocqhttp:FriendMessage:QQ号。若用户私聊过 Bot，会自动替换成真实会话来源。",
-    "default": "aiocqhttp"
-  },
-  "default_enable_configured_targets": {
-    "description": "启动时自动预热配置目标",
-    "type": "bool",
-    "hint": "开启后 target_user_ids 中的用户会自动建立私聊会话来源并预热主动陪伴。",
-    "default": true
-  },
-  "LLM_PROVIDER_ID": {
-    "description": "每日日程生成使用的 LLM（留空用 AstrBot 默认）",
-    "type": "string",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "PHOTO_PROMPT_PROVIDER_ID": {
-    "description": "主动生图提示词模型（留空跟随日程模型/默认模型）",
-    "type": "string",
-    "hint": "只用于生成 photo_text 的画面提示词和画面描述。适合单独换成更擅长视觉描述、审美更稳定的模型，不影响普通聊天或每日日程模型。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "enable_daily_plan": {
-    "description": "启用每日拟人化日程",
-    "type": "bool",
-    "hint": "开启后每天到指定时间会调用模型生成 Bot 当天要做的事情。",
-    "default": true
-  },
-  "daily_plan_time": {
-    "description": "每日生成日程时间",
-    "type": "string",
-    "hint": "格式：HH:MM，例如 07:30。每天超过该时间且存在已开启用户时生成一次。",
-    "default": "07:30"
-  },
-  "bot_name": {
-    "description": "Bot 名字",
-    "type": "string",
-    "hint": "用于生成日程和展示状态。",
-    "default": "小星"
-  },
-  "schedule_persona_prompt": {
-    "description": "日程专用角色设定",
-    "type": "string",
-    "hint": "只给“每日日程/细节强化/日记脚本”使用，不直接覆盖 AstrBot 聊天人格。适合写身份、年龄、学校/职业、作息、住处、和用户的现实关系。留空时回退参考 AstrBot 默认人格。",
-    "default": ""
-  },
-  "schedule_worldview_prompt": {
-    "description": "日程专用世界观/生活背景",
-    "type": "string",
-    "hint": "只给“每日日程/细节强化/日记脚本”使用。适合写所在世界、日常规则、学校/城市环境、超能力是否公开、谁和谁一起生活等生活背景。",
-    "default": ""
-  },
-  "daily_plan_item_count": {
-    "description": "每日日程条目数",
-    "type": "int",
-    "hint": "控制每日粗日程尽量生成多少个时间点。条目更多会更细碎、更像一整天的生活。",
-    "slider": {
-      "min": 5,
-      "max": 16,
-      "step": 1
-    },
-    "default": 10
-  },
-  "include_schedule_in_messages": {
-    "description": "允许主动消息偶尔带上当前日程背景",
-    "type": "bool",
-    "hint": "开启后主动私聊有小概率自然提到 Bot 这会儿正在做什么。日程只作为背景，不会每次强调。",
-    "default": true
-  },
-  "proactive_share_probability": {
-    "description": "主动分享可做事项概率",
-    "type": "int",
-    "hint": "主动消息中分享“我刚刚做了什么/想到什么”的概率基准。实际是否发送还会受时间、状态、未回复次数影响。",
-    "slider": {
-      "min": 0,
-      "max": 100,
-      "step": 5
-    },
-    "default": 45
-  },
-  "enable_daily_greetings": {
-    "description": "启用早午晚锚点问候",
-    "type": "bool",
-    "hint": "开启后每天会在早上、午间、晚间各生成一个随机候选问候窗口。仍受每日上限、最小间隔和免打扰限制，但不会完全依赖普通随机动机。",
-    "default": true
-  },
-  "greeting_idle_minutes": {
-    "description": "问候前空闲门槛（分钟）",
-    "type": "int",
-    "hint": "早安、午安、晚间问候使用的空闲门槛。比普通主动消息短，避免你刚查看状态后整天都收不到问候。",
-    "slider": {
-      "min": 0,
-      "max": 240,
-      "step": 5
-    },
-    "default": 30
-  },
-  "allow_insomnia_night_message": {
-    "description": "允许失眠时深夜主动消息",
-    "type": "bool",
-    "hint": "开启后，即使处于免打扰时间，若 Bot 当前叠加了失眠/浅睡等状态，也可能低概率发送一条低压力深夜消息。仍受每日上限和最小间隔限制。",
-    "default": true
-  },
-  "proactive_reply_context_hours": {
-    "description": "主动消息回复上下文保留时间（小时）",
-    "type": "int",
-    "hint": "用户在 Bot 主动消息后多少小时内发来的私聊，会向 LLM 注入上一条主动消息，避免把回复误判成全新对话。",
-    "slider": {
-      "min": 1,
-      "max": 72,
-      "step": 1
-    },
-    "default": 12
   },
   "enable_llm_proactive_message": {
     "description": "主动消息发送前调用 LLM 生成文本",
@@ -206,7 +213,21 @@
     "description": "主动消息提示词模板",
     "type": "text",
     "hint": "留空使用内置模板。可用变量：{{name}} {{reason}} {{action}} {{topic}} {{motive}} {{style_hint}} {{state_hint}} {{action_context}} {{timer_hint}} {{unanswered_count}} {{current_time}}。参考 proactive_chat 的静默主动任务结构。",
-    "default": ""
+    "default": "",
+    "condition": {
+      "enable_llm_proactive_message": true
+    }
+  },
+  "proactive_reply_context_hours": {
+    "description": "主动消息回复上下文保留时间（小时）",
+    "type": "int",
+    "hint": "用户在 Bot 主动消息后多少小时内发来的私聊，会向 LLM 注入上一条主动消息，避免把回复误判成全新对话。",
+    "slider": {
+      "min": 1,
+      "max": 72,
+      "step": 1
+    },
+    "default": 12
   },
   "enable_llm_timer_scheduling": {
     "description": "允许模型隐藏预约下一次主动消息",
@@ -226,6 +247,1052 @@
     "hint": "开启后会解析 unified_msg_origin，优先通过对应平台实例 send_by_session 发送，并在平台未运行时跳过；失败时回退 AstrBot 核心发送。",
     "default": true
   },
+  "max_proactive_plan_lag_minutes": {
+    "description": "主动候选过期重排时间（分钟）",
+    "type": "int",
+    "hint": "如果插件停机或阻塞导致候选主动时间已过很久，则丢弃旧计划并重新安排，避免重启后补发过时消息。",
+    "slider": {
+      "min": 5,
+      "max": 1440,
+      "step": 5
+    },
+    "default": 180
+  },
+  "enable_daily_greetings": {
+    "description": "启用早午晚锚点问候",
+    "type": "bool",
+    "hint": "开启后每天会在早上、午间、晚间各生成一个随机候选问候窗口。仍受每日上限、最小间隔和免打扰限制，但不会完全依赖普通随机动机。",
+    "default": true
+  },
+  "greeting_idle_minutes": {
+    "description": "问候前空闲门槛（分钟）",
+    "type": "int",
+    "hint": "早安、午安、晚间问候使用的空闲门槛。比普通主动消息短，避免你刚查看状态后整天都收不到问候。",
+    "slider": {
+      "min": 0,
+      "max": 240,
+      "step": 5
+    },
+    "default": 30,
+    "condition": {
+      "enable_daily_greetings": true
+    }
+  },
+  "allow_insomnia_night_message": {
+    "description": "允许失眠时深夜主动消息",
+    "type": "bool",
+    "hint": "开启后，即使处于免打扰时间，若 Bot 当前叠加了失眠/浅睡等状态，也可能低概率发送一条低压力深夜消息。仍受每日上限和最小间隔限制。",
+    "default": true
+  },
+  "proactive_share_probability": {
+    "description": "主动分享可做事项概率",
+    "type": "int",
+    "hint": "主动消息中分享“我刚刚做了什么/想到什么”的概率基准。实际是否发送还会受时间、状态、未回复次数影响。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 5
+    },
+    "default": 45
+  },
+  "_section_03_mai": {
+    "description": "=== 03 陪伴风格 / 记忆 / 回复质感 ===",
+    "type": "text",
+    "invisible": true
+  },
+  "enable_mai_style_integration": {
+    "description": "启用陪伴风格整合层",
+    "type": "bool",
+    "hint": "开启后，被动私聊回复会在 AstrBot 默认人格之上注入关系站位、用户记忆、表达学习和回复前内部规划。不会替换 AstrBot 人格。",
+    "default": true
+  },
+  "enable_companion_memory": {
+    "description": "启用用户陪伴记忆",
+    "type": "bool",
+    "hint": "从私聊里轻量记录偏好、边界、重要信息和关系线索，并定期调用 LLM 整理成长期画像。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "memory_refresh_interval_minutes": {
+    "description": "长期画像整理间隔（分钟）",
+    "type": "int",
+    "hint": "达到间隔且有足够新记忆后，才会调用 LLM 把原始记忆整理成长期画像。",
+    "slider": {
+      "min": 30,
+      "max": 4320,
+      "step": 30
+    },
+    "default": 360,
+    "condition": {
+      "enable_companion_memory": true
+    }
+  },
+  "max_companion_memory_items": {
+    "description": "最多保留陪伴记忆条数",
+    "type": "int",
+    "hint": "保留的原始用户记忆上限。越大越完整，但提示词会更长。",
+    "slider": {
+      "min": 8,
+      "max": 120,
+      "step": 4
+    },
+    "default": 36,
+    "condition": {
+      "enable_companion_memory": true
+    }
+  },
+  "enable_expression_learning": {
+    "description": "启用表达环境学习",
+    "type": "bool",
+    "hint": "学习用户常用短句长度、标点和句尾味道，只作为回复节奏参考，不会机械复读。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "max_learned_expression_items": {
+    "description": "最多保留表达样本数",
+    "type": "int",
+    "hint": "保留的短句、句尾和表达样本上限。",
+    "slider": {
+      "min": 4,
+      "max": 60,
+      "step": 2
+    },
+    "default": 18,
+    "condition": {
+      "enable_expression_learning": true
+    }
+  },
+  "enable_companion_reply_planner": {
+    "description": "启用被动回复规划器",
+    "type": "bool",
+    "hint": "让模型在回复前内部判断用户意图、关系姿态和回复长度，减少助手腔、总结腔和过度解释。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "enable_intent_emotion_analysis": {
+    "description": "启用用户意图/情绪识别",
+    "type": "bool",
+    "hint": "私聊消息进入时先轻量判断求助、安慰、玩笑、亲近、边界等气氛，再影响下一次回复姿态。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "enable_relationship_state_machine": {
+    "description": "启用关系状态机",
+    "type": "bool",
+    "hint": "根据用户的边界、亲近、低落、玩笑等消息，在 normal/careful/warming/backoff 状态间切换，影响主动和被动语气。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "enable_response_self_review": {
+    "description": "启用回复后自检改写",
+    "type": "bool",
+    "hint": "模型回复生成后，若检测到助手腔、过长、过度结构化、内部信息泄露或重复切口，会调用 LLM 改写成更自然的私聊回复。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "response_review_max_chars": {
+    "description": "普通私聊回复自检长度阈值",
+    "type": "int",
+    "hint": "超过该长度的普通私聊回复更容易触发自检改写。求助类仍会尽量保留必要信息。",
+    "slider": {
+      "min": 80,
+      "max": 900,
+      "step": 20
+    },
+    "default": 260,
+    "condition": {
+      "enable_response_self_review": true
+    }
+  },
+  "enable_passive_topic_suppression": {
+    "description": "启用普通回复重复话题抑制",
+    "type": "bool",
+    "hint": "记录最近普通回复的切口，减少反复使用同一类关心、问候、解释方式。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "passive_topic_memory_hours": {
+    "description": "普通回复话题记忆时长（小时）",
+    "type": "int",
+    "hint": "在这段时间内，插件会提示模型避免重复最近普通回复里的相似切口。",
+    "slider": {
+      "min": 1,
+      "max": 72,
+      "step": 1
+    },
+    "default": 8,
+    "condition": {
+      "enable_passive_topic_suppression": true
+    }
+  },
+  "enable_dialogue_episode_memory": {
+    "description": "启用对话片段记忆",
+    "type": "bool",
+    "hint": "定期从 AstrBot 当前私聊会话中总结共同经历、情绪余味和可续话头，让后续回复更有连续感。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "episode_memory_refresh_messages": {
+    "description": "对话片段整理消息数阈值",
+    "type": "int",
+    "hint": "用户累计多少条新私聊消息后，允许整理一次对话片段记忆。",
+    "slider": {
+      "min": 3,
+      "max": 40,
+      "step": 1
+    },
+    "default": 8,
+    "condition": {
+      "enable_dialogue_episode_memory": true
+    }
+  },
+  "episode_memory_refresh_minutes": {
+    "description": "对话片段整理时间阈值（分钟）",
+    "type": "int",
+    "hint": "距离上次整理超过该时间后，即使消息数不多，也允许整理一次最近对话片段。",
+    "slider": {
+      "min": 15,
+      "max": 1440,
+      "step": 15
+    },
+    "default": 90,
+    "condition": {
+      "enable_dialogue_episode_memory": true
+    }
+  },
+  "max_dialogue_episodes": {
+    "description": "最多保留对话片段数量",
+    "type": "int",
+    "hint": "保留最近多少段共同经历摘要。",
+    "slider": {
+      "min": 3,
+      "max": 40,
+      "step": 1
+    },
+    "default": 12,
+    "condition": {
+      "enable_dialogue_episode_memory": true
+    }
+  },
+  "enable_open_loop_tracking": {
+    "description": "启用未完成约定追踪",
+    "type": "bool",
+    "hint": "从对话片段里提取尚未完成的约定、提醒或可自然延续的话头，注入后续回复背景。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "enable_livingmemory_integration": {
+    "description": "启用 LivingMemory 协同",
+    "type": "bool",
+    "hint": "检测到 astrbot_plugin_livingmemory 时，在私聊和群聊提示词中引导模型按需使用 recall_long_term_memory 工具。大规模长期记忆检索交给 LivingMemory，本插件继续负责人格、状态、关系和群聊气氛。",
+    "default": true
+  },
+  "livingmemory_tool_name": {
+    "description": "LivingMemory 召回工具名",
+    "type": "string",
+    "hint": "LivingMemory 默认注册的 Agent 工具名是 recall_long_term_memory。如插件更改了工具名，可在这里同步。",
+    "default": "recall_long_term_memory",
+    "condition": {
+      "enable_livingmemory_integration": true
+    }
+  },
+  "_section_04_group": {
+    "description": "=== 04 群聊陪伴 / 观察 / 插话 ===",
+    "type": "text",
+    "invisible": true
+  },
+  "enable_group_companion": {
+    "description": "启用群聊陪伴观察",
+    "type": "bool",
+    "hint": "开启后，插件会在目标群里静默观察群聊气氛、群友发言和常见梗；默认不主动插话，只在 AstrBot 本身触发群聊回复时注入上下文。",
+    "default": true
+  },
+  "group_access_mode": {
+    "description": "群聊启用模式",
+    "type": "string",
+    "hint": "whitelist：只启用白名单群；blacklist：除黑名单外所有群都启用。为避免误观察，默认使用白名单。",
+    "options": [
+      "whitelist",
+      "blacklist"
+    ],
+    "labels": [
+      "白名单模式",
+      "黑名单模式"
+    ],
+    "default": "whitelist",
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "group_whitelist_ids": {
+    "description": "群聊陪伴白名单群号",
+    "type": "list",
+    "hint": "白名单模式下，只有这些群会启用群聊陪伴观察。旧配置 target_group_ids 也会自动作为白名单兼容。",
+    "default": [],
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "group_blacklist_ids": {
+    "description": "群聊陪伴黑名单群号",
+    "type": "list",
+    "hint": "黑名单模式下，这些群不会启用群聊陪伴观察。",
+    "default": [],
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "enable_group_context_injection": {
+    "description": "群聊回复前注入观察上下文",
+    "type": "bool",
+    "hint": "当 AstrBot 本身触发群聊 LLM 回复时，注入群气氛、最近消息、群内常见词和当前发言者轻画像。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "enable_group_slang_learning": {
+    "description": "启用群内黑话/梗学习",
+    "type": "bool",
+    "hint": "从目标群消息中提取高频词、短梗和群内口头表达，作为群聊回复背景。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "enable_group_member_profiles": {
+    "description": "启用群友轻画像",
+    "type": "bool",
+    "hint": "记录目标群内成员的昵称、发言次数和近期短句，用于被叫到时更贴合群聊语境。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "enable_group_topic_threads": {
+    "description": "启用群聊话题线程",
+    "type": "bool",
+    "hint": "跟踪群里当前正在聊的几条话题线，记录参与人数、消息数和 Bot 是否已经接过。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "enable_group_episode_memory": {
+    "description": "启用群聊片段记忆",
+    "type": "bool",
+    "hint": "定期把群聊最近一段总结成群聊片段记忆，包括主要话题、新梗、活跃群友和短期不要重复的话题。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "enable_group_slang_meanings": {
+    "description": "启用群内黑话语义解释",
+    "type": "bool",
+    "hint": "低频调用 LLM，根据群聊样例为常见词/梗补充含义和用法，供群聊回复参考。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "enable_group_relationship_graph": {
+    "description": "启用群友互动关系网络",
+    "type": "bool",
+    "hint": "记录群友之间的相邻互动频率和常见氛围，用于判断谁经常互相接话或开玩笑。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "enable_group_privacy_guard": {
+    "description": "启用群聊隐私防串味边界",
+    "type": "bool",
+    "hint": "群聊回复上下文中强制提醒模型不要泄露私聊记忆、用户画像、内部观察和群友关系判断。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "max_group_recent_messages": {
+    "description": "群聊最近消息保留数",
+    "type": "int",
+    "hint": "用于群气氛判断和群聊回复上下文。",
+    "slider": {
+      "min": 20,
+      "max": 300,
+      "step": 10
+    },
+    "default": 80,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "max_group_slang_terms": {
+    "description": "群内常见词保留数",
+    "type": "int",
+    "hint": "用于黑话/梗学习展示和群聊上下文注入。",
+    "slider": {
+      "min": 8,
+      "max": 160,
+      "step": 8
+    },
+    "default": 40,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "max_group_topic_threads": {
+    "description": "最多保留群聊话题线程数",
+    "type": "int",
+    "hint": "保留最近多少条群聊话题线。",
+    "slider": {
+      "min": 3,
+      "max": 40,
+      "step": 1
+    },
+    "default": 12,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "group_episode_refresh_minutes": {
+    "description": "群聊片段整理间隔（分钟）",
+    "type": "int",
+    "hint": "同一群两次群聊片段总结的最小间隔。",
+    "slider": {
+      "min": 30,
+      "max": 1440,
+      "step": 30
+    },
+    "default": 180,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "group_slang_summary_minutes": {
+    "description": "群内黑话语义整理间隔（分钟）",
+    "type": "int",
+    "hint": "同一群两次黑话语义整理的最小间隔。",
+    "slider": {
+      "min": 60,
+      "max": 2880,
+      "step": 60
+    },
+    "default": 360,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "max_group_episodes": {
+    "description": "最多保留群聊片段数量",
+    "type": "int",
+    "hint": "保留最近多少段群聊片段记忆。",
+    "slider": {
+      "min": 3,
+      "max": 40,
+      "step": 1
+    },
+    "default": 10,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "max_group_relationship_edges": {
+    "description": "最多保留群友互动关系边",
+    "type": "int",
+    "hint": "保留多少组群友之间的互动关系统计。",
+    "slider": {
+      "min": 10,
+      "max": 300,
+      "step": 10
+    },
+    "default": 80,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "enable_group_interjection": {
+    "description": "允许群聊主动插话",
+    "type": "bool",
+    "hint": "当前版本默认关闭。后续可用于让 Bot 在极少数合适场景主动接一句，但为避免抢话建议先关闭。",
+    "default": false,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "group_interject_min_interval_minutes": {
+    "description": "群聊主动插话最小间隔（分钟）",
+    "type": "int",
+    "hint": "仅在允许群聊主动插话时生效。",
+    "slider": {
+      "min": 10,
+      "max": 1440,
+      "step": 10
+    },
+    "default": 180,
+    "condition": {
+      "enable_group_interjection": true
+    }
+  },
+  "group_interject_max_daily": {
+    "description": "每群每日最多主动插话次数",
+    "type": "int",
+    "hint": "仅在允许群聊主动插话时生效。设为 0 可彻底禁止主动插话。",
+    "slider": {
+      "min": 0,
+      "max": 12,
+      "step": 1
+    },
+    "default": 2,
+    "condition": {
+      "enable_group_interjection": true
+    }
+  },
+  "enable_group_interjection_feedback": {
+    "description": "启用群聊插话反馈学习",
+    "type": "bool",
+    "hint": "记录 Bot 插话后是否有人接、是否出现正向/负向反馈，用于后续调试和收敛。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "_section_05_life": {
+    "description": "=== 05 生活状态 / 日程 / 日记 / 梦境 ===",
+    "type": "text",
+    "invisible": true
+  },
+  "enable_daily_plan": {
+    "description": "启用每日拟人化日程",
+    "type": "bool",
+    "hint": "开启后每天到指定时间会调用模型生成 Bot 当天要做的事情。",
+    "default": true
+  },
+  "daily_plan_time": {
+    "description": "每日生成日程时间",
+    "type": "string",
+    "hint": "格式：HH:MM，例如 07:30。每天超过该时间且存在已开启用户时生成一次。",
+    "default": "07:30",
+    "condition": {
+      "enable_daily_plan": true
+    }
+  },
+  "daily_plan_item_count": {
+    "description": "每日日程条目数",
+    "type": "int",
+    "hint": "控制每日粗日程尽量生成多少个时间点。条目更多会更细碎、更像一整天的生活。",
+    "slider": {
+      "min": 5,
+      "max": 16,
+      "step": 1
+    },
+    "default": 10,
+    "condition": {
+      "enable_daily_plan": true
+    }
+  },
+  "schedule_persona_prompt": {
+    "description": "日程专用角色设定",
+    "type": "string",
+    "hint": "只给“每日日程/细节强化/日记脚本”使用，不直接覆盖 AstrBot 聊天人格。适合写身份、年龄、学校/职业、作息、住处、和用户的现实关系。留空时回退参考 AstrBot 默认人格。",
+    "default": ""
+  },
+  "schedule_worldview_prompt": {
+    "description": "日程专用世界观/生活背景",
+    "type": "string",
+    "hint": "只给“每日日程/细节强化/日记脚本”使用。适合写所在世界、日常规则、学校/城市环境、超能力是否公开、谁和谁一起生活等生活背景。",
+    "default": ""
+  },
+  "include_schedule_in_messages": {
+    "description": "允许主动消息偶尔带上当前日程背景",
+    "type": "bool",
+    "hint": "开启后主动私聊有小概率自然提到 Bot 这会儿正在做什么。日程只作为背景，不会每次强调。",
+    "default": true
+  },
+  "daily_plan_prompt": {
+    "description": "自定义每日日程提示词",
+    "type": "text",
+    "hint": "留空使用默认提示词。可用变量：{now} {bot_name} {astrbot_persona} {can_do} {humanized_state} {recent_diaries}。要求模型输出 JSON，包含 schedule 数组。不要在这里另写新人格。",
+    "default": "",
+    "condition": {
+      "enable_daily_plan": true
+    }
+  },
+  "enable_detail_enhancement": {
+    "description": "启用日程细节强化模式",
+    "type": "bool",
+    "hint": "开启后，早上生成粗日程；临近每个日程段时再调用细节强化模型，推演该段时间里可能发生的小事件、主动消息意愿和主动行为。",
+    "default": false
+  },
+  "detail_enhancement_lead_minutes": {
+    "description": "提前强化日程段（分钟）",
+    "type": "int",
+    "hint": "建议设为 3，则 08:30 的日程段会在约 08:27 后开始尝试细节强化，更贴近当前区间。",
+    "slider": {
+      "min": 0,
+      "max": 180,
+      "step": 1
+    },
+    "default": 3,
+    "condition": {
+      "enable_detail_enhancement": true
+    }
+  },
+  "enable_daily_diary": {
+    "description": "启用每日 Bot 日记",
+    "type": "bool",
+    "hint": "每天生成一条 Bot 自己的短日记，作为次日状态转移和主动分享素材。",
+    "default": true
+  },
+  "daily_diary_time": {
+    "description": "每日写日记时间",
+    "type": "string",
+    "hint": "格式：HH:MM，例如 23:10。超过该时间后每天生成一次。",
+    "default": "23:10",
+    "condition": {
+      "enable_daily_diary": true
+    }
+  },
+  "max_diary_entries": {
+    "description": "保留 Bot 日记数量",
+    "type": "int",
+    "hint": "用于状态延续和主动分享素材。",
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 1
+    },
+    "default": 14,
+    "condition": {
+      "enable_daily_diary": true
+    }
+  },
+  "important_date_lookahead_days": {
+    "description": "重要日期默认提前提醒天数",
+    "type": "int",
+    "hint": "新增重要日期条目时默认使用的提前关注范围。临近或当天的重要日期会注入 LLM，并可能触发主动分享。",
+    "slider": {
+      "min": 0,
+      "max": 60,
+      "step": 1
+    },
+    "default": 7
+  },
+  "enable_humanized_states": {
+    "description": "启用拟人化身体/梦境状态",
+    "type": "bool",
+    "hint": "生成睡眠、梦境、健康、饥饿、周期等连续状态，并影响日程、主动消息和被动回复。",
+    "default": true
+  },
+  "inject_passive_states": {
+    "description": "被动回复前注入拟人状态",
+    "type": "bool",
+    "hint": "开启后，每次普通 LLM 回复前都会把当前叠加状态注入 system_prompt，让被动回复也受状态影响。",
+    "default": true,
+    "condition": {
+      "enable_humanized_states": true
+    }
+  },
+  "enable_cycle_state": {
+    "description": "启用生理周期模拟",
+    "type": "bool",
+    "hint": "开启后可能出现生理期前、生理期、恢复期等持续数天的拟人化周期影响。",
+    "default": true,
+    "condition": {
+      "enable_humanized_states": true
+    }
+  },
+  "humanized_state_intensity": {
+    "description": "拟人状态强度",
+    "type": "int",
+    "hint": "数值越高，失眠、生病、饥饿、周期等状态越容易出现且对能量影响越明显。不同状态有不同持续时间，并可叠加。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 5
+    },
+    "default": 50,
+    "condition": {
+      "enable_humanized_states": true
+    }
+  },
+  "enable_enhanced_dreams": {
+    "description": "启用强化梦境生成",
+    "type": "bool",
+    "hint": "开启后，梦境不再只从固定文案随机，而会尝试根据最近日记、生活片段、重要日期和天气碎片，用单独模型拼出欠逻辑的梦境状态。失败时会自动回退到默认梦境池。",
+    "default": false
+  },
+  "dream_afterglow_mode": {
+    "description": "梦境余韵影响强度",
+    "type": "string",
+    "hint": "控制梦对第二天前半段状态的影响强弱。自动模式会根据梦境内容和强度自行调节；轻/标准/明显会更固定地偏弱或偏强。",
+    "options": [
+      "auto",
+      "轻",
+      "标准",
+      "明显"
+    ],
+    "labels": [
+      "自动",
+      "轻",
+      "标准",
+      "明显"
+    ],
+    "default": "auto",
+    "condition": {
+      "enable_enhanced_dreams": true
+    }
+  },
+  "enable_mixed_dream_themes": {
+    "description": "允许梦境题材轻微混搭",
+    "type": "bool",
+    "hint": "开启后，梦境主题除了单一题材，也可能出现奇幻+恐怖、怀旧+悬疑这类轻微交杂。",
+    "default": true,
+    "condition": {
+      "enable_enhanced_dreams": true
+    }
+  },
+  "enable_intimate_dream_theme": {
+    "description": "允许暧昧/春梦题材",
+    "type": "bool",
+    "hint": "开启后，强化梦境主题池里会加入较含蓄的暧昧春梦题材；默认关闭。",
+    "default": false,
+    "condition": {
+      "enable_enhanced_dreams": true
+    }
+  },
+  "dream_theme_candidates": {
+    "description": "梦境题材候选（逗号分隔）",
+    "type": "string",
+    "hint": "例如：温柔日常,奇幻,恐怖,追逐,悬疑,荒诞,怀旧,暧昧春梦。会从这些题材中随机抽取，并可按配置轻微混搭。",
+    "default": "温柔日常,奇幻,恐怖,追逐,悬疑,荒诞,怀旧,暧昧春梦",
+    "condition": {
+      "enable_enhanced_dreams": true
+    }
+  },
+  "_section_06_actions": {
+    "description": "=== 06 媒体与外部动作 ===",
+    "type": "text",
+    "invisible": true
+  },
+  "enable_photo_text_action": {
+    "description": "允许主动拍照/生图",
+    "type": "bool",
+    "hint": "开启后，Bot 可能在合适动机下调用 ComfyUI 工作流生成图片，拿到图片后再由 LLM 自然写成主动消息并一起发送。生成成功即计入图片额度，即使发送失败也不会立刻继续生图。",
+    "default": true
+  },
+  "photo_action_max_daily": {
+    "description": "每日主动生图最多次数",
+    "type": "int",
+    "hint": "按用户计数。真实生成出图片就会消耗额度，避免发送失败或重启后反复生图。设为 0 表示不限制，不建议。",
+    "slider": {
+      "min": 0,
+      "max": 5,
+      "step": 1
+    },
+    "default": 1,
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "photo_generation_backend": {
+    "description": "主动生图后端",
+    "type": "string",
+    "hint": "可填：auto、comfyui、external。auto 会优先尝试本地 ComfyUI，失败或未配置时再回退到在线图片 API。",
+    "default": "auto",
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "COMFYUI_TEXT2IMG_WORKFLOW_NAME": {
+    "description": "主动拍照文生图工作流名",
+    "type": "string",
+    "hint": "用于风景、小动物、桌面小物、普通随手拍等 photo_text 主动行为。需要存在 texts>=1、images=0、videos=0 的 ComfyUI 工作流文件。",
+    "default": "",
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "COMFYUI_SELFIE_WORKFLOW_NAME": {
+    "description": "主动自拍工作流名",
+    "type": "string",
+    "hint": "用于自拍/人像类 photo_text 主动行为。适合使用已在工作流里预置人设图的 ComfyUI 工作流；需要从文本提示词生成输出图片。",
+    "default": "",
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "comfyui_photo_wait_seconds": {
+    "description": "主动拍照等待生图秒数",
+    "type": "int",
+    "hint": "photo_text 会等待工作流完成，拿到图片后再和最终消息一起发送。超时则本次不冒充已经发图。",
+    "slider": {
+      "min": 5,
+      "max": 600,
+      "step": 5
+    },
+    "default": 90,
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "EXTERNAL_IMAGE_API_BASE_URL": {
+    "description": "在线图片 API 地址",
+    "type": "string",
+    "hint": "用于 OpenAI 兼容的在线生图接口。可填写完整的 /images/generations 地址，或只填 API 根地址；插件会自动补齐。",
+    "default": "",
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "EXTERNAL_IMAGE_API_KEY": {
+    "description": "在线图片 API Key",
+    "type": "string",
+    "hint": "用于外接在线生图平台的鉴权。留空则不会启用这条后端。",
+    "default": "",
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "EXTERNAL_IMAGE_API_MODEL": {
+    "description": "在线图片模型",
+    "type": "string",
+    "hint": "例如某个平台提供的图片模型名。插件会按 OpenAI 兼容 images/generations 请求格式提交 prompt。",
+    "default": "",
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "external_image_api_size": {
+    "description": "在线生图尺寸",
+    "type": "string",
+    "hint": "格式如 1024x1024、768x1344。用于在线图片 API 请求。",
+    "default": "1024x1024",
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "external_image_api_timeout_seconds": {
+    "description": "在线生图超时时间（秒）",
+    "type": "int",
+    "hint": "等待在线图片 API 返回结果的最长时间。超时后本次 photo_text 会自然失败，不会假装已经发图。",
+    "slider": {
+      "min": 20,
+      "max": 600,
+      "step": 10
+    },
+    "default": 180,
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "photo_generation_style": {
+    "description": "主动生图风格",
+    "type": "string",
+    "hint": "可填：真实、二次元、其他。会影响 photo_text 的生图提示词风格倾向。",
+    "default": "真实",
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "photo_generation_style_custom_prompt": {
+    "description": "主动生图自定义风格说明",
+    "type": "string",
+    "hint": "当主动生图风格设为“其他”时，会把这里的内容作为额外风格要求注入提示词，例如：胶片感、像素风、轻复古插画。",
+    "default": "",
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "enable_screen_glance_action": {
+    "description": "允许主动看一眼屏幕",
+    "type": "bool",
+    "hint": "默认关闭。开启后，Bot 才可能在关心、好奇、确认状态等合适动机下调用屏幕陪伴插件观察当前屏幕；结果只作为 LLM 上下文，并会要求避免暴露隐私细节。识屏开始即计入额度，避免发送失败或重启后反复识屏。",
+    "default": false
+  },
+  "screen_peek_max_daily": {
+    "description": "每日主动识屏最多次数",
+    "type": "int",
+    "hint": "按用户计数。开始调用屏幕插件就会消耗额度，即使后续消息发送失败也不会立刻继续识屏。设为 0 表示禁止主动识屏。",
+    "slider": {
+      "min": 0,
+      "max": 5,
+      "step": 1
+    },
+    "default": 1,
+    "condition": {
+      "enable_screen_glance_action": true
+    }
+  },
+  "screen_peek_cooldown_minutes": {
+    "description": "主动识屏冷却分钟数",
+    "type": "int",
+    "hint": "按用户计时。用于防止多个主动候选在短时间内连续调用识屏。设为 0 表示不启用冷却，不建议。",
+    "slider": {
+      "min": 0,
+      "max": 1440,
+      "step": 10
+    },
+    "default": 240,
+    "condition": {
+      "enable_screen_glance_action": true
+    }
+  },
+  "enable_poke_action": {
+    "description": "允许主动戳一戳",
+    "type": "bool",
+    "hint": "开启后，Bot 可能在想轻轻刷存在感、嘴硬关心或逗一下用户时主动戳一戳，然后再自然补一句私聊。默认关闭，避免太跳。",
+    "default": false
+  },
+  "poke_action_max_times": {
+    "description": "主动戳一戳最多次数",
+    "type": "int",
+    "hint": "每次主动 poke 最多戳几下。实际主动行为默认只会轻轻戳一下，这个值主要作为上限兜底。",
+    "slider": {
+      "min": 1,
+      "max": 3,
+      "step": 1
+    },
+    "default": 1,
+    "condition": {
+      "enable_poke_action": true
+    }
+  },
+  "enable_voice_action": {
+    "description": "允许主动发语音",
+    "type": "bool",
+    "hint": "开启后，Bot 可能在深夜、晚间、状态分享或想更贴近一点时主动留一小句语音。需要当前会话已配置可用的 TTS provider。",
+    "default": false
+  },
+  "voice_action_max_chars": {
+    "description": "主动语音最大字数",
+    "type": "int",
+    "hint": "限制单条主动语音实际会说的话长度，避免像念稿。越短越像真实私聊语音。",
+    "slider": {
+      "min": 6,
+      "max": 80,
+      "step": 2
+    },
+    "default": 30,
+    "condition": {
+      "enable_voice_action": true
+    }
+  },
+  "enable_qq_presence_sync": {
+    "description": "允许细化模型同步 QQ 全局状态",
+    "type": "bool",
+    "hint": "开启后，当前时间段细化可决定在线/睡觉/自定义短状态，并通过 OneBot 尝试同步。会减少忙碌，避免离开/隐身/请勿打扰；失败会静默跳过。",
+    "default": true
+  },
+  "_section_07_weather": {
+    "description": "=== 07 天气上下文 ===",
+    "type": "text",
+    "invisible": true
+  },
+  "enable_weather_context": {
+    "description": "启用天气上下文",
+    "type": "bool",
+    "hint": "开启后会优先使用 private_companion 自己的天气配置查询天气；若未配置，再回退复用 screen_companion 插件的天气能力。",
+    "default": true
+  },
+  "weather_api_key": {
+    "description": "天气 API Key",
+    "type": "string",
+    "hint": "OpenWeatherMap API Key。配置后，private_companion 会优先自己查询天气。",
+    "default": "",
+    "condition": {
+      "enable_weather_context": true
+    }
+  },
+  "weather_city": {
+    "description": "天气城市",
+    "type": "string",
+    "hint": "例如：Shanghai,CN 或 北京。填写后会按城市查询天气。",
+    "default": "",
+    "condition": {
+      "enable_weather_context": true
+    }
+  },
+  "weather_lat": {
+    "description": "天气纬度",
+    "type": "float",
+    "hint": "如果不想按城市查，可以填纬度；需与 weather_lon 成对使用。",
+    "default": 0,
+    "condition": {
+      "enable_weather_context": true
+    }
+  },
+  "weather_lon": {
+    "description": "天气经度",
+    "type": "float",
+    "hint": "如果不想按城市查，可以填经度；需与 weather_lat 成对使用。",
+    "default": 0,
+    "condition": {
+      "enable_weather_context": true
+    }
+  },
+  "weather_refresh_minutes": {
+    "description": "天气缓存刷新间隔（分钟）",
+    "type": "int",
+    "hint": "天气不会每次都重查；在这个时间内会复用最近一次结果。",
+    "slider": {
+      "min": 10,
+      "max": 720,
+      "step": 10
+    },
+    "default": 90,
+    "condition": {
+      "enable_weather_context": true
+    }
+  },
+  "_section_99_legacy": {
+    "description": "=== 99 兼容旧配置（通常不用改） ===",
+    "type": "text",
+    "invisible": true
+  },
+  "target_group_ids": {
+    "description": "群聊陪伴目标群号（旧配置，等同白名单）",
+    "type": "list",
+    "hint": "兼容旧版本。现在建议改用 group_whitelist_ids；这里填写的群号仍会并入白名单。",
+    "default": [],
+    "invisible": true
+  },
+  "require_target_group": {
+    "description": "只观察配置的目标群（旧开关）",
+    "type": "bool",
+    "hint": "兼容旧版本。现在主要由 group_access_mode 控制；白名单模式天然只观察白名单群。",
+    "default": true,
+    "invisible": true
+  },
+  "COMFYUI_PHOTO_WORKFLOW_NAME": {
+    "description": "主动拍照工作流名（兼容旧配置）",
+    "type": "string",
+    "hint": "旧版单工作流字段。若新的文生图/自拍工作流名留空，会用这里作为兜底；建议改用 COMFYUI_TEXT2IMG_WORKFLOW_NAME 和 COMFYUI_SELFIE_WORKFLOW_NAME 分开配置。",
+    "default": "",
+    "invisible": true,
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
   "enable_segmented_proactive_reply": {
     "description": "主动文本分段发送",
     "type": "bool",
@@ -241,7 +1308,10 @@
       "max": 1024,
       "step": 2
     },
-    "default": 120
+    "default": 120,
+    "condition": {
+      "enable_segmented_proactive_reply": true
+    }
   },
   "segmented_proactive_split_mode": {
     "description": "主动分段模式",
@@ -254,7 +1324,10 @@
       "正则表达式",
       "分段词列表"
     ],
-    "default": "regex"
+    "default": "regex",
+    "condition": {
+      "enable_segmented_proactive_reply": true
+    }
   },
   "segmented_proactive_regex": {
     "description": "主动分段正则表达式",
@@ -284,7 +1357,10 @@
     "description": "主动分段内容清理",
     "type": "bool",
     "hint": "开启后，在每个分段发送前按正则移除指定内容；切分与清理彼此独立。",
-    "default": false
+    "default": false,
+    "condition": {
+      "enable_segmented_proactive_reply": true
+    }
   },
   "segmented_proactive_content_cleanup_rule": {
     "description": "主动分段内容清理正则",
@@ -307,7 +1383,10 @@
       "按字数对数"
     ],
     "hint": "random 使用最小/最大秒数；log 按分段字数估算等待时间。",
-    "default": "log"
+    "default": "log",
+    "condition": {
+      "enable_segmented_proactive_reply": true
+    }
   },
   "segmented_proactive_interval_min": {
     "description": "主动分段最小间隔秒数",
@@ -335,350 +1414,5 @@
       "segmented_proactive_interval_method": "log"
     },
     "default": 1.8
-  },
-  "max_proactive_plan_lag_minutes": {
-    "description": "主动候选过期重排时间（分钟）",
-    "type": "int",
-    "hint": "如果插件停机或阻塞导致候选主动时间已过很久，则丢弃旧计划并重新安排，避免重启后补发过时消息。",
-    "slider": {
-      "min": 5,
-      "max": 1440,
-      "step": 5
-    },
-    "default": 180
-  },  "enable_detail_enhancement": {
-    "description": "启用日程细节强化模式",
-    "type": "bool",
-    "hint": "开启后，早上生成粗日程；临近每个日程段时再调用细节强化模型，推演该段时间里可能发生的小事件、主动消息意愿和主动行为。",
-    "default": false
-  },
-  "DETAIL_ENHANCEMENT_PROVIDER_ID": {
-    "description": "细节强化模型（留空用每日模型/默认模型）",
-    "type": "string",
-    "hint": "用于把某个日程段展开为细节事件和主动意愿。建议选择便宜但稳定、擅长结构化 JSON 的模型。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "NARRATION_PROVIDER_ID": {
-    "description": "转述模型（留空用每日模型/默认模型）",
-    "type": "string",
-    "hint": "用于把工具结果转成可供最终主动消息使用的自然语言上下文。当前主要用于 screen_peek 这类观察结果转述，不参与主动生图提示词生成。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "COMFYUI_TEXT2IMG_WORKFLOW_NAME": {
-    "description": "主动拍照文生图工作流名",
-    "type": "string",
-    "hint": "用于风景、小动物、桌面小物、普通随手拍等 photo_text 主动行为。需要存在 texts>=1、images=0、videos=0 的 ComfyUI 工作流文件。",
-    "default": ""
-  },
-  "COMFYUI_SELFIE_WORKFLOW_NAME": {
-    "description": "主动自拍工作流名",
-    "type": "string",
-    "hint": "用于自拍/人像类 photo_text 主动行为。适合使用已在工作流里预置人设图的 ComfyUI 工作流；需要从文本提示词生成输出图片。",
-    "default": ""
-  },
-  "COMFYUI_PHOTO_WORKFLOW_NAME": {
-    "description": "主动拍照工作流名（兼容旧配置）",
-    "type": "string",
-    "hint": "旧版单工作流字段。若新的文生图/自拍工作流名留空，会用这里作为兜底；建议改用 COMFYUI_TEXT2IMG_WORKFLOW_NAME 和 COMFYUI_SELFIE_WORKFLOW_NAME 分开配置。",
-    "default": ""
-  },
-  "comfyui_photo_wait_seconds": {
-    "description": "主动拍照等待生图秒数",
-    "type": "int",
-    "hint": "photo_text 会等待工作流完成，拿到图片后再和最终消息一起发送。超时则本次不冒充已经发图。",
-    "slider": {
-      "min": 5,
-      "max": 600,
-      "step": 5
-    },
-    "default": 90
-  },
-  "photo_generation_backend": {
-    "description": "主动生图后端",
-    "type": "string",
-    "hint": "可填：auto、comfyui、external。auto 会优先尝试本地 ComfyUI，失败或未配置时再回退到在线图片 API。",
-    "default": "auto"
-  },
-  "EXTERNAL_IMAGE_API_BASE_URL": {
-    "description": "在线图片 API 地址",
-    "type": "string",
-    "hint": "用于 OpenAI 兼容的在线生图接口。可填写完整的 /images/generations 地址，或只填 API 根地址；插件会自动补齐。",
-    "default": ""
-  },
-  "EXTERNAL_IMAGE_API_KEY": {
-    "description": "在线图片 API Key",
-    "type": "string",
-    "hint": "用于外接在线生图平台的鉴权。留空则不会启用这条后端。",
-    "default": ""
-  },
-  "EXTERNAL_IMAGE_API_MODEL": {
-    "description": "在线图片模型",
-    "type": "string",
-    "hint": "例如某个平台提供的图片模型名。插件会按 OpenAI 兼容 images/generations 请求格式提交 prompt。",
-    "default": ""
-  },
-  "external_image_api_size": {
-    "description": "在线生图尺寸",
-    "type": "string",
-    "hint": "格式如 1024x1024、768x1344。用于在线图片 API 请求。",
-    "default": "1024x1024"
-  },
-  "external_image_api_timeout_seconds": {
-    "description": "在线生图超时时间（秒）",
-    "type": "int",
-    "hint": "等待在线图片 API 返回结果的最长时间。超时后本次 photo_text 会自然失败，不会假装已经发图。",
-    "slider": {
-      "min": 20,
-      "max": 600,
-      "step": 10
-    },
-    "default": 180
-  },
-  "photo_generation_style": {
-    "description": "主动生图风格",
-    "type": "string",
-    "hint": "可填：真实、二次元、其他。会影响 photo_text 的生图提示词风格倾向。",
-    "default": "真实"
-  },
-  "photo_generation_style_custom_prompt": {
-    "description": "主动生图自定义风格说明",
-    "type": "string",
-    "hint": "当主动生图风格设为“其他”时，会把这里的内容作为额外风格要求注入提示词，例如：胶片感、像素风、轻复古插画。",
-    "default": ""
-  },
-  "enable_weather_context": {
-    "description": "启用天气上下文",
-    "type": "bool",
-    "hint": "开启后会优先使用 private_companion 自己的天气配置查询天气；若未配置，再回退复用 screen_companion 插件的天气能力。",
-    "default": true
-  },
-  "weather_api_key": {
-    "description": "天气 API Key",
-    "type": "string",
-    "hint": "OpenWeatherMap API Key。配置后，private_companion 会优先自己查询天气。",
-    "default": ""
-  },
-  "weather_city": {
-    "description": "天气城市",
-    "type": "string",
-    "hint": "例如：Shanghai,CN 或 北京。填写后会按城市查询天气。",
-    "default": ""
-  },
-  "weather_lat": {
-    "description": "天气纬度",
-    "type": "float",
-    "hint": "如果不想按城市查，可以填纬度；需与 weather_lon 成对使用。",
-    "default": 0
-  },
-  "weather_lon": {
-    "description": "天气经度",
-    "type": "float",
-    "hint": "如果不想按城市查，可以填经度；需与 weather_lat 成对使用。",
-    "default": 0
-  },
-  "weather_refresh_minutes": {
-    "description": "天气缓存刷新间隔（分钟）",
-    "type": "int",
-    "hint": "天气不会每次都重查；在这个时间内会复用最近一次结果。",
-    "slider": {
-      "min": 10,
-      "max": 720,
-      "step": 10
-    },
-    "default": 90
-  },
-  "detail_enhancement_lead_minutes": {
-    "description": "提前强化日程段（分钟）",
-    "type": "int",
-    "hint": "建议设为 3，则 08:30 的日程段会在约 08:27 后开始尝试细节强化，更贴近当前区间。",
-    "slider": {
-      "min": 0,
-      "max": 180,
-      "step": 1
-    },
-    "default": 3
-  },
-  "enable_screen_glance_action": {
-    "description": "允许主动看一眼屏幕",
-    "type": "bool",
-    "hint": "默认关闭。开启后，Bot 才可能在关心、好奇、确认状态等合适动机下调用屏幕陪伴插件观察当前屏幕；结果只作为 LLM 上下文，并会要求避免暴露隐私细节。",
-    "default": false
-  },
-  "enable_photo_text_action": {
-    "description": "允许主动拍照/生图",
-    "type": "bool",
-    "hint": "开启后，Bot 可能在合适动机下调用 ComfyUI 工作流生成图片，拿到图片后再由 LLM 自然写成主动消息并一起发送。生成成功即计入图片额度，即使发送失败也不会立刻继续生图。",
-    "default": true
-  },
-  "photo_action_max_daily": {
-    "description": "每日主动生图最多次数",
-    "type": "int",
-    "hint": "按用户计数。真实生成出图片就会消耗额度，避免发送失败或重启后反复生图。设为 0 表示不限制，不建议。",
-    "slider": {
-      "min": 0,
-      "max": 5,
-      "step": 1
-    },
-    "default": 1
-  },
-  "enable_poke_action": {
-    "description": "允许主动戳一戳",
-    "type": "bool",
-    "hint": "开启后，Bot 可能在想轻轻刷存在感、嘴硬关心或逗一下用户时主动戳一戳，然后再自然补一句私聊。默认关闭，避免太跳。",
-    "default": false
-  },
-  "poke_action_max_times": {
-    "description": "主动戳一戳最多次数",
-    "type": "int",
-    "hint": "每次主动 poke 最多戳几下。实际主动行为默认只会轻轻戳一下，这个值主要作为上限兜底。",
-    "slider": {
-      "min": 1,
-      "max": 3,
-      "step": 1
-    },
-    "default": 1
-  },
-  "enable_voice_action": {
-    "description": "允许主动发语音",
-    "type": "bool",
-    "hint": "开启后，Bot 可能在深夜、晚间、状态分享或想更贴近一点时主动留一小句语音。需要当前会话已配置可用的 TTS provider。",
-    "default": false
-  },
-  "enable_qq_presence_sync": {
-    "description": "允许细化模型同步 QQ 全局状态",
-    "type": "bool",
-    "hint": "开启后，当前时间段细化可决定在线/睡觉/自定义短状态，并通过 OneBot 尝试同步。会减少忙碌，避免离开/隐身；失败会静默跳过。",
-    "default": true
-  },
-  "voice_action_max_chars": {
-    "description": "主动语音最大字数",
-    "type": "int",
-    "hint": "限制单条主动语音实际会说的话长度，避免像念稿。越短越像真实私聊语音。",
-    "slider": {
-      "min": 6,
-      "max": 80,
-      "step": 2
-    },
-    "default": 30
-  },
-  "daily_plan_prompt": {
-    "description": "自定义每日日程提示词",
-    "type": "text",
-    "hint": "留空使用默认提示词。可用变量：{now} {bot_name} {astrbot_persona} {can_do} {humanized_state} {recent_diaries}。要求模型输出 JSON，包含 schedule 数组。不要在这里另写新人格。",
-    "default": ""
-  },
-  "enable_daily_diary": {
-    "description": "启用每日 Bot 日记",
-    "type": "bool",
-    "hint": "每天生成一条 Bot 自己的短日记，作为次日状态转移和主动分享素材。",
-    "default": true
-  },
-  "daily_diary_time": {
-    "description": "每日写日记时间",
-    "type": "string",
-    "hint": "格式：HH:MM，例如 23:10。超过该时间后每天生成一次。",
-    "default": "23:10"
-  },
-  "max_diary_entries": {
-    "description": "保留 Bot 日记数量",
-    "type": "int",
-    "hint": "用于状态延续和主动分享素材。",
-    "slider": {
-      "min": 1,
-      "max": 60,
-      "step": 1
-    },
-    "default": 14
-  },
-  "important_date_lookahead_days": {
-    "description": "重要日期默认提前提醒天数",
-    "type": "int",
-    "hint": "新增重要日期条目时默认使用的提前关注范围。临近或当天的重要日期会注入 LLM，并可能触发主动分享。",
-    "slider": {
-      "min": 0,
-      "max": 60,
-      "step": 1
-    },
-    "default": 7
-  },
-  "enable_humanized_states": {
-    "description": "启用拟人化身体/梦境状态",
-    "type": "bool",
-    "hint": "生成睡眠、梦境、健康、饥饿、周期等连续状态，并影响日程、主动消息和被动回复。",
-    "default": true
-  },
-  "inject_passive_states": {
-    "description": "被动回复前注入拟人状态",
-    "type": "bool",
-    "hint": "开启后，每次普通 LLM 回复前都会把当前叠加状态注入 system_prompt，让被动回复也受状态影响。",
-    "default": true
-  },
-  "enable_cycle_state": {
-    "description": "启用生理周期模拟",
-    "type": "bool",
-    "hint": "开启后可能出现生理期前、生理期、恢复期等持续数天的拟人化周期影响。",
-    "default": true
-  },
-  "humanized_state_intensity": {
-    "description": "拟人状态强度",
-    "type": "int",
-    "hint": "数值越高，失眠、生病、饥饿、周期等状态越容易出现且对能量影响越明显。不同状态有不同持续时间，并可叠加。",
-    "slider": {
-      "min": 0,
-      "max": 100,
-      "step": 5
-    },
-    "default": 50
-  },
-  "enable_enhanced_dreams": {
-    "description": "启用强化梦境生成",
-    "type": "bool",
-    "hint": "开启后，梦境不再只从固定文案随机，而会尝试根据最近日记、生活片段、重要日期和天气碎片，用单独模型拼出欠逻辑的梦境状态。失败时会自动回退到默认梦境池。",
-    "default": false
-  },
-  "DREAM_PROVIDER_ID": {
-    "description": "强化梦境模型（留空用每日模型/默认模型）",
-    "type": "string",
-    "hint": "专门用于生成梦境状态的一句描述。建议选择便宜、擅长短文本意象和 JSON 输出的模型。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "dream_afterglow_mode": {
-    "description": "梦境余韵影响强度",
-    "type": "string",
-    "hint": "控制梦对第二天前半段状态的影响强弱。自动模式会根据梦境内容和强度自行调节；轻/标准/明显会更固定地偏弱或偏强。",
-    "options": [
-      "auto",
-      "轻",
-      "标准",
-      "明显"
-    ],
-    "labels": [
-      "自动",
-      "轻",
-      "标准",
-      "明显"
-    ],
-    "default": "auto"
-  },
-  "enable_mixed_dream_themes": {
-    "description": "允许梦境题材轻微混搭",
-    "type": "bool",
-    "hint": "开启后，梦境主题除了单一题材，也可能出现奇幻+恐怖、怀旧+悬疑这类轻微交杂。",
-    "default": true
-  },
-  "enable_intimate_dream_theme": {
-    "description": "允许暧昧/春梦题材",
-    "type": "bool",
-    "hint": "开启后，强化梦境主题池里会加入较含蓄的暧昧春梦题材；默认关闭。",
-    "default": false
-  },
-  "dream_theme_candidates": {
-    "description": "梦境题材候选（逗号分隔）",
-    "type": "string",
-    "hint": "例如：温柔日常,奇幻,恐怖,追逐,悬疑,荒诞,怀旧,暧昧春梦。会从这些题材中随机抽取，并可按配置轻微混搭。",
-    "default": "温柔日常,奇幻,恐怖,追逐,悬疑,荒诞,怀旧,暧昧春梦"
   }
 }

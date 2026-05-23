@@ -146,6 +146,10 @@ def normalize_presence_status(raw: Any) -> dict[str, str]:
         "sleep": "sleep",
         "隐身": "invisible",
         "invisible": "invisible",
+        "请勿打扰": "dnd",
+        "勿扰": "dnd",
+        "dnd": "dnd",
+        "do_not_disturb": "dnd",
         "自定义": "custom",
         "自定义状态": "custom",
         "custom": "custom",
@@ -157,11 +161,16 @@ def normalize_presence_status(raw: Any) -> dict[str, str]:
     mode = aliases.get(mode, aliases.get(mode.strip(), "unchanged"))
     reason = _single_line(raw.get("reason") or raw.get("why") or raw.get("原因"), 80)
     custom_text = _single_line(
-        raw.get("custom_text") or raw.get("text") or raw.get("label") or raw.get("自定义状态"),
+        raw.get("custom_text")
+        or raw.get("wording")
+        or raw.get("text")
+        or raw.get("label")
+        or raw.get("自定义状态")
+        or raw.get("文案"),
         28,
     )
-    if mode in {"away", "invisible"}:
-        mode = "unchanged"
+    if mode in {"away", "invisible", "dnd"}:
+        mode = "online"
     if mode == "custom" and not custom_text:
         mode = "online"
     if mode == "busy":
@@ -398,12 +407,31 @@ async def generate_daily_plan(plugin) -> dict[str, Any]:
         if retry_items and not plugin._plan_conflicts_with_calendar(retry_items):
             raw_text = retry_raw_text
             items = retry_items
+    if items and plugin._plan_is_too_repetitive(items):
+        retry_prompt = (
+            prompt
+            + "\n\n【额外纠偏】\n"
+            + "你刚才生成的全天日程和最近几天的日程骨架过于相似。请保留今天的日期语境、人格设定、天气和状态,但换一条新的日内主线。"
+            + "不要再写同一套“起床洗漱-整理小事-专注做事-休息-收尾睡觉”；至少一半时间点的场景、对象、占用事项或小意外要和最近日程不同。"
+            + "如果今天确实有固定事项,也要改变切入角度、地点、阻碍、同行/独处状态或情绪走向。"
+        )
+        retry_raw_text = await plugin._llm_call(retry_prompt, max_tokens=900)
+        retry_items = plugin._parse_plan_items(retry_raw_text or "")
+        if (
+            retry_items
+            and not plugin._plan_is_too_repetitive(retry_items)
+            and not plugin._plan_has_excess_micro_segments(retry_items)
+            and not plugin._plan_has_excess_abstract_segments(retry_items)
+            and not plugin._plan_conflicts_with_calendar(retry_items)
+        ):
+            raw_text = retry_raw_text
+            items = retry_items
     source = "llm" if items else "fallback"
     if not items or plugin._plan_conflicts_with_calendar(items):
         items = [dict(item) for item in DEFAULT_DAILY_PLAN_ITEMS]
         raw_text = "fallback"
         source = "fallback"
-    return {
+    plan = {
         "date": today,
         "generated_at": now,
         "source": source,
@@ -411,6 +439,8 @@ async def generate_daily_plan(plugin) -> dict[str, Any]:
         "raw": raw_text,
         "items": items,
     }
+    plugin._remember_daily_plan_history(plan)
+    return plan
 
 
 def get_schedule_planning_prompt(plugin) -> str:
@@ -443,6 +473,7 @@ def build_daily_plan_prompt(plugin, now: str) -> str:
     weather_info = plugin._weather_summary_text(plugin.data.get("daily_weather", {}))
     calendar_context = plugin._format_calendar_context_for_prompt()
     schedule_adjustments = plugin._format_schedule_adjustments_for_prompt()
+    recent_plan_history = plugin._format_recent_daily_plan_history_for_prompt()
     try:
         now_dt = datetime.strptime(now, "%Y-%m-%d %H:%M")
         weekday_text = "一二三四五六日"[now_dt.weekday()]
@@ -458,6 +489,7 @@ def build_daily_plan_prompt(plugin, now: str) -> str:
             can_do=can_do_text,
             humanized_state=humanized_state,
             schedule_adjustments=schedule_adjustments,
+            recent_plan_history=recent_plan_history,
             calendar_context=calendar_context,
             recent_diaries=recent_diaries,
             yesterday_conversation=yesterday_conversation,
@@ -483,6 +515,9 @@ Bot 名字：{plugin.bot_name}
 
 今日互动造成的日程偏移：
 {schedule_adjustments}
+
+最近日程骨架（今天要避免照抄）：
+{recent_plan_history}
 
 今天天气：
 {weather_info}
@@ -514,6 +549,7 @@ Bot 名字：{plugin.bot_name}
 6. 长线日程要有“第几天”的变化：第 1 天更偏新鲜、出发、适应；中段更可能疲惫、熟悉、产生小摩擦或小默契；后段更可能不舍、收尾、复盘或想家。不要把连续几天写成同一套起床-吃饭-活动-睡觉。
 7. 如果最近日记、重要日期或今日互动里提供了前一天/前几天的残留,要顺势衔接但不能复制：前一天疲惫,今天可以更慢或被某件小事缓解；前一天别扭,今天可以绕开、试探或和好；未完成事项可以延后、变形或被打断。
 7.1 如果昨日完整对话摘要里有饮食、作息、运动、天气暴露、情绪刺激、约定、礼物、争执、安慰、共同完成/未完成的事等线索,可以让它们以抽象后果影响今日：体力、胃口、身体小不适、心情余波、主动话题、出门意愿、梦境碎片或某个时段的小停顿。影响强度要跟摘要一致,可以很轻,也可以没有；不要为了戏剧性强行安排事故。
+7.2 必须主动避开最近日程骨架的重复：不要连续几天都写同一套“醒来/洗漱/整理/学习或做事/休息/收尾/睡前”。如果某类活动无法避免,要换具体场景、地点、对象、阻碍、小意外、关系伏笔或情绪走向,让今天读起来像新的一天。
 8. 状态和天气必须真的影响安排：低能量时密度更松,困倦时上午起步更慢,下雨会改变出门/衣物/交通/心情,天气舒服时更容易出门、开窗或注意到光线。
 9. 生活感来自“有选择的具体”,不是动作清单：动作要透露她的习惯、迟疑、偏好、人际关系、宠物/物件或当天状态。不要连续堆“揉头发、系鞋带、转笔、理刘海”这类谁都能做的通用动作；每段最好有一个独属于此刻的小原因、小物件或小偏差。
 10. 一天要有轻微走向：早上怎么启动,白天被什么拖住或松开,晚上为什么收声。不要只是从困倦一路写到疲惫；让情绪有一点转折、回弹、压下去或被某个小瞬间照亮的过程。
@@ -643,7 +679,7 @@ def build_detail_enhancement_prompt(
 · 如果是起床/早安/试探,可以带 chain 做分支逻辑：先只叫名字,没回->隔久一点再轻轻放一句；早晨未回复不需要马上追,也不要把没回理解成故意不理。
 · 输出中的 summary 要相当于“更新后的角色状态摘要”：一句话写出当前段结束后的情绪、体力走向和最多两个残留状态,方便下一时间段承接。例如“情绪平淡但有点等回复,体力约 58/100,还惦记刚才那张没发出去的图。”
 · 同时输出 state_variables,作为这个时间段的“基线状态机变量”。它们描述无用户干预时自然发展到当前段结束的大致状态,例如作业完成度、情绪、体力、等待回复、是否想发消息、特殊能力冷却等。变量要短,方便后续用户事件做局部更新。
-· 同时输出 presence_status,由细化模型决定这个时间段适合的 QQ 全局状态表现。它只用于平台侧同步,不是角色正文。mode 优先使用 online / custom / sleep / unchanged；尽量少用 busy,除非确实是长时间不能被打扰的考试、会议、深度专注；避免使用 away 和 invisible。普通可聊天时 online；想表现“写作业/发呆/吃饭/路上/看剧/专注”等生活状态时优先用 custom,并填写 custom_text（2-8 个中文字符,像“写题中”“路上”“犯困中”“看剧中”）；睡眠段倾向 sleep；不确定或不想影响账号时 unchanged。不要频繁改变,一段最多一个状态。
+· 同时输出 presence_status,由细化模型决定这个时间段适合的 QQ 全局状态表现。它只用于平台侧同步,不是角色正文。mode 只能使用 online / custom / sleep / unchanged；禁止输出 away / invisible / dnd / do_not_disturb / 请勿打扰 / 勿扰。普通可聊天时 online；想表现“写作业/发呆/吃饭/路上/看剧/专注”等生活状态时优先用 custom,并必须填写 custom_text（2-8 个中文字符,像“写题中”“路上”“犯困中”“看剧中”）；睡眠段倾向 sleep；不确定或不想影响账号时 unchanged。不要频繁改变,一段最多一个状态。
 · 这段细化通常会在对应区间开始前约 3 分钟生成,所以内容要贴近“马上进入这一段”的状态：可以有刚从上一段收尾、准备切换到当前段的动作,但不要写成已经完整度过了后面几个小时。
 · 只输出 JSON。
 

@@ -49,6 +49,7 @@ from .constants import (
     SUPPORTED_TIMER_FORMATS,
     _ACTION_TEXT,
     _DATA_STORE_KEYS,
+    _DEFAULT_GROUP_TEMPLATE,
     _DEFAULT_USER_TEMPLATE,
     _REASON_TEXT,
     _SIMULATION_FALLBACK_EVENTS,
@@ -133,7 +134,7 @@ class _CapturedSendMessageCall:
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：让 Bot 拥有连续状态、生活日程与自然主动分享的私聊陪伴插件。",
-    "1.1.0",
+    "2.0.0",
 )
 class PrivateCompanionPlugin(Star):
     @staticmethod
@@ -273,6 +274,63 @@ class PrivateCompanionPlugin(Star):
         self.poke_action_max_times = self._cfg_int(c, "poke_action_max_times", 1, 1, 3)
         self.voice_action_max_chars = self._cfg_int(c, "voice_action_max_chars", 30, 6, 80)
         self.photo_action_max_daily = self._cfg_int(c, "photo_action_max_daily", 1, 0, 5)
+        self.screen_peek_max_daily = self._cfg_int(c, "screen_peek_max_daily", 1, 0, 5)
+        self.screen_peek_cooldown_minutes = self._cfg_int(c, "screen_peek_cooldown_minutes", 240, 0, 1440)
+        self.enable_mai_style_integration = self._cfg_bool(c, "enable_mai_style_integration", True)
+        self.enable_companion_memory = self._cfg_bool(c, "enable_companion_memory", True)
+        self.enable_expression_learning = self._cfg_bool(c, "enable_expression_learning", True)
+        self.enable_companion_reply_planner = self._cfg_bool(c, "enable_companion_reply_planner", True)
+        self.enable_intent_emotion_analysis = self._cfg_bool(c, "enable_intent_emotion_analysis", True)
+        self.enable_response_self_review = self._cfg_bool(c, "enable_response_self_review", True)
+        self.enable_passive_topic_suppression = self._cfg_bool(c, "enable_passive_topic_suppression", True)
+        self.enable_relationship_state_machine = self._cfg_bool(c, "enable_relationship_state_machine", True)
+        self.enable_dialogue_episode_memory = self._cfg_bool(c, "enable_dialogue_episode_memory", True)
+        self.enable_open_loop_tracking = self._cfg_bool(c, "enable_open_loop_tracking", True)
+        self.memory_refresh_interval_minutes = self._cfg_int(c, "memory_refresh_interval_minutes", 360, 30, 4320)
+        self.max_companion_memory_items = self._cfg_int(c, "max_companion_memory_items", 36, 8, 120)
+        self.max_learned_expression_items = self._cfg_int(c, "max_learned_expression_items", 18, 4, 60)
+        self.mai_style_provider_id = self._cfg_str(c, "MAI_STYLE_PROVIDER_ID", "")
+        self.companion_memory_provider_id = self._cfg_str(c, "COMPANION_MEMORY_PROVIDER_ID", "")
+        self.dialogue_episode_provider_id = self._cfg_str(c, "DIALOGUE_EPISODE_PROVIDER_ID", "")
+        self.relationship_analysis_provider_id = self._cfg_str(c, "RELATIONSHIP_ANALYSIS_PROVIDER_ID", "")
+        self.response_review_provider_id = self._cfg_str(c, "RESPONSE_REVIEW_PROVIDER_ID", "")
+        self.response_review_max_chars = self._cfg_int(c, "response_review_max_chars", 260, 80, 900)
+        self.passive_topic_memory_hours = self._cfg_int(c, "passive_topic_memory_hours", 8, 1, 72)
+        self.episode_memory_refresh_messages = self._cfg_int(c, "episode_memory_refresh_messages", 8, 3, 40)
+        self.episode_memory_refresh_minutes = self._cfg_int(c, "episode_memory_refresh_minutes", 90, 15, 1440)
+        self.max_dialogue_episodes = self._cfg_int(c, "max_dialogue_episodes", 12, 3, 40)
+        self.enable_group_companion = self._cfg_bool(c, "enable_group_companion", True)
+        self.group_access_mode = self._cfg_str(c, "group_access_mode", "whitelist", "whitelist").lower()
+        if self.group_access_mode not in {"whitelist", "blacklist"}:
+            self.group_access_mode = "whitelist"
+        self.target_group_ids = c.get("target_group_ids", [])
+        self.group_whitelist_ids = c.get("group_whitelist_ids", self.target_group_ids)
+        self.group_blacklist_ids = c.get("group_blacklist_ids", [])
+        self.require_target_group = self._cfg_bool(c, "require_target_group", True)
+        self.enable_group_slang_learning = self._cfg_bool(c, "enable_group_slang_learning", True)
+        self.enable_group_member_profiles = self._cfg_bool(c, "enable_group_member_profiles", True)
+        self.enable_group_context_injection = self._cfg_bool(c, "enable_group_context_injection", True)
+        self.enable_group_interjection = self._cfg_bool(c, "enable_group_interjection", False)
+        self.group_interject_min_interval_minutes = self._cfg_int(c, "group_interject_min_interval_minutes", 180, 10, 1440)
+        self.group_interject_max_daily = self._cfg_int(c, "group_interject_max_daily", 2, 0, 12)
+        self.max_group_recent_messages = self._cfg_int(c, "max_group_recent_messages", 80, 20, 300)
+        self.max_group_slang_terms = self._cfg_int(c, "max_group_slang_terms", 40, 8, 160)
+        self.enable_group_topic_threads = self._cfg_bool(c, "enable_group_topic_threads", True)
+        self.enable_group_episode_memory = self._cfg_bool(c, "enable_group_episode_memory", True)
+        self.enable_group_interjection_feedback = self._cfg_bool(c, "enable_group_interjection_feedback", True)
+        self.enable_group_slang_meanings = self._cfg_bool(c, "enable_group_slang_meanings", True)
+        self.enable_group_relationship_graph = self._cfg_bool(c, "enable_group_relationship_graph", True)
+        self.enable_group_privacy_guard = self._cfg_bool(c, "enable_group_privacy_guard", True)
+        self.group_interject_provider_id = self._cfg_str(c, "GROUP_INTERJECT_PROVIDER_ID", "")
+        self.group_episode_provider_id = self._cfg_str(c, "GROUP_EPISODE_PROVIDER_ID", "")
+        self.group_slang_provider_id = self._cfg_str(c, "GROUP_SLANG_PROVIDER_ID", "")
+        self.enable_livingmemory_integration = self._cfg_bool(c, "enable_livingmemory_integration", True)
+        self.livingmemory_tool_name = self._cfg_str(c, "livingmemory_tool_name", "recall_long_term_memory", "recall_long_term_memory")
+        self.group_episode_refresh_minutes = self._cfg_int(c, "group_episode_refresh_minutes", 180, 30, 1440)
+        self.group_slang_summary_minutes = self._cfg_int(c, "group_slang_summary_minutes", 360, 60, 2880)
+        self.max_group_topic_threads = self._cfg_int(c, "max_group_topic_threads", 12, 3, 40)
+        self.max_group_episodes = self._cfg_int(c, "max_group_episodes", 10, 3, 40)
+        self.max_group_relationship_edges = self._cfg_int(c, "max_group_relationship_edges", 80, 10, 300)
         # Backward-compatible aliases for stored daily plans and older code paths.
         self.allow_photo_text_action = self.enable_photo_text_action
         self.allow_screen_peek_action = self.enable_screen_glance_action
@@ -291,6 +349,21 @@ class PrivateCompanionPlugin(Star):
         if self.default_enable_configured_targets:
             self._sync_configured_targets()
             self._save_data_sync()
+        self.page_api = None
+        self._register_page_api_if_available()
+
+    def _register_page_api_if_available(self) -> None:
+        if not hasattr(self.context, "register_web_api"):
+            logger.debug("[PrivateCompanion] 当前 AstrBot 版本未提供 register_web_api,跳过插件拓展页面 API 注册")
+            return
+        try:
+            from .page_api import PrivateCompanionPageApi
+
+            self.page_api = PrivateCompanionPageApi(self)
+            self.page_api.register_routes()
+            logger.info("[PrivateCompanion] 插件拓展页面 API 已注册")
+        except Exception as e:
+            logger.warning(f"[PrivateCompanion] 插件拓展页面 API 注册失败: {e}", exc_info=True)
 
     async def initialize(self):
         if not self.enabled:
@@ -302,6 +375,7 @@ class PrivateCompanionPlugin(Star):
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._scheduler_loop())
             logger.info("[PrivateCompanion] 主动消息循环已启动")
+        asyncio.create_task(self._reset_stale_qq_presence_if_needed())
         asyncio.create_task(self._startup_prepare_today())
 
     async def _startup_prepare_today(self):
@@ -336,7 +410,9 @@ class PrivateCompanionPlugin(Star):
         return {
             "version": DATA_VERSION,
             "users": {},
+            "groups": {},
             "daily_plan": {},
+            "daily_plan_history": [],
             "daily_state": {},
             "state_conditions": [],
             "state_generated_day": "",
@@ -358,7 +434,9 @@ class PrivateCompanionPlugin(Star):
     def _ensure_store_defaults(data: dict[str, Any]) -> dict[str, Any]:
         data.setdefault("version", DATA_VERSION)
         data.setdefault("users", {})
+        data.setdefault("groups", {})
         data.setdefault("daily_plan", {})
+        data.setdefault("daily_plan_history", [])
         data.setdefault("daily_state", {})
         data.setdefault("state_conditions", [])
         data.setdefault("state_generated_day", "")
@@ -460,6 +538,166 @@ class PrivateCompanionPlugin(Star):
             user["style"] = self.default_style
         return user
 
+    def _get_group(self, group_id: str) -> dict[str, Any]:
+        groups = self.data.setdefault("groups", {})
+        group = groups.setdefault(group_id, dict(_DEFAULT_GROUP_TEMPLATE))
+        group["group_id"] = group_id
+        for key, default_value in _DEFAULT_GROUP_TEMPLATE.items():
+            if key not in group:
+                group[key] = default_value.copy() if isinstance(default_value, (dict, list)) else default_value
+        group["enabled"] = bool(group.get("enabled", True))
+        return group
+
+    def _parse_group_id_list(self, raw: Any) -> list[str]:
+        if isinstance(raw, str):
+            parts = re.split(r"[,\s,、;；]+", raw)
+        elif isinstance(raw, list):
+            parts = raw
+        else:
+            parts = []
+        ids = []
+        for part in parts:
+            group_id = str(part).strip()
+            if group_id and group_id.isdigit() and group_id not in ids:
+                ids.append(group_id)
+        return ids
+
+    def _configured_group_ids(self) -> list[str]:
+        # Backward compatibility: old target_group_ids is now treated as whitelist.
+        whitelist = self._parse_group_id_list(self.group_whitelist_ids)
+        legacy = self._parse_group_id_list(self.target_group_ids)
+        for group_id in legacy:
+            if group_id not in whitelist:
+                whitelist.append(group_id)
+        return whitelist
+
+    def _configured_group_blacklist_ids(self) -> list[str]:
+        return self._parse_group_id_list(self.group_blacklist_ids)
+
+    def _group_enabled_for_event(self, group_id: str) -> bool:
+        if not self.enable_group_companion:
+            return False
+        if not self._group_allowed_by_access_mode(group_id):
+            return False
+        group = self._get_group(group_id)
+        return bool(group.get("enabled", True))
+
+    def _group_allowed_by_access_mode(self, group_id: str) -> bool:
+        if self.group_access_mode == "blacklist":
+            if group_id in self._configured_group_blacklist_ids():
+                return False
+        else:
+            configured = self._configured_group_ids()
+            if group_id not in configured:
+                return False
+        return True
+
+    def _extract_group_id_from_event(self, event: AstrMessageEvent) -> str:
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        match = re.search(r":GroupMessage:(\d+)", umo)
+        if match:
+            return match.group(1)
+        session_id = str(getattr(event, "session_id", "") or "")
+        if session_id.isdigit():
+            return session_id
+        message_obj = getattr(event, "message_obj", None)
+        for attr in ("group_id", "group"):
+            value = getattr(message_obj, attr, None) if message_obj is not None else None
+            if value:
+                return str(value)
+        return ""
+
+    def _sender_display_name(self, event: AstrMessageEvent) -> str:
+        for name in ("get_sender_name", "get_sender_nickname"):
+            func = getattr(event, name, None)
+            if callable(func):
+                try:
+                    value = _single_line(func(), 30)
+                    if value:
+                        return value
+                except Exception:
+                    pass
+        message_obj = getattr(event, "message_obj", None)
+        sender = getattr(message_obj, "sender", None) if message_obj is not None else None
+        for attr in ("nickname", "card", "name", "user_id"):
+            value = getattr(sender, attr, None) if sender is not None else None
+            if value:
+                return _single_line(value, 30)
+        try:
+            return str(event.get_sender_id())
+        except Exception:
+            return "群友"
+
+    def _livingmemory_plugin_dir(self) -> Path:
+        candidates = [
+            Path(__file__).resolve().parent.parent / "astrbot_plugin_livingmemory",
+            Path(self.data_dir).parent / "astrbot_plugin_livingmemory",
+            Path(self.data_dir).parent.parent / "plugins" / "astrbot_plugin_livingmemory",
+        ]
+        for path in candidates:
+            if (path / "main.py").exists():
+                return path
+        return candidates[0]
+
+    def _livingmemory_available(self) -> bool:
+        plugin_dir = self._livingmemory_plugin_dir()
+        return (
+            plugin_dir.exists()
+            and (plugin_dir / "main.py").exists()
+            and (plugin_dir / "core" / "tools" / "memory_search_tool.py").exists()
+        )
+
+    def _format_livingmemory_guidance(self, *, scope: str = "private") -> str:
+        if not self.enable_livingmemory_integration or not self._livingmemory_available():
+            return ""
+        tool_name = _single_line(self.livingmemory_tool_name, 60) or "recall_long_term_memory"
+        if scope == "group":
+            boundary = (
+                "群聊中只召回当前群会话可用的公开记忆；不要主动寻找或泄露私聊记忆、私聊偏好、私下关系。"
+                "如果召回结果像私聊内容或不适合公开场合,直接忽略。"
+            )
+        else:
+            boundary = (
+                "私聊中可以召回与当前用户、当前会话、当前人格相关的长期记忆；"
+                "召回结果只作为接话背景,不要说“我查到记忆/系统记录”。"
+            )
+        return (
+            "【LivingMemory 长期记忆协同】\n"
+            f"如果你可用工具中存在 `{tool_name}`,在当前上下文不足时可以主动调用它检索长期记忆。\n"
+            "适合检索的情况：用户提到旧约定、偏好、过去事件、模糊代词、共同经历、群内旧梗,或明确问“还记得吗”。\n"
+            "检索关键词要短,优先用实体名、话题、偏好、约定、事件名,不要整段复制用户消息。\n"
+            "如果第一次结果不够,可以换一个更具体或更抽象的关键词再查一次。\n"
+            f"{boundary}\n"
+            "召回内容和本插件的状态/日程/群聊观察发生冲突时：事实记忆优先,但回复仍要贴着当前气氛和关系边界。"
+        )
+
+    def _format_livingmemory_status(self) -> str:
+        plugin_dir = self._livingmemory_plugin_dir()
+        if not plugin_dir.exists():
+            return (
+                "LivingMemory：未检测到 astrbot_plugin_livingmemory。\n"
+                "当前会继续使用本插件内置的轻量记忆、片段记忆和群聊观察。"
+            )
+        metadata = plugin_dir / "metadata.yaml"
+        version = ""
+        if metadata.exists():
+            try:
+                text = metadata.read_text(encoding="utf-8")
+                match = re.search(r"version:\s*([^\n]+)", text)
+                if match:
+                    version = match.group(1).strip()
+            except Exception:
+                version = ""
+        return (
+            "LivingMemory：已检测到。\n"
+            f"路径：{plugin_dir}\n"
+            f"版本：{version or '未知'}\n"
+            f"协同开关：{'开启' if self.enable_livingmemory_integration else '关闭'}\n"
+            f"召回工具名：{self.livingmemory_tool_name or 'recall_long_term_memory'}\n"
+            "用途：长期记忆、BM25/Faiss 混合检索、图谱记忆和 Agent 主动回忆。\n"
+            "建议：保留本插件的生活状态/关系/群聊气氛层,把大规模长期检索交给 LivingMemory。"
+        )
+
     def _configured_target_ids(self) -> list[str]:
         raw = self.target_user_ids
         if isinstance(raw, str):
@@ -529,6 +767,10 @@ class PrivateCompanionPlugin(Star):
         if user.get("photo_generated_day") != today:
             user["photo_generated_day"] = today
             user["photo_generated_today"] = 0
+        if user.get("screen_peek_day") != today:
+            user["screen_peek_day"] = today
+            user["screen_peek_today"] = 0
+            user["screen_peek_last_at"] = 0
         if user.get("greeting_sent_day") != today:
             user["greeting_sent_day"] = today
             user["greetings_sent"] = []
@@ -666,7 +908,1460 @@ class PrivateCompanionPlugin(Star):
             hints.append("靠近方式可以轻快一点,偶尔带一点玩笑感。")
         elif preference == "工作":
             hints.append("靠近方式更克制,优先从具体事情切进去。")
+        rel_state = user.get("relationship_state")
+        if isinstance(rel_state, dict):
+            mode = str(rel_state.get("mode") or "")
+            if mode == "backoff" and _safe_float(rel_state.get("backoff_until"), 0) > _now_ts():
+                hints.append("最近用户像是在表达边界或不想被打扰,主动和被动都要明显收敛,短一点,不追问。")
+            elif mode == "careful":
+                hints.append("最近用户情绪或压力偏重,优先接住情绪,不要讲大道理。")
+            elif mode == "warming":
+                hints.append("最近互动有升温或玩笑感,可以更自然亲近一点,但不要过度黏。")
         return " ".join(hints).strip()
+
+    def _update_expression_profile_from_message(self, user: dict[str, Any], text: str) -> None:
+        if not self.enable_expression_learning:
+            return
+        cleaned = _single_line(text, 220)
+        if not cleaned:
+            return
+        profile = user.setdefault("expression_profile", {})
+        if not isinstance(profile, dict):
+            profile = {}
+            user["expression_profile"] = profile
+        samples = _safe_int(profile.get("samples"), 0, 0) + 1
+        profile["samples"] = samples
+        profile["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        short_count = _safe_int(profile.get("short_count"), 0, 0)
+        if len(cleaned) <= 18:
+            short_count += 1
+        profile["short_count"] = short_count
+
+        punctuation = profile.get("punctuation")
+        if not isinstance(punctuation, dict):
+            punctuation = {}
+        for mark in ("！", "!", "？", "?", "~", "～", "…", "。"):
+            count = cleaned.count(mark)
+            if count:
+                punctuation[mark] = min(999, _safe_int(punctuation.get(mark), 0, 0) + count)
+        profile["punctuation"] = punctuation
+
+        endings = profile.get("endings")
+        if not isinstance(endings, list):
+            endings = []
+        stripped = cleaned.rstrip("。！？!?~～… ")
+        if 2 <= len(stripped) <= 80:
+            ending = stripped[-min(6, max(2, len(stripped))):]
+            if ending and ending not in endings:
+                endings.insert(0, ending)
+        profile["endings"] = endings[: self.max_learned_expression_items]
+
+        phrases = profile.get("recent_phrases")
+        if not isinstance(phrases, list):
+            phrases = []
+        if 2 <= len(cleaned) <= 40 and not re.search(r"https?://|<[^>]+>", cleaned):
+            phrases.insert(0, cleaned)
+        profile["recent_phrases"] = list(dict.fromkeys(phrases))[: self.max_learned_expression_items]
+
+    def _update_companion_memory_from_message(self, user: dict[str, Any], text: str) -> None:
+        if not self.enable_companion_memory:
+            return
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return
+        memory = user.setdefault("companion_memory", {})
+        if not isinstance(memory, dict):
+            memory = {}
+            user["companion_memory"] = memory
+        raw_items = memory.get("items")
+        items = raw_items if isinstance(raw_items, list) else []
+        lowered = cleaned.lower()
+        patterns = (
+            "喜欢", "讨厌", "不喜欢", "别叫", "不要", "记住", "记得",
+            "生日", "纪念日", "我是", "我叫", "叫我", "我在", "我住",
+            "想要", "希望", "害怕", "雷点", "以后",
+        )
+        score = 0
+        for pattern in patterns:
+            if pattern in cleaned or pattern in lowered:
+                score += 1
+        if score <= 0:
+            return
+        kind = "preference"
+        if any(key in cleaned for key in ("不要", "别叫", "讨厌", "不喜欢", "雷点")):
+            kind = "boundary"
+        elif any(key in cleaned for key in ("生日", "纪念日", "以后", "记住", "记得")):
+            kind = "important"
+        item = {
+            "text": cleaned,
+            "kind": kind,
+            "weight": min(5, 1 + score),
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        deduped = [old for old in items if isinstance(old, dict) and _single_line(old.get("text"), 260) != cleaned]
+        deduped.insert(0, item)
+        memory["items"] = deduped[: self.max_companion_memory_items]
+        memory["updated_at"] = item["created_at"]
+
+    def _format_expression_profile_for_prompt(self, user: dict[str, Any]) -> str:
+        profile = user.get("expression_profile")
+        if not isinstance(profile, dict) or _safe_int(profile.get("samples"), 0, 0) <= 0:
+            return "暂无足够样本。保持 AstrBot 默认人格的自然表达。"
+        samples = max(1, _safe_int(profile.get("samples"), 1, 1))
+        short_ratio = _safe_int(profile.get("short_count"), 0, 0) / samples
+        punctuation = profile.get("punctuation") if isinstance(profile.get("punctuation"), dict) else {}
+        sorted_marks = sorted(punctuation.items(), key=lambda item: -_safe_int(item[1], 0, 0))[:4]
+        marks = "、".join(str(mark) for mark, count in sorted_marks if _safe_int(count, 0, 0) > 0)
+        endings = profile.get("endings") if isinstance(profile.get("endings"), list) else []
+        phrases = profile.get("recent_phrases") if isinstance(profile.get("recent_phrases"), list) else []
+        length_hint = "用户常用短句,回复也可以更短更像即时聊天。" if short_ratio >= 0.55 else "用户能接受稍完整的句子,但仍避免说明书式长段。"
+        lines = [length_hint]
+        if marks:
+            lines.append(f"常见标点/语气符号：{marks}。可少量顺着氛围使用,不要机械模仿。")
+        if endings:
+            lines.append("常见句尾味道：" + "、".join(_single_line(item, 12) for item in endings[:5]))
+        if phrases:
+            lines.append("最近短句样本：" + " / ".join(_single_line(item, 24) for item in phrases[:4]))
+        return "\n".join(lines)
+
+    def _format_companion_memory_for_prompt(self, user: dict[str, Any]) -> str:
+        memory = user.get("companion_memory")
+        if not isinstance(memory, dict):
+            return "暂无专门沉淀的用户记忆。"
+        llm_profile = memory.get("profile")
+        lines: list[str] = []
+        if isinstance(llm_profile, dict):
+            for key, label in (
+                ("user_traits", "用户画像"),
+                ("interests", "兴趣/偏好"),
+                ("boundaries", "边界/雷点"),
+                ("relationship_notes", "关系线索"),
+                ("speaking_style", "说话习惯"),
+            ):
+                value = llm_profile.get(key)
+                if isinstance(value, list):
+                    text = "；".join(_single_line(item, 60) for item in value[:5] if _single_line(item, 60))
+                else:
+                    text = _single_line(value, 180)
+                if text:
+                    lines.append(f"{label}：{text}")
+        items = memory.get("items")
+        if isinstance(items, list) and items:
+            facts = []
+            for item in items[:8]:
+                if not isinstance(item, dict):
+                    continue
+                text = _single_line(item.get("text"), 90)
+                if text:
+                    facts.append(text)
+            if facts:
+                lines.append("近期可记住的话：" + " / ".join(facts))
+        episode_text = self._format_dialogue_episodes_for_prompt(user)
+        if episode_text:
+            lines.append("近期共同经历：\n" + episode_text)
+        open_loop_text = self._format_open_loops_for_prompt(user)
+        if open_loop_text:
+            lines.append("未完成约定/可续话头：\n" + open_loop_text)
+        return "\n".join(lines) if lines else "暂无专门沉淀的用户记忆。"
+
+    def _format_dialogue_episodes_for_prompt(self, user: dict[str, Any]) -> str:
+        episodes = user.get("dialogue_episodes")
+        if not isinstance(episodes, list):
+            return ""
+        lines: list[str] = []
+        for item in episodes[-4:]:
+            if not isinstance(item, dict):
+                continue
+            summary = _single_line(item.get("summary"), 120)
+            if not summary:
+                continue
+            mood = _single_line(item.get("emotional_residue"), 60)
+            topic = _single_line(item.get("reusable_topic"), 80)
+            parts = [summary]
+            if mood:
+                parts.append(f"余味：{mood}")
+            if topic:
+                parts.append(f"可续：{topic}")
+            lines.append("- " + "｜".join(parts))
+        return "\n".join(lines)
+
+    def _format_open_loops_for_prompt(self, user: dict[str, Any]) -> str:
+        loops = user.get("open_loops")
+        if not isinstance(loops, list):
+            return ""
+        lines: list[str] = []
+        now = _now_ts()
+        kept = []
+        for item in loops:
+            if not isinstance(item, dict):
+                continue
+            if now - _safe_float(item.get("created_ts"), now) > 14 * 86400:
+                continue
+            kept.append(item)
+        if len(kept) != len(loops):
+            user["open_loops"] = kept[-12:]
+        for item in kept[-6:]:
+            text = _single_line(item.get("text"), 100)
+            if not text:
+                continue
+            status = _single_line(item.get("status"), 30) or "待自然延续"
+            lines.append(f"- {status}：{text}")
+        return "\n".join(lines)
+
+    def _update_open_loops_from_message(self, user: dict[str, Any], text: str) -> None:
+        if not self.enable_open_loop_tracking:
+            return
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return
+        loops = user.setdefault("open_loops", [])
+        if not isinstance(loops, list):
+            loops = []
+            user["open_loops"] = loops
+
+        completion_markers = ("好了", "搞定", "解决了", "完成了", "不用了", "取消", "算了", "没事了", "不用提醒")
+        if loops and any(marker in cleaned for marker in completion_markers):
+            for item in reversed(loops):
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("status") or "") in {"已完成", "已取消"}:
+                    continue
+                item["status"] = "已取消" if any(marker in cleaned for marker in ("不用了", "取消", "算了", "不用提醒")) else "已完成"
+                item["resolved_ts"] = _now_ts()
+                break
+
+        add_patterns = (
+            r"(?:记得|帮我|提醒我|到时候|以后|明天|今晚|等会儿|一会儿)([^。！？\n]{2,80})",
+            r"([^。！？\n]{2,80})(?:你记一下|你记住|别忘了)",
+        )
+        for pattern in add_patterns:
+            match = re.search(pattern, cleaned)
+            if not match:
+                continue
+            loop_text = _single_line(match.group(0), 110)
+            if not loop_text:
+                continue
+            existing = {_single_line(item.get("text"), 120) for item in loops if isinstance(item, dict)}
+            if loop_text not in existing:
+                loops.append(
+                    {
+                        "text": loop_text,
+                        "status": "待自然延续",
+                        "created_ts": _now_ts(),
+                        "source": "user_message",
+                    }
+                )
+            break
+        del loops[:-12]
+
+    def _update_action_preferences_from_message(self, user: dict[str, Any], text: str) -> None:
+        cleaned = _single_line(text, 240)
+        if not cleaned:
+            return
+        prefs = user.setdefault("action_preferences", {})
+        if not isinstance(prefs, dict):
+            prefs = {}
+            user["action_preferences"] = prefs
+        mapping = {
+            "poke": ("戳", "戳一戳"),
+            "voice": ("语音", "发语音", "声音"),
+            "photo_text": ("图片", "照片", "图"),
+            "screen_peek": ("看屏幕", "窥屏", "看我屏幕", "屏幕"),
+        }
+        negative = ("别", "不要", "不许", "讨厌", "少", "别再", "不喜欢")
+        positive = ("喜欢", "可以", "多", "想要", "爱看", "爱听")
+        for action, keywords in mapping.items():
+            if not any(keyword in cleaned for keyword in keywords):
+                continue
+            item = prefs.setdefault(action, {"like": 0, "dislike": 0, "note": ""})
+            if not isinstance(item, dict):
+                item = {"like": 0, "dislike": 0, "note": ""}
+                prefs[action] = item
+            if any(token in cleaned for token in negative):
+                item["dislike"] = min(20, _safe_int(item.get("dislike"), 0, 0) + 2)
+                item["note"] = _single_line(cleaned, 90)
+            elif any(token in cleaned for token in positive):
+                item["like"] = min(20, _safe_int(item.get("like"), 0, 0) + 1)
+                item["note"] = _single_line(cleaned, 90)
+            item["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def _action_preference_hint(self, user: dict[str, Any] | None = None) -> str:
+        if not isinstance(user, dict):
+            return ""
+        prefs = user.get("action_preferences")
+        if not isinstance(prefs, dict) or not prefs:
+            return ""
+        labels = {
+            "poke": "戳一戳",
+            "voice": "语音",
+            "photo_text": "图片",
+            "screen_peek": "看屏幕",
+        }
+        lines = []
+        for action, item in prefs.items():
+            if not isinstance(item, dict):
+                continue
+            like = _safe_int(item.get("like"), 0, 0)
+            dislike = _safe_int(item.get("dislike"), 0, 0)
+            note = _single_line(item.get("note"), 60)
+            if dislike > like:
+                lines.append(f"- {labels.get(action, action)}：用户可能不喜欢或希望少用。{note}")
+            elif like > dislike:
+                lines.append(f"- {labels.get(action, action)}：用户接受度较高。{note}")
+        return "\n".join(lines)
+
+    def _update_group_observation(
+        self,
+        group: dict[str, Any],
+        *,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+    ) -> None:
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return
+        now = _now_ts()
+        group["last_seen"] = now
+        group["message_count"] = _safe_int(group.get("message_count"), 0, 0) + 1
+
+        recent = group.setdefault("recent_messages", [])
+        if not isinstance(recent, list):
+            recent = []
+            group["recent_messages"] = recent
+        recent.append(
+            {
+                "ts": now,
+                "sender_id": sender_id,
+                "name": _single_line(sender_name, 30) or sender_id,
+                "text": cleaned,
+            }
+        )
+        del recent[:-self.max_group_recent_messages]
+
+        if self.enable_group_member_profiles:
+            members = group.setdefault("members", {})
+            if not isinstance(members, dict):
+                members = {}
+                group["members"] = members
+            member = members.setdefault(sender_id, {"name": sender_name, "count": 0, "recent_phrases": []})
+            if not isinstance(member, dict):
+                member = {"name": sender_name, "count": 0, "recent_phrases": []}
+                members[sender_id] = member
+            member["name"] = _single_line(sender_name, 30) or member.get("name") or sender_id
+            member["count"] = _safe_int(member.get("count"), 0, 0) + 1
+            member["last_seen"] = now
+            phrases = member.setdefault("recent_phrases", [])
+            if not isinstance(phrases, list):
+                phrases = []
+                member["recent_phrases"] = phrases
+            if 2 <= len(cleaned) <= 50:
+                phrases.insert(0, cleaned)
+                member["recent_phrases"] = list(dict.fromkeys(phrases))[:8]
+
+        if self.enable_group_slang_learning:
+            self._learn_group_slang(group, cleaned)
+        if self.enable_group_topic_threads:
+            self._update_group_topic_threads(group, sender_id=sender_id, sender_name=sender_name, text=cleaned)
+        if self.enable_group_relationship_graph:
+            self._update_group_relationship_graph(group, sender_id=sender_id, sender_name=sender_name, text=cleaned)
+        if self.enable_group_interjection_feedback:
+            self._update_group_interjection_feedback(group, sender_id=sender_id, text=cleaned)
+        self._update_group_atmosphere(group)
+
+    def _learn_group_slang(self, group: dict[str, Any], text: str) -> None:
+        terms = group.setdefault("slang_terms", [])
+        if not isinstance(terms, list):
+            terms = []
+            group["slang_terms"] = terms
+        candidates: list[str] = []
+        for token in re.findall(r"[A-Za-z0-9_]{2,16}|[\u4e00-\u9fff]{2,8}", text):
+            token = _single_line(token, 16)
+            if not token:
+                continue
+            if token in {"哈哈", "什么", "这个", "那个", "就是", "感觉", "可以", "不是", "没有", "真的", "一下"}:
+                continue
+            if re.fullmatch(r"\d+", token):
+                continue
+            if len(token) <= 2 and token not in {"草", "绷", "典", "急", "乐"}:
+                continue
+            candidates.append(token)
+        if any(marker in text for marker in ("草", "绷", "典", "急了", "笑死", "蚌埠住", "乐")):
+            for marker in ("草", "绷", "典", "急了", "笑死", "蚌埠住", "乐"):
+                if marker in text:
+                    candidates.append(marker)
+        if not candidates:
+            return
+        indexed = {}
+        for item in terms:
+            if isinstance(item, dict) and item.get("term"):
+                indexed[str(item.get("term"))] = item
+        for token in candidates[:8]:
+            item = indexed.get(token)
+            if not item:
+                item = {"term": token, "count": 0, "last_seen": 0}
+                terms.append(item)
+                indexed[token] = item
+            item["count"] = min(999, _safe_int(item.get("count"), 0, 0) + 1)
+            item["last_seen"] = _now_ts()
+        terms.sort(key=lambda item: (_safe_int(item.get("count"), 0, 0), _safe_float(item.get("last_seen"), 0)), reverse=True)
+        del terms[self.max_group_slang_terms:]
+
+    def _update_group_atmosphere(self, group: dict[str, Any]) -> None:
+        recent = group.get("recent_messages")
+        if not isinstance(recent, list):
+            recent = []
+        now = _now_ts()
+        window = [item for item in recent if isinstance(item, dict) and now - _safe_float(item.get("ts"), 0) <= 12 * 60]
+        texts = [str(item.get("text") or "") for item in window]
+        joined = "\n".join(texts)
+        active_speakers = len({str(item.get("sender_id") or "") for item in window if isinstance(item, dict)})
+        pace = "安静"
+        if len(window) >= 18 or active_speakers >= 6:
+            pace = "热闹"
+        elif len(window) >= 6:
+            pace = "有来有回"
+        mood = "平稳"
+        if re.search(r"(哈哈|笑死|草|乐|绷|hhh)", joined, re.IGNORECASE):
+            mood = "玩笑"
+        if re.search(r"(烦|累|难受|吵|别吵|急|骂|生气)", joined):
+            mood = "紧绷"
+        if re.search(r"(求助|怎么|为什么|报错|帮|救命)", joined):
+            mood = "求助"
+        group["atmosphere"] = {
+            "pace": pace,
+            "mood": mood,
+            "active_speakers": active_speakers,
+            "recent_count": len(window),
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+
+    def _group_topic_signature(self, text: str) -> str:
+        return self._proactive_topic_signature(text)
+
+    def _update_group_topic_threads(
+        self,
+        group: dict[str, Any],
+        *,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+    ) -> None:
+        signature = self._group_topic_signature(text)
+        if not signature:
+            return
+        threads = group.setdefault("topic_threads", [])
+        if not isinstance(threads, list):
+            threads = []
+            group["topic_threads"] = threads
+        now = _now_ts()
+        active_threads = [
+            item for item in threads
+            if isinstance(item, dict) and now - _safe_float(item.get("last_ts"), 0) <= 90 * 60
+        ]
+        matched = None
+        for item in active_threads:
+            if self._topic_signature_similar(signature, str(item.get("signature") or "")):
+                matched = item
+                break
+        if not matched:
+            matched = {
+                "signature": signature,
+                "title": _single_line(text, 40),
+                "started_ts": now,
+                "last_ts": now,
+                "participants": [],
+                "message_count": 0,
+                "bot_joined": False,
+                "recent_examples": [],
+            }
+            active_threads.append(matched)
+        matched["last_ts"] = now
+        matched["message_count"] = _safe_int(matched.get("message_count"), 0, 0) + 1
+        participants = matched.setdefault("participants", [])
+        if not isinstance(participants, list):
+            participants = []
+            matched["participants"] = participants
+        if sender_id and sender_id not in participants:
+            participants.append(sender_id)
+        examples = matched.setdefault("recent_examples", [])
+        if not isinstance(examples, list):
+            examples = []
+            matched["recent_examples"] = examples
+        examples.append({"name": _single_line(sender_name, 20) or sender_id, "text": _single_line(text, 80), "ts": now})
+        del examples[:-6]
+        active_threads.sort(key=lambda item: _safe_float(item.get("last_ts"), 0), reverse=True)
+        group["topic_threads"] = active_threads[: self.max_group_topic_threads]
+
+    def _update_group_interjection_feedback(self, group: dict[str, Any], *, sender_id: str, text: str) -> None:
+        last = group.get("last_bot_interjection")
+        if not isinstance(last, dict) or not last:
+            return
+        sent_ts = _safe_float(last.get("ts"), 0)
+        if sent_ts <= 0 or _now_ts() - sent_ts > 10 * 60:
+            return
+        if sender_id == str(last.get("bot_sender_id") or ""):
+            return
+        feedback = group.setdefault("interjection_feedback", {})
+        if not isinstance(feedback, dict):
+            feedback = {}
+            group["interjection_feedback"] = feedback
+        feedback["replies_after"] = _safe_int(feedback.get("replies_after"), 0, 0) + 1
+        if re.search(r"(哈哈|笑死|草|绷|乐|hhh|可以|确实|对啊)", text, re.IGNORECASE):
+            feedback["positive"] = _safe_int(feedback.get("positive"), 0, 0) + 1
+        if re.search(r"(别吵|闭嘴|吵死|机器人|别发|烦)", text):
+            feedback["negative"] = _safe_int(feedback.get("negative"), 0, 0) + 1
+        last["last_feedback_at"] = _now_ts()
+
+    def _update_group_relationship_graph(
+        self,
+        group: dict[str, Any],
+        *,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+    ) -> None:
+        last = group.get("last_speaker")
+        now = _now_ts()
+        if isinstance(last, dict):
+            prev_id = str(last.get("sender_id") or "")
+            prev_name = _single_line(last.get("name"), 30)
+            prev_ts = _safe_float(last.get("ts"), 0)
+            if prev_id and prev_id != sender_id and now - prev_ts <= 180:
+                left, right = sorted([prev_id, sender_id])
+                key = f"{left}|{right}"
+                edges = group.setdefault("relationship_edges", {})
+                if not isinstance(edges, dict):
+                    edges = {}
+                    group["relationship_edges"] = edges
+                edge = edges.setdefault(
+                    key,
+                    {
+                        "a": left,
+                        "b": right,
+                        "a_name": prev_name if left == prev_id else _single_line(sender_name, 30),
+                        "b_name": _single_line(sender_name, 30) if right == sender_id else prev_name,
+                        "count": 0,
+                        "tone": {},
+                        "last_ts": 0,
+                    },
+                )
+                if isinstance(edge, dict):
+                    edge["count"] = _safe_int(edge.get("count"), 0, 0) + 1
+                    edge["last_ts"] = now
+                    tone = edge.setdefault("tone", {})
+                    if not isinstance(tone, dict):
+                        tone = {}
+                        edge["tone"] = tone
+                    tone_key = "玩笑" if re.search(r"(哈哈|笑死|草|绷|乐|hhh)", text, re.IGNORECASE) else "普通"
+                    if re.search(r"(吵|骂|别|烦|急)", text):
+                        tone_key = "紧绷"
+                    tone[tone_key] = _safe_int(tone.get(tone_key), 0, 0) + 1
+                if len(edges) > self.max_group_relationship_edges:
+                    ranked = sorted(
+                        edges.items(),
+                        key=lambda item: (_safe_int((item[1] or {}).get("count"), 0, 0), _safe_float((item[1] or {}).get("last_ts"), 0)),
+                        reverse=True,
+                    )
+                    group["relationship_edges"] = dict(ranked[: self.max_group_relationship_edges])
+        group["last_speaker"] = {
+            "sender_id": sender_id,
+            "name": _single_line(sender_name, 30) or sender_id,
+            "ts": now,
+            "text": _single_line(text, 80),
+        }
+
+    def _format_group_relationship_graph_for_prompt(self, group: dict[str, Any]) -> str:
+        edges = group.get("relationship_edges")
+        if not isinstance(edges, dict):
+            return ""
+        ranked = sorted(
+            [item for item in edges.values() if isinstance(item, dict)],
+            key=lambda item: (_safe_int(item.get("count"), 0, 0), _safe_float(item.get("last_ts"), 0)),
+            reverse=True,
+        )[:6]
+        lines = []
+        for item in ranked:
+            a_name = _single_line(item.get("a_name"), 16) or "群友A"
+            b_name = _single_line(item.get("b_name"), 16) or "群友B"
+            tone = item.get("tone") if isinstance(item.get("tone"), dict) else {}
+            main_tone = "普通"
+            if tone:
+                main_tone = max(tone.items(), key=lambda pair: _safe_int(pair[1], 0, 0))[0]
+            lines.append(f"- {a_name} ↔ {b_name}：互动 {item.get('count', 0)} 次｜常见氛围 {main_tone}")
+        return "\n".join(lines)
+
+    def _format_group_slang_meanings_for_prompt(self, group: dict[str, Any]) -> str:
+        meanings = group.get("slang_meanings")
+        if not isinstance(meanings, dict) or not meanings:
+            return ""
+        lines = []
+        for term, item in list(meanings.items())[:10]:
+            if not isinstance(item, dict):
+                continue
+            meaning = _single_line(item.get("meaning"), 80)
+            usage = _single_line(item.get("usage"), 80)
+            if meaning:
+                lines.append(f"- {term}：{meaning}" + (f"｜用法：{usage}" if usage else ""))
+        return "\n".join(lines)
+
+    def _format_group_topic_threads_for_prompt(self, group: dict[str, Any]) -> str:
+        threads = group.get("topic_threads")
+        if not isinstance(threads, list):
+            return ""
+        lines = []
+        for item in threads[:5]:
+            if not isinstance(item, dict):
+                continue
+            title = _single_line(item.get("title"), 42)
+            if not title:
+                continue
+            lines.append(
+                f"- {title}｜参与 {len(item.get('participants') if isinstance(item.get('participants'), list) else [])} 人｜"
+                f"{item.get('message_count', 0)} 条｜{'bot已接过' if item.get('bot_joined') else 'bot未接'}"
+            )
+        return "\n".join(lines)
+
+    def _format_group_episodes_for_prompt(self, group: dict[str, Any]) -> str:
+        episodes = group.get("group_episodes")
+        if not isinstance(episodes, list):
+            return ""
+        lines = []
+        for item in episodes[-4:]:
+            if not isinstance(item, dict):
+                continue
+            summary = _single_line(item.get("summary"), 100)
+            if not summary:
+                continue
+            meme = _single_line(item.get("new_meme"), 60)
+            lines.append("- " + summary + (f"｜新梗：{meme}" if meme else ""))
+        return "\n".join(lines)
+
+    def _format_group_context_for_prompt(self, group: dict[str, Any], sender_id: str = "") -> str:
+        atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
+        lines = [
+            "【群聊观察层】",
+            "这些是群聊上下文,只用于判断气氛、称呼、梗和是否该少说。不要暴露观察、画像、黑话学习或内部记录。",
+            f"群气氛：{atmosphere.get('pace', '未知')}｜{atmosphere.get('mood', '平稳')}｜近段发言 {atmosphere.get('recent_count', 0)} 条｜活跃群友 {atmosphere.get('active_speakers', 0)} 人",
+        ]
+        recent = group.get("recent_messages")
+        if isinstance(recent, list) and recent:
+            msg_lines = []
+            for item in recent[-8:]:
+                if not isinstance(item, dict):
+                    continue
+                name = _single_line(item.get("name"), 20) or "群友"
+                text = _single_line(item.get("text"), 80)
+                if text:
+                    msg_lines.append(f"- {name}: {text}")
+            if msg_lines:
+                lines.append("最近群聊：\n" + "\n".join(msg_lines))
+        threads_text = self._format_group_topic_threads_for_prompt(group)
+        if threads_text:
+            lines.append("当前话题线程：\n" + threads_text)
+        episodes_text = self._format_group_episodes_for_prompt(group)
+        if episodes_text:
+            lines.append("近期群聊片段记忆：\n" + episodes_text)
+        relationship_text = self._format_group_relationship_graph_for_prompt(group)
+        if relationship_text:
+            lines.append("群友互动关系：\n" + relationship_text)
+        slang = group.get("slang_terms")
+        if isinstance(slang, list) and slang:
+            terms = []
+            for item in slang[:12]:
+                if isinstance(item, dict):
+                    term = _single_line(item.get("term"), 16)
+                    if term:
+                        terms.append(term)
+            if terms:
+                lines.append("群内常见词/梗：" + "、".join(terms))
+        meaning_text = self._format_group_slang_meanings_for_prompt(group)
+        if meaning_text:
+            lines.append("群内词义参考：\n" + meaning_text)
+        members = group.get("members")
+        if sender_id and isinstance(members, dict):
+            member = members.get(sender_id)
+            if isinstance(member, dict):
+                phrases = member.get("recent_phrases") if isinstance(member.get("recent_phrases"), list) else []
+                phrase_text = " / ".join(_single_line(item, 24) for item in phrases[:4] if _single_line(item, 24))
+                lines.append(
+                    f"当前发言者：{_single_line(member.get('name'), 24) or sender_id}｜发言样本 {member.get('count', 0)} 条"
+                    + (f"｜近期短句：{phrase_text}" if phrase_text else "")
+                )
+        lines.append(
+            "群聊回复原则：被叫到或确实需要回应时再说；短一点,像群友接话；不要逐条总结群聊,不要当主持人,不要把每个话题都认真升格。"
+        )
+        if self.enable_group_privacy_guard:
+            lines.append(
+                "隐私边界：绝不能把私聊记忆、用户私聊偏好、内部画像或观察记录说到群里；"
+                "不要说“我记得你私聊说过”；不要公开评价群友关系。只把这些当作少说错话的背景。"
+            )
+        livingmemory_guidance = self._format_livingmemory_guidance(scope="group")
+        if livingmemory_guidance:
+            lines.append(livingmemory_guidance)
+        return "\n".join(lines)
+
+    def _format_group_status(self, group: dict[str, Any]) -> str:
+        atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
+        slang = group.get("slang_terms") if isinstance(group.get("slang_terms"), list) else []
+        members = group.get("members") if isinstance(group.get("members"), dict) else {}
+        top_terms = []
+        for item in slang[:12]:
+            if isinstance(item, dict) and item.get("term"):
+                top_terms.append(f"{item.get('term')}({item.get('count', 0)})")
+        active_members = sorted(
+            [item for item in members.values() if isinstance(item, dict)],
+            key=lambda item: _safe_int(item.get("count"), 0, 0),
+            reverse=True,
+        )[:8]
+        member_text = "、".join(
+            f"{_single_line(item.get('name'), 16) or '群友'}({item.get('count', 0)})"
+            for item in active_members
+        )
+        return (
+            f"群聊陪伴状态：{'开启' if group.get('enabled', True) else '关闭'}\n"
+            f"访问模式：{'黑名单' if self.group_access_mode == 'blacklist' else '白名单'}\n"
+            f"群号：{group.get('group_id', '')}\n"
+            f"累计观察：{group.get('message_count', 0)} 条\n"
+            f"气氛：{atmosphere.get('pace', '未知')}｜{atmosphere.get('mood', '平稳')}\n"
+            f"常见词/梗：{'、'.join(top_terms) if top_terms else '暂无'}\n"
+            f"活跃群友：{member_text or '暂无'}\n"
+            f"当前话题：{_single_line(self._format_group_topic_threads_for_prompt(group), 180) or '暂无'}\n"
+            f"关系网络：{_single_line(self._format_group_relationship_graph_for_prompt(group), 180) or '暂无'}\n"
+            f"插话反馈：{self._format_group_interjection_feedback(group)}"
+        )
+
+    def _format_group_interjection_feedback(self, group: dict[str, Any]) -> str:
+        feedback = group.get("interjection_feedback")
+        if not isinstance(feedback, dict) or not feedback:
+            return "暂无"
+        return (
+            f"后续回复 {feedback.get('replies_after', 0)}｜"
+            f"正向 {feedback.get('positive', 0)}｜负向 {feedback.get('negative', 0)}"
+        )
+
+    def _group_interjection_allowed(self, group: dict[str, Any], text: str) -> tuple[bool, str]:
+        if not self.enable_group_interjection:
+            return False, "群聊主动插话未开启"
+        if self.group_interject_max_daily <= 0:
+            return False, "群聊主动插话上限为 0"
+        today = _today_key()
+        if group.get("interject_day") != today:
+            group["interject_day"] = today
+            group["interject_today"] = 0
+        if _safe_int(group.get("interject_today"), 0, 0) >= self.group_interject_max_daily:
+            return False, "今日群聊插话已达上限"
+        if _now_ts() - _safe_float(group.get("last_interject_at"), 0) < self.group_interject_min_interval_minutes * 60:
+            return False, "群聊插话间隔太近"
+        atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
+        mood = str(atmosphere.get("mood") or "")
+        pace = str(atmosphere.get("pace") or "")
+        if pace == "热闹" and mood not in {"玩笑", "求助"}:
+            return False, "群聊太热闹,不抢话"
+        if re.search(r"(有没有人|谁懂|救命|怎么回事|咋办|笑死|绷不住|太离谱)", text):
+            return random.random() < 0.08, "有自然接话口"
+        if mood == "玩笑":
+            return random.random() < 0.025, "玩笑气氛"
+        if mood == "求助":
+            return random.random() < 0.045, "求助气氛"
+        return False, "没有自然插话口"
+
+    async def _maybe_group_interject(self, event: AstrMessageEvent, group: dict[str, Any], text: str) -> None:
+        allowed, reason = self._group_interjection_allowed(group, text)
+        if not allowed:
+            return
+        prompt = f"""
+你在一个群聊里,现在可以非常轻地接一句。
+只输出要发到群里的正文,不要解释。
+
+【群聊上下文】
+{self._format_group_context_for_prompt(group)}
+
+【刚刚触发的消息】
+{_single_line(text, 180)}
+
+要求：
+- 1 句,最多 35 个中文字符
+- 像群友自然接话,不要像助手
+- 不要主持群聊,不要总结,不要 @ 人
+- 不要提系统、观察、黑话学习、插件
+- 如果不适合说话,输出空字符串
+""".strip()
+        generated = await self._llm_call(
+            prompt,
+            max_tokens=80,
+            provider_id=self._task_provider(self.group_interject_provider_id, self.mai_style_provider_id),
+        )
+        reply = _single_line(generated, 80)
+        if not reply or reply in {"空字符串", "不适合说话"}:
+            return
+        if self._response_review_flags(reply, {}):
+            return
+        await event.send(event.plain_result(reply))
+        group["last_interject_at"] = _now_ts()
+        group["interject_today"] = _safe_int(group.get("interject_today"), 0, 0) + 1
+        group["last_bot_interjection"] = {
+            "ts": group["last_interject_at"],
+            "text": reply,
+            "reason": reason,
+            "topic_signature": self._group_topic_signature(text),
+        }
+        threads = group.get("topic_threads")
+        if isinstance(threads, list):
+            signature = self._group_topic_signature(text)
+            for item in threads:
+                if isinstance(item, dict) and self._topic_signature_similar(signature, str(item.get("signature") or "")):
+                    item["bot_joined"] = True
+                    item["bot_joined_ts"] = group["last_interject_at"]
+                    break
+
+    async def _maybe_refresh_group_episode(self, group_id: str, group: dict[str, Any]) -> None:
+        if not self.enable_group_episode_memory:
+            return
+        now = _now_ts()
+        if now - _safe_float(group.get("last_episode_refresh_at"), 0) < self.group_episode_refresh_minutes * 60:
+            return
+        recent = group.get("recent_messages")
+        if not isinstance(recent, list) or len(recent) < 12:
+            return
+        lines = []
+        for item in recent[-80:]:
+            if not isinstance(item, dict):
+                continue
+            name = _single_line(item.get("name"), 20) or "群友"
+            text = _single_line(item.get("text"), 100)
+            if text:
+                lines.append(f"{name}: {text}")
+        if len(lines) < 8:
+            return
+        prompt = f"""
+请把下面这段群聊整理成群聊片段记忆。
+目标是让角色以后知道群里发生过什么、哪个梗出现过、哪些话题已经结束。
+不要编造,不要输出解释。
+
+【群聊记录】
+{chr(10).join(lines[-80:])}
+
+只输出 JSON：
+{{
+  "summary": "这段群聊发生了什么",
+  "main_topics": ["主要话题"],
+  "new_meme": "新出现或变热的梗/黑话,没有就空字符串",
+  "active_people": ["活跃群友昵称"],
+  "avoid_repeat": ["短期内不要重复接的话题"]
+}}
+""".strip()
+        raw = await self._llm_call(
+            prompt,
+            max_tokens=420,
+            provider_id=self._task_provider(self.group_episode_provider_id, self.mai_style_provider_id),
+        )
+        payload = self._extract_json_payload(raw or "")
+        if not isinstance(payload, dict):
+            return
+        episode = {
+            "date": _today_key(),
+            "created_ts": now,
+            "summary": _single_line(payload.get("summary"), 140),
+            "main_topics": self._normalize_string_list(payload.get("main_topics"), limit=6, item_limit=50),
+            "new_meme": _single_line(payload.get("new_meme"), 60),
+            "active_people": self._normalize_string_list(payload.get("active_people"), limit=8, item_limit=30),
+            "avoid_repeat": self._normalize_string_list(payload.get("avoid_repeat"), limit=6, item_limit=60),
+        }
+        if not episode["summary"]:
+            return
+        async with self._data_lock:
+            current = self._get_group(group_id)
+            episodes = current.setdefault("group_episodes", [])
+            if not isinstance(episodes, list):
+                episodes = []
+                current["group_episodes"] = episodes
+            if not episodes or _single_line(episodes[-1].get("summary") if isinstance(episodes[-1], dict) else "", 140) != episode["summary"]:
+                episodes.append(episode)
+            del episodes[:-self.max_group_episodes]
+            current["last_episode_refresh_at"] = now
+            self._save_data_sync()
+
+    async def _maybe_refresh_group_slang_meanings(self, group_id: str, group: dict[str, Any]) -> None:
+        if not self.enable_group_slang_meanings:
+            return
+        now = _now_ts()
+        if now - _safe_float(group.get("last_slang_summary_at"), 0) < self.group_slang_summary_minutes * 60:
+            return
+        slang = group.get("slang_terms")
+        if not isinstance(slang, list) or len(slang) < 5:
+            return
+        recent = group.get("recent_messages")
+        if not isinstance(recent, list):
+            recent = []
+        terms = [
+            _single_line(item.get("term"), 20)
+            for item in slang[:20]
+            if isinstance(item, dict) and _single_line(item.get("term"), 20)
+        ]
+        examples = []
+        for item in recent[-80:]:
+            if not isinstance(item, dict):
+                continue
+            text = _single_line(item.get("text"), 100)
+            if any(term and term in text for term in terms[:12]):
+                examples.append(f"{_single_line(item.get('name'), 18) or '群友'}: {text}")
+        if not examples:
+            return
+        prompt = f"""
+请根据群聊样例,给这些群内常见词/梗做很短的语义解释。
+只解释能从样例看出来的含义；不确定就写“语境不明”。
+不要输出解释过程。
+
+【候选词】
+{", ".join(terms)}
+
+【群聊样例】
+{chr(10).join(examples[-60:])}
+
+只输出 JSON,键为词,值为对象：
+{{
+  "某词": {{"meaning": "一句话含义", "usage": "什么时候用"}}
+}}
+""".strip()
+        raw = await self._llm_call(
+            prompt,
+            max_tokens=560,
+            provider_id=self._task_provider(self.group_slang_provider_id, self.mai_style_provider_id),
+        )
+        payload = self._extract_json_payload(raw or "")
+        if not isinstance(payload, dict):
+            return
+        normalized: dict[str, dict[str, str]] = {}
+        for term, value in payload.items():
+            key = _single_line(term, 20)
+            if not key:
+                continue
+            if isinstance(value, dict):
+                meaning = _single_line(value.get("meaning"), 90)
+                usage = _single_line(value.get("usage"), 90)
+            else:
+                meaning = _single_line(value, 90)
+                usage = ""
+            if meaning:
+                normalized[key] = {
+                    "meaning": meaning,
+                    "usage": usage,
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                }
+        if not normalized:
+            return
+        async with self._data_lock:
+            current = self._get_group(group_id)
+            meanings = current.setdefault("slang_meanings", {})
+            if not isinstance(meanings, dict):
+                meanings = {}
+                current["slang_meanings"] = meanings
+            meanings.update(normalized)
+            current["last_slang_summary_at"] = now
+            self._save_data_sync()
+
+    async def _collect_recent_private_conversation_text(
+        self,
+        user: dict[str, Any],
+        *,
+        hours: int = 24,
+        max_lines: int = 80,
+    ) -> str:
+        umo = str(user.get("umo") or "").strip()
+        if not umo:
+            return ""
+        try:
+            conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
+            if not conv_id:
+                return ""
+            conv = await self.context.conversation_manager.get_conversation(umo, conv_id)
+        except Exception:
+            return ""
+        history = self._load_conversation_history_items(conv)
+        if not history:
+            return ""
+        now = _now_ts()
+        cutoff = now - max(1, hours) * 3600
+        lines: list[str] = []
+        for item in history:
+            line = self._format_history_item_for_summary(item)
+            if not line:
+                continue
+            ts = self._history_item_timestamp(item)
+            if ts is not None and ts < cutoff:
+                continue
+            lines.append(line)
+        if not lines:
+            lines = [self._format_history_item_for_summary(item) for item in history[-max_lines:]]
+            lines = [line for line in lines if line]
+        return "\n".join(lines[-max_lines:]).strip()
+
+    def _normalize_string_list(self, raw: Any, *, limit: int = 6, item_limit: int = 90) -> list[str]:
+        if isinstance(raw, list):
+            values = raw
+        elif raw:
+            values = [raw]
+        else:
+            values = []
+        result = []
+        for value in values:
+            text = _single_line(value, item_limit)
+            if text and text not in result:
+                result.append(text)
+            if len(result) >= limit:
+                break
+        return result
+
+    async def _maybe_refresh_dialogue_episode(self, user_id: str, user: dict[str, Any]) -> None:
+        if not self.enable_dialogue_episode_memory:
+            return
+        count = _safe_int(user.get("episode_message_count"), 0, 0)
+        last_at = _safe_float(user.get("last_episode_refresh_at"), 0)
+        if count < self.episode_memory_refresh_messages and _now_ts() - last_at < self.episode_memory_refresh_minutes * 60:
+            return
+        raw_text = await self._collect_recent_private_conversation_text(user, hours=24, max_lines=70)
+        if not raw_text or len(raw_text) < 80:
+            return
+        prompt = f"""
+请把最近一段私聊整理成“陪伴型对话片段记忆”。
+目标是让角色以后能自然延续共同经历,而不是复述聊天记录。
+不要编造,不要写隐私外推,不要输出解释。
+
+【AstrBot 默认人格】
+{self._get_default_persona_prompt()}
+
+【最近对话】
+{raw_text}
+
+只输出 JSON：
+{{
+  "summary": "这段对话作为共同经历的一句话摘要",
+  "emotional_residue": "留下的情绪余味,没有就写空字符串",
+  "reusable_topic": "以后可自然接起的小话头,没有就写空字符串",
+  "user_events": ["用户最近发生/在意的事"],
+  "bot_promises": ["Bot 说过要做、要记得、要提醒或要延续的事"],
+  "open_loops": ["尚未完成、之后可自然问起或兑现的约定/话题"],
+  "avoid_next": ["短期内不该反复提的内容"]
+}}
+""".strip()
+        raw = await self._llm_call(
+            prompt,
+            max_tokens=520,
+            provider_id=self._task_provider(self.dialogue_episode_provider_id, self.mai_style_provider_id),
+        )
+        payload = self._extract_json_payload(raw or "")
+        if not isinstance(payload, dict):
+            return
+        episode = {
+            "date": _today_key(),
+            "created_ts": _now_ts(),
+            "summary": _single_line(payload.get("summary"), 140),
+            "emotional_residue": _single_line(payload.get("emotional_residue"), 100),
+            "reusable_topic": _single_line(payload.get("reusable_topic"), 100),
+            "user_events": self._normalize_string_list(payload.get("user_events"), limit=6),
+            "bot_promises": self._normalize_string_list(payload.get("bot_promises"), limit=6),
+            "avoid_next": self._normalize_string_list(payload.get("avoid_next"), limit=6),
+        }
+        if not episode["summary"]:
+            return
+        open_loops = self._normalize_string_list(payload.get("open_loops"), limit=8, item_limit=110)
+        async with self._data_lock:
+            current = self._get_user(user_id)
+            episodes = current.setdefault("dialogue_episodes", [])
+            if not isinstance(episodes, list):
+                episodes = []
+                current["dialogue_episodes"] = episodes
+            if not episodes or _single_line(episodes[-1].get("summary") if isinstance(episodes[-1], dict) else "", 140) != episode["summary"]:
+                episodes.append(episode)
+            del episodes[:-self.max_dialogue_episodes]
+            if self.enable_open_loop_tracking:
+                current_loops = current.setdefault("open_loops", [])
+                if not isinstance(current_loops, list):
+                    current_loops = []
+                    current["open_loops"] = current_loops
+                existing = {_single_line(item.get("text"), 120) for item in current_loops if isinstance(item, dict)}
+                for loop in open_loops:
+                    if loop in existing:
+                        continue
+                    current_loops.append(
+                        {
+                            "text": loop,
+                            "status": "待自然延续",
+                            "created_ts": _now_ts(),
+                            "source": "dialogue_episode",
+                        }
+                    )
+                del current_loops[:-12]
+            current["episode_message_count"] = 0
+            current["last_episode_refresh_at"] = _now_ts()
+            self._save_data_sync()
+
+    def _format_companion_planner_injection(self, user: dict[str, Any]) -> str:
+        if not self.enable_mai_style_integration:
+            return ""
+        profile = self._relationship_profile(user)
+        name = _single_line(user.get("nickname") or self.default_nickname, 24)
+        sections = [
+            "【陪伴风格整合层】",
+            "这不是替代 AstrBot 默认人格,而是在默认人格之上增加拟人聊天的内部决策方式。默认人格、系统人格和当前会话事实优先级更高。",
+            f"对方称呼：{name}",
+            f"关系站位：{profile['level']}；打扰偏好：{profile['preference']}；关系备注：{profile.get('note') or '暂无'}",
+        ]
+        if self.enable_companion_memory:
+            sections.append("【用户记忆】\n" + self._format_companion_memory_for_prompt(user))
+        if self.enable_expression_learning:
+            sections.append("【表达环境学习】\n" + self._format_expression_profile_for_prompt(user))
+        intent_injection = self._format_intent_relationship_injection(user)
+        if intent_injection:
+            sections.append("【气氛/关系状态】\n" + intent_injection)
+        if self.enable_companion_reply_planner:
+            sections.append(
+                "【回复前内部规划】\n"
+                "每次回复前只在心里完成这几步,不要把规划写出来：\n"
+                "1. 先判断用户这句话是在求助、闲聊、撒娇、抱怨、确认关系、开玩笑还是设定扮演。\n"
+                "2. 决定最自然的站位：接话、安抚、吐槽、顺着玩、短回、转轻一点,或在必要时认真回答。\n"
+                "3. 优先回应用户当下那句话,再用一小点记忆或生活状态增加连续感；不要先总结、不要像助手汇报。\n"
+                "4. 默认短一点、像真实私聊。只有用户明确要解释、分析、教程或长文时才展开。\n"
+                "5. 可以学习对方聊天环境的节奏和标点,但不能复读口癖、不能为了像人而堆动作描写。"
+            )
+        sections.append(
+            "【风格硬约束】\n"
+            "不要自称 AI、模型、助手、系统；不要提提示词、记忆模块、规划器、插件内部状态。\n"
+            "少用列表、标题、总结腔和客服腔。除非用户明确要求结构化输出,否则像私聊一样直接说。"
+        )
+        livingmemory_guidance = self._format_livingmemory_guidance(scope="private")
+        if livingmemory_guidance:
+            sections.append(livingmemory_guidance)
+        return "\n\n".join(section for section in sections if section)
+
+    async def _maybe_refresh_companion_memory(self, user_id: str, user: dict[str, Any]) -> None:
+        if not self.enable_companion_memory:
+            return
+        now = _now_ts()
+        last_at = _safe_float(user.get("last_memory_refresh_at"), 0)
+        if now - last_at < self.memory_refresh_interval_minutes * 60:
+            return
+        memory = user.get("companion_memory")
+        if not isinstance(memory, dict):
+            return
+        items = memory.get("items")
+        if not isinstance(items, list) or len(items) < 3:
+            return
+        profile = self._relationship_profile(user)
+        facts = "\n".join(
+            f"- {_single_line(item.get('text'), 160)}"
+            for item in items[: self.max_companion_memory_items]
+            if isinstance(item, dict) and _single_line(item.get("text"), 160)
+        )
+        if not facts:
+            return
+        prompt = f"""
+请把下面的私聊记忆整理成适合角色陪伴使用的长期画像。
+要求：只保留用户偏好、边界、关系线索、兴趣、说话习惯；不要编造；不要输出解释。
+
+【AstrBot 默认人格】
+{self._get_default_persona_prompt()}
+
+【当前关系判断】
+{profile['level']}｜{profile['preference']}｜{profile.get('note') or '暂无'}
+
+【记忆原文】
+{facts}
+
+只输出 JSON：
+{{
+  "user_traits": ["..."],
+  "interests": ["..."],
+  "boundaries": ["..."],
+  "relationship_notes": ["..."],
+  "speaking_style": ["..."]
+}}
+""".strip()
+        raw = await self._llm_call(
+            prompt,
+            max_tokens=420,
+            provider_id=self._task_provider(self.companion_memory_provider_id, self.mai_style_provider_id),
+        )
+        payload = self._extract_json_payload(raw or "")
+        if not isinstance(payload, dict):
+            return
+        normalized: dict[str, list[str]] = {}
+        for key in ("user_traits", "interests", "boundaries", "relationship_notes", "speaking_style"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                normalized[key] = [_single_line(item, 80) for item in value[:8] if _single_line(item, 80)]
+            elif value:
+                normalized[key] = [_single_line(value, 80)]
+            else:
+                normalized[key] = []
+        async with self._data_lock:
+            current = self._get_user(user_id)
+            current_memory = current.setdefault("companion_memory", {})
+            if isinstance(current_memory, dict):
+                current_memory["profile"] = normalized
+                current_memory["profile_updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            current["last_memory_refresh_at"] = now
+            self._save_data_sync()
+
+    def _analyze_inbound_intent(self, text: str) -> dict[str, Any]:
+        cleaned = _single_line(text, 240)
+        if not cleaned:
+            return {"intent": "empty", "emotion": "neutral", "pressure": 0, "reply_style": "short"}
+        lower = cleaned.lower()
+        intent = "chat"
+        emotion = "neutral"
+        pressure = 0
+        reply_style = "natural"
+        if re.search(r"(怎么|如何|为什么|帮我|能不能|可以.*吗|教程|代码|报错|分析|解释)", cleaned):
+            intent = "help"
+            reply_style = "useful"
+            pressure += 1
+        if re.search(r"(烦|累|难受|崩溃|不想|想哭|emo|压力|焦虑|失眠|疼|委屈)", cleaned, re.IGNORECASE):
+            intent = "comfort"
+            emotion = "low"
+            pressure += 2
+            reply_style = "soft"
+        if re.search(r"(哈哈|笑死|草|绷|乐|hhh|233|好玩|乐了)", lower):
+            intent = "play"
+            emotion = "light"
+            reply_style = "playful"
+        if re.search(r"(抱抱|亲亲|摸摸|陪我|想你|喜欢你|爱你|贴贴)", cleaned):
+            intent = "intimacy"
+            emotion = "close"
+            reply_style = "warm_short"
+        if re.search(r"(别|不要|别再|不许|讨厌|烦你|闭嘴|太吵|打扰)", cleaned):
+            intent = "boundary"
+            emotion = "resistant"
+            pressure += 3
+            reply_style = "back_off"
+        if len(cleaned) <= 6 and intent == "chat":
+            reply_style = "very_short"
+        return {
+            "intent": intent,
+            "emotion": emotion,
+            "pressure": min(5, pressure),
+            "reply_style": reply_style,
+            "text": cleaned,
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+
+    def _update_relationship_state_from_intent(self, user: dict[str, Any], intent: dict[str, Any]) -> None:
+        if not self.enable_relationship_state_machine or not isinstance(intent, dict):
+            return
+        state = user.setdefault("relationship_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            user["relationship_state"] = state
+        current = str(state.get("mode") or "normal")
+        inbound_intent = str(intent.get("intent") or "chat")
+        pressure = _safe_int(intent.get("pressure"), 0, 0, 5)
+        if inbound_intent == "boundary":
+            current = "backoff"
+            state["backoff_until"] = _now_ts() + 6 * 3600
+        elif pressure >= 2:
+            current = "careful"
+        elif inbound_intent in {"intimacy", "play"}:
+            current = "warming"
+        elif _safe_float(state.get("backoff_until"), 0) > _now_ts():
+            current = "backoff"
+        else:
+            current = "normal"
+        state["mode"] = current
+        state["last_intent"] = inbound_intent
+        state["last_emotion"] = str(intent.get("emotion") or "neutral")
+        state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def _format_intent_relationship_injection(self, user: dict[str, Any]) -> str:
+        intent = user.get("intent_profile")
+        state = user.get("relationship_state")
+        lines: list[str] = []
+        if isinstance(intent, dict) and intent.get("intent"):
+            lines.append(
+                "最近用户意图："
+                f"{intent.get('intent')}｜情绪 {intent.get('emotion', 'neutral')}｜"
+                f"建议回复姿态 {intent.get('reply_style', 'natural')}"
+            )
+        if isinstance(state, dict) and state.get("mode"):
+            mode = str(state.get("mode") or "normal")
+            mode_hint = {
+                "backoff": "用户可能在表达边界或不想被打扰,回复要短、低压,不要撒娇追问。",
+                "careful": "用户可能有压力或负面情绪,先接住情绪,少讲道理。",
+                "warming": "互动有升温或玩笑感,可以更自然亲近一点,但别过度表演。",
+                "normal": "关系状态平稳,正常接话即可。",
+            }.get(mode, "正常接话即可。")
+            lines.append(f"关系状态机：{mode}。{mode_hint}")
+        recent = self._format_recent_passive_topics_hint(user)
+        if recent:
+            lines.append("最近普通回复里已经用过的切口：\n" + recent)
+        return "\n".join(lines)
+
+    def _cleanup_recent_passive_topics(self, user: dict[str, Any], *, now: float | None = None) -> list[dict[str, Any]]:
+        now = now or _now_ts()
+        raw = user.get("recent_reply_topics", [])
+        if not isinstance(raw, list):
+            raw = []
+        kept = [
+            item for item in raw
+            if isinstance(item, dict) and now - _safe_float(item.get("ts"), 0) <= self.passive_topic_memory_hours * 3600
+        ]
+        user["recent_reply_topics"] = kept[-18:]
+        return user["recent_reply_topics"]
+
+    def _remember_passive_reply_topic(self, user: dict[str, Any], text: str, inbound_text: str = "") -> None:
+        if not self.enable_passive_topic_suppression:
+            return
+        signature = self._proactive_topic_signature(text, inbound_text)
+        if not signature:
+            return
+        recent = self._cleanup_recent_passive_topics(user)
+        recent.append({"ts": _now_ts(), "signature": signature, "text": _single_line(text, 120)})
+        del recent[:-18]
+
+    def _format_recent_passive_topics_hint(self, user: dict[str, Any]) -> str:
+        if not self.enable_passive_topic_suppression:
+            return ""
+        recent = self._cleanup_recent_passive_topics(user)
+        lines = []
+        for item in recent[-5:]:
+            text = _single_line(item.get("text"), 70)
+            if text:
+                lines.append(f"- {self._format_timestamp_elapsed(item.get('ts'))}回复过：{text}")
+        return "\n".join(lines)
+
+    def _response_review_flags(self, text: str, user: dict[str, Any]) -> list[str]:
+        cleaned = str(text or "").strip()
+        flags: list[str] = []
+        if not cleaned:
+            return flags
+        if "```" in cleaned:
+            return flags
+        intent_profile = user.get("intent_profile") if isinstance(user.get("intent_profile"), dict) else {}
+        is_help = str(intent_profile.get("intent") or "") == "help"
+        length_limit = self.response_review_max_chars * (2 if is_help else 1)
+        if len(cleaned) > length_limit:
+            flags.append("too_long")
+        if re.search(r"^(好的|当然|没问题|我理解|总结一下|以下是|首先|其次|最后)[，,：:]", cleaned):
+            flags.append("assistant_tone")
+        if re.search(r"(作为.*助手|AI|模型|系统|提示词|插件|后台|根据.*信息|我会从.*角度)", cleaned, re.IGNORECASE):
+            flags.append("meta_or_assistant")
+        if not is_help and re.search(r"^\s*(?:[-*]|\d+[.、])\s+", cleaned, re.MULTILINE) and len(cleaned) < 900:
+            flags.append("over_structured")
+        if re.search(r"(能量\s*\d+|关系站位|状态机|内部规划|用户意图|表达学习|陪伴记忆)", cleaned):
+            flags.append("leaks_internal")
+        signature = self._proactive_topic_signature(cleaned)
+        if self.enable_passive_topic_suppression:
+            for item in self._cleanup_recent_passive_topics(user):
+                if self._topic_signature_similar(signature, str(item.get("signature") or "")):
+                    flags.append("repeated_topic")
+                    break
+        last_message = _single_line(user.get("last_companion_message"), 300)
+        last_sent = _safe_float(user.get("last_sent"), 0)
+        if last_message and self._text_repeats_recent_message(cleaned, last_message):
+            if not last_sent or _now_ts() - last_sent <= self.proactive_reply_context_hours * 3600:
+                flags.append("repeats_last_bot_message")
+        return list(dict.fromkeys(flags))
+
+    async def _review_and_rewrite_response(self, user: dict[str, Any], inbound_text: str, response_text: str) -> str:
+        if not self.enable_response_self_review:
+            return response_text
+        flags = self._response_review_flags(response_text, user)
+        if not flags:
+            return response_text
+        intent = user.get("intent_profile") if isinstance(user.get("intent_profile"), dict) else {}
+        last_message = _single_line(user.get("last_companion_message"), 300)
+        prompt = f"""
+把下面这条回复改写成更像真实私聊里的自然回复。
+保留原意,不要新增事实,不要解释你在改写。
+
+【用户刚才说】
+{_single_line(inbound_text, 260) or '（无）'}
+
+【刚才 Bot 已经说过，禁止复述或换皮重复】
+{last_message or '（无）'}
+
+【原回复】
+{response_text}
+
+【需要修正的问题】
+{", ".join(flags)}
+
+【当前意图/情绪】
+{intent.get('intent', 'chat')}｜{intent.get('emotion', 'neutral')}｜{intent.get('reply_style', 'natural')}
+
+要求：
+- 只输出改写后的正文
+- 不要标题、列表、JSON、括号动作、系统/AI/提示词字眼
+- 普通闲聊尽量 1 到 3 句；求助类可以保留必要步骤,但更口语
+- 如果用户情绪低,先接住情绪,少讲道理
+- 如果是边界/不想被打扰,短一点,退一步
+- 如果问题是重复上一条 Bot 消息,必须直接承接用户这句话,不要再说上一条里的“吃饱犯困/下午还有事/有什么安排”等同义内容
+""".strip()
+        rewritten = await self._llm_call(
+            prompt,
+            max_tokens=260,
+            provider_id=self._task_provider(self.response_review_provider_id, self.mai_style_provider_id),
+        )
+        cleaned = str(rewritten or "").strip()
+        if not cleaned:
+            return response_text
+        if len(cleaned) > max(len(response_text) + 80, self.response_review_max_chars + 160):
+            return response_text
+        if re.search(r"(提示词|系统|JSON|改写后|以下是)", cleaned, re.IGNORECASE):
+            return response_text
+        if last_message and self._text_repeats_recent_message(cleaned, last_message):
+            fallback = self._fallback_non_repeating_reply(inbound_text)
+            return fallback or response_text
+        return cleaned
+
+    @staticmethod
+    def _compact_repeat_text(text: str) -> str:
+        return re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]+", "", str(text or "")).lower()
+
+    def _text_repeats_recent_message(self, text: str, recent_text: str) -> bool:
+        current = self._compact_repeat_text(text)
+        recent = self._compact_repeat_text(recent_text)
+        if len(current) < 8 or len(recent) < 8:
+            return False
+        if current in recent or recent in current:
+            return True
+        current_tokens = set(re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9_]{3,}", text))
+        recent_tokens = set(re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9_]{3,}", recent_text))
+        stopwords = {
+            "刚才", "现在", "今天", "这个", "那个", "一下", "一点", "有点", "还有",
+            "什么", "安排", "用户", "你呢", "我呢", "就是", "已经", "容易",
+        }
+        current_tokens = {token for token in current_tokens if token not in stopwords}
+        recent_tokens = {token for token in recent_tokens if token not in stopwords}
+        if current_tokens and recent_tokens:
+            common = current_tokens & recent_tokens
+            if len(common) >= 3 and len(common) / max(1, min(len(current_tokens), len(recent_tokens))) >= 0.45:
+                return True
+        current_sig = self._proactive_topic_signature(text)
+        recent_sig = self._proactive_topic_signature(recent_text)
+        if current_sig and recent_sig and current_sig == recent_sig:
+            shared_chunks = 0
+            for idx in range(max(0, len(current) - 3)):
+                chunk = current[idx : idx + 4]
+                if chunk and chunk in recent:
+                    shared_chunks += 1
+                    if shared_chunks >= 2:
+                        return True
+        return False
+
+    def _fallback_non_repeating_reply(self, inbound_text: str) -> str:
+        inbound = _single_line(inbound_text, 120)
+        if not inbound:
+            return "嗯，我在。"
+        if any(token in inbound for token in ("吃", "觅食", "饭", "饿", "饱")):
+            return "还在觅啊，那你先把饭解决完，别边吃边赶。"
+        if any(token in inbound for token in ("忙", "事", "安排", "下午")):
+            return "那先按你那边的节奏来，我不催你。"
+        if len(inbound) <= 8:
+            return "嗯嗯，接到。"
+        return "懂了，那我先顺着你这边来。"
+
 
     def _fallback_relationship_level(
         self,
@@ -724,7 +2419,11 @@ Bot 主动后用户回复次数：{reply_count}
   "note": "一句话说明这个人格为什么会这样判断"
 }}
 """.strip()
-        raw_text = await self._llm_call(prompt, max_tokens=220)
+        raw_text = await self._llm_call(
+            prompt,
+            max_tokens=220,
+            provider_id=self._task_provider(self.relationship_analysis_provider_id, self.mai_style_provider_id),
+        )
         payload = self._extract_json_payload(raw_text or "")
         if not isinstance(payload, dict):
             return
@@ -758,6 +2457,14 @@ Bot 主动后用户回复次数：{reply_count}
             return False, "每日上限为 0"
         if self._is_quiet_time() and not self._can_send_insomnia_night_message(user):
             return False, "免打扰时段"
+        rel_state = user.get("relationship_state")
+        if (
+            self.enable_relationship_state_machine
+            and isinstance(rel_state, dict)
+            and rel_state.get("mode") == "backoff"
+            and _safe_float(rel_state.get("backoff_until"), 0) > _now_ts()
+        ):
+            return False, "关系状态处于收敛期"
 
         now = _now_ts()
         planned_reason = str(user.get("planned_proactive_reason") or "")
@@ -975,7 +2682,7 @@ Bot 主动后用户回复次数：{reply_count}
 
     def _available_test_actions(self, user: dict[str, Any]) -> list[str]:
         actions = ["message"]
-        if self._screen_glance_available():
+        if self._screen_glance_available(user):
             actions.append("screen_peek")
         if self._photo_text_available(user):
             actions.append("photo_text")
@@ -986,7 +2693,7 @@ Bot 主动后用户回复次数：{reply_count}
     def _available_proactive_abilities(self, user: dict[str, Any] | None = None) -> list[dict[str, str]]:
         user = user if isinstance(user, dict) else {}
         available = {"message"}
-        if self._screen_glance_available():
+        if self._screen_glance_available(user):
             available.add("screen_peek")
         if self._photo_text_available(user):
             available.add("photo_text")
@@ -1024,6 +2731,9 @@ Bot 主动后用户回复次数：{reply_count}
                     avoid=_single_line(item.get("avoid"), 80),
                 )
             )
+        preference_hint = self._action_preference_hint(user)
+        if preference_hint:
+            lines.append("【用户媒介偏好】\n" + preference_hint)
         lines.append("选择顺序：先看生活场景是否自然需要媒介,再看依赖是否可用,最后才落到 message。输出时只保留真人会发出的聊天内容。")
         return "\n".join(lines)
 
@@ -1032,7 +2742,7 @@ Bot 主动后用户回复次数：{reply_count}
             "状态表现层只在平台侧短暂发生,不属于聊天正文："
             "发普通文字前可以尝试短暂显示“正在输入”,让消息像人慢慢打出来；"
             "QQ 在线/睡觉/自定义状态由当前时间段的细化模型通过 presence_status 决定,执行层只按结果同步一次；"
-            "优先用在线或自定义短状态表达生活感,少用忙碌,避免离开和隐身；"
+            "优先用在线或自定义短状态表达生活感,少用忙碌,避免离开、隐身和请勿打扰；"
             "正文里不得提到正在输入、在线状态、状态同步或平台接口。"
         )
 
@@ -1046,7 +2756,7 @@ Bot 主动后用户回复次数：{reply_count}
                 f"- {item.get('module')}/{item.get('name')}：{item.get('label')}｜{item.get('when')}"
             )
         lines.append("- 状态表现/typing_status：发送前短暂显示正在输入｜平台支持时自动尝试,不进聊天正文")
-        lines.append("- 状态表现/qq_presence：在线/睡觉/自定义短状态｜平台支持时自动尝试,少用忙碌,避免离开/隐身")
+        lines.append("- 状态表现/qq_presence：在线/睡觉/自定义短状态｜平台支持时自动尝试,少用忙碌,避免离开/隐身/请勿打扰")
         return "\n".join(lines)
 
     def _summarize_test_action_labels(self, actions: list[str]) -> str:
@@ -1354,7 +3064,7 @@ Bot 主动后用户回复次数：{reply_count}
                 for key in ("topic", "why", "scene", "motive", "impulse")
             )
         combined_hint = f"{event_text} {motive}"
-        if self._screen_glance_available() and reason in {"check_in", "quiet_care", "background_schedule"}:
+        if self._screen_glance_available(user) and reason in {"check_in", "quiet_care", "background_schedule"}:
             candidates.append(("screen_peek", 1.15))
         if self._photo_text_available(user) and (
             reason in {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}
@@ -1914,6 +3624,18 @@ Bot 主动后用户回复次数：{reply_count}
         user["last_generated_photo_path"] = _single_line(image_path, 260)
         user["last_generated_photo_at"] = _now_ts()
 
+    def _note_screen_peek_attempt(self, user_id: str, reason: str = "") -> None:
+        if not str(user_id or "").strip():
+            return
+        today = _today_key()
+        user = self._get_user(str(user_id or ""))
+        if user.get("screen_peek_day") != today:
+            user["screen_peek_day"] = today
+            user["screen_peek_today"] = 0
+        user["screen_peek_today"] = _safe_int(user.get("screen_peek_today"), 0) + 1
+        user["screen_peek_last_at"] = _now_ts()
+        user["last_screen_peek_reason"] = _single_line(reason, 120)
+
     def _note_action_reply_feedback(self, user: dict[str, Any], action: str) -> None:
         raw = user.setdefault("action_reply_affinity", {})
         if not isinstance(raw, dict):
@@ -2311,9 +4033,24 @@ Bot 主动后用户回复次数：{reply_count}
             base[action] = max(-0.08, min(0.28, (rate - 0.35) * 0.55))
         return base
 
-    def _screen_glance_available(self) -> bool:
+    def _screen_glance_available(self, user: dict[str, Any] | None = None) -> bool:
         if not self.enable_screen_glance_action:
             return False
+        if self.screen_peek_max_daily <= 0:
+            return False
+        if isinstance(user, dict):
+            today = _today_key()
+            used_today = (
+                _safe_int(user.get("screen_peek_today"), 0)
+                if str(user.get("screen_peek_day") or "") == today
+                else 0
+            )
+            if used_today >= self.screen_peek_max_daily:
+                return False
+            cooldown_seconds = max(0, self.screen_peek_cooldown_minutes) * 60
+            last_at = _safe_float(user.get("screen_peek_last_at"), 0.0)
+            if cooldown_seconds > 0 and last_at > 0 and _now_ts() - last_at < cooldown_seconds:
+                return False
         plugin = self._get_screen_companion_plugin()
         return plugin is not None and hasattr(plugin, "_invoke_screen_skill")
 
@@ -2403,7 +4140,7 @@ Bot 主动后用户回复次数：{reply_count}
         if not parts:
             return True
         for part in parts:
-            if part == "screen_peek" and not self._screen_glance_available():
+            if part == "screen_peek" and not self._screen_glance_available(user):
                 return False
             if part == "photo_text" and not self._photo_text_available(user):
                 return False
@@ -2437,7 +4174,7 @@ Bot 主动后用户回复次数：{reply_count}
         affinity_bias = self._action_affinity_bias(user)
 
         weighted: list[tuple[str, float]] = [("message", 0.82)]
-        if self._screen_glance_available() and reason in {"check_in", "quiet_care", "state_share", "background_schedule"}:
+        if self._screen_glance_available(user) and reason in {"check_in", "quiet_care", "state_share", "background_schedule"}:
             weight = 0.9 + (0.45 if action_profile["observant"] else 0.0) + motive_bias["screen_peek"] + affinity_bias["screen_peek"]
             if energy < 50:
                 weight += 0.12
@@ -4001,6 +5738,11 @@ Bot 主动后用户回复次数：{reply_count}
         if plugin is None:
             return "screen_peek：屏幕插件不可用"
         target = str(user.get("umo") or "").strip()
+        if not self._screen_glance_available(user):
+            return "screen_peek：今日额度或冷却未满足,跳过"
+        async with self._data_lock:
+            self._note_screen_peek_attempt(str(user.get("user_id") or user.get("umo") or name), reason=reason)
+            self._save_data_sync()
         event = None
         if target and hasattr(plugin, "_create_virtual_event"):
             try:
@@ -4212,6 +5954,21 @@ Bot 主动后用户回复次数：{reply_count}
                     return client
         return None
 
+    def _onebot_action_result_ok(self, result: Any) -> bool:
+        if result is None:
+            return True
+        if isinstance(result, dict):
+            status = str(result.get("status") or result.get("result") or "").strip().lower()
+            if status in {"failed", "fail", "error", "nok"}:
+                return False
+            retcode = result.get("retcode", result.get("code", None))
+            if retcode is not None:
+                try:
+                    return int(retcode) == 0
+                except Exception:
+                    return False
+        return True
+
     async def _call_onebot_action(self, client: Any, action: str, **params: Any) -> bool:
         candidates = (
             "call_action",
@@ -4225,14 +5982,16 @@ Bot 主动后用户回复次数：{reply_count}
             try:
                 result = func(action, **params)
                 if hasattr(result, "__await__"):
-                    await result
-                return True
+                    result = await result
+                if self._onebot_action_result_ok(result):
+                    return True
             except TypeError:
                 try:
                     result = func(action, params)
                     if hasattr(result, "__await__"):
-                        await result
-                    return True
+                        result = await result
+                    if self._onebot_action_result_ok(result):
+                        return True
                 except Exception:
                     continue
             except Exception:
@@ -4242,8 +6001,8 @@ Bot 主动后用户回复次数：{reply_count}
             try:
                 result = func(**params)
                 if hasattr(result, "__await__"):
-                    await result
-                return True
+                    result = await result
+                return self._onebot_action_result_ok(result)
             except Exception:
                 return False
         return False
@@ -4287,7 +6046,6 @@ Bot 主动后用户回复次数：{reply_count}
             "away": (30, 0, "离开"),
             "busy": (50, 0, "忙碌"),
             "invisible": (40, 0, "隐身"),
-            "sleep": (70, 0, "睡觉"),
         }
         return table.get(normalized, table["online"])
 
@@ -4312,18 +6070,56 @@ Bot 主动后用户回复次数：{reply_count}
         client = self._resolve_aiocqhttp_client()
         if client is None:
             return False, "未找到可用 QQ 客户端"
-        custom_text = _single_line(text, 28)
+        custom_text = _single_line(text, 8)
         if not custom_text:
             return False, "自定义状态文本为空,跳过同步"
         variants = (
+            ("set_diy_online_status", {"face_id": 21, "face_type": 1, "wording": custom_text}),
+            ("set_diy_online_status", {"face_id": "21", "face_type": "1", "wording": custom_text}),
+            ("set_diy_online_status", {"faceId": 21, "faceType": 1, "wording": custom_text}),
+            ("set_diy_online_status", {"id": 21, "face_type": 1, "wording": custom_text}),
+            ("set_diy_online_status", {"wording": custom_text}),
+            ("set_diy_online_status", {"face_id": 21, "text": custom_text}),
+            ("set_diy_online_status", {"faceId": 21, "text": custom_text}),
+            ("set_diy_online_status", {"id": 21, "text": custom_text}),
             ("set_diy_online_status", {"text": custom_text}),
-            ("set_diy_online_status", {"face_id": 1, "text": custom_text}),
             ("set_custom_online_status", {"text": custom_text}),
+            ("set_custom_online_status", {"face_id": 21, "text": custom_text}),
         )
         for action, params in variants:
             if await self._call_onebot_action(client, action, **params):
                 return True, f"自定义状态：{custom_text}"
         return False, f"平台不支持自定义状态：{custom_text}"
+
+    async def _reset_stale_qq_presence_if_needed(self) -> None:
+        if not self.enable_qq_presence_sync:
+            return
+        await asyncio.sleep(2)
+        async with self._data_lock:
+            state = self.data.get("qq_presence_state", {})
+            if not isinstance(state, dict) or str(state.get("date") or "") == _today_key():
+                return
+            previous_mode = str(state.get("mode") or "")
+        ok, note = await self._set_qq_online_presence("online")
+        async with self._data_lock:
+            state = self.data.setdefault("qq_presence_state", {})
+            if not isinstance(state, dict):
+                state = {}
+                self.data["qq_presence_state"] = state
+            state.update(
+                {
+                    "date": _today_key(),
+                    "plan_date": "",
+                    "detail_key": "",
+                    "mode": "online",
+                    "custom_text": "",
+                    "reason": "清理跨日 QQ 状态",
+                    "updated_at": _now_ts(),
+                    "ok": bool(ok),
+                    "note": _single_line(f"跨日重置：{previous_mode or 'unknown'} -> {note}", 120),
+                }
+            )
+            self._save_data_sync()
 
     def _extract_group_id_from_umo(self, target: str) -> int | None:
         text = str(target or "").strip()
@@ -6423,15 +8219,23 @@ Bot 主动后用户回复次数：{reply_count}
         mode = str(status.get("mode") or status.get("status") or "unchanged").strip().lower()
         if mode in {"", "unchanged", "keep", "保持", "不变"}:
             return
-        if mode in {"away", "invisible", "离开", "隐身"}:
-            return
+        if mode in {"away", "invisible", "dnd", "do_not_disturb", "离开", "隐身", "请勿打扰", "勿扰"}:
+            mode = "online"
         custom_text = _single_line(
-            status.get("custom_text") or status.get("text") or status.get("label") or status.get("自定义状态"),
+            status.get("custom_text")
+            or status.get("wording")
+            or status.get("text")
+            or status.get("label")
+            or status.get("自定义状态")
+            or status.get("文案"),
             28,
         )
         if mode in {"busy", "忙碌"}:
             mode = "custom"
             custom_text = custom_text or "专注中"
+        if mode in {"sleep", "睡觉", "睡眠"}:
+            mode = "custom"
+            custom_text = custom_text or "休息中"
         if mode in {"custom", "自定义", "自定义状态"} and not custom_text:
             mode = "online"
         key = str((segment or {}).get("key") or "")
@@ -6440,9 +8244,12 @@ Bot 主动后用户回复次数：{reply_count}
             state = {}
             self.data["qq_presence_state"] = state
         if (
-            str(state.get("detail_key") or "") == key
+            str(state.get("date") or "") == _today_key()
+            and str(state.get("plan_date") or "") == str(self.data.get("detail_enhanced_day") or "")
+            and str(state.get("detail_key") or "") == key
             and str(state.get("mode") or "") == mode
             and str(state.get("custom_text") or "") == custom_text
+            and bool(state.get("ok", False))
         ):
             return
         if mode in {"custom", "自定义", "自定义状态"}:
@@ -6451,6 +8258,8 @@ Bot 主动后用户回复次数：{reply_count}
         else:
             ok, note = await self._set_qq_online_presence(mode)
         state["detail_key"] = key
+        state["date"] = _today_key()
+        state["plan_date"] = str(self.data.get("detail_enhanced_day") or "")
         state["mode"] = mode
         state["custom_text"] = custom_text
         state["reason"] = _single_line(status.get("reason"), 80)
@@ -6463,7 +8272,7 @@ Bot 主动后用户回复次数：{reply_count}
         if not self.enable_qq_presence_sync:
             return
         plan = self.data.get("daily_plan", {})
-        if not isinstance(plan, dict) or not self._is_plan_date_active(plan.get("date")):
+        if not isinstance(plan, dict) or str(plan.get("date") or "") != _today_key():
             return
         enhanced = self.data.get("detail_enhanced_segments", {})
         if not isinstance(enhanced, dict):
@@ -8143,6 +9952,161 @@ Bot 主动后用户回复次数：{reply_count}
                 abstract_count += 1
         return abstract_count >= max(2, len(items) // 3)
 
+    @staticmethod
+    def _plan_activity_signature(text: str) -> str:
+        normalized = _single_line(text, 180)
+        if not normalized:
+            return ""
+        category_rules = (
+            ("起床", ("起床", "醒来", "睡醒", "赖床", "闹钟", "被窝")),
+            ("洗漱", ("洗漱", "刷牙", "洗脸", "梳头", "镜子", "卫生间")),
+            ("早餐", ("早餐", "早饭", "面包", "牛奶", "豆浆", "粥")),
+            ("正餐", ("午饭", "晚饭", "吃饭", "做饭", "干饭", "饭桌", "摆碗", "点外卖")),
+            ("通勤出门", ("出门", "路上", "公交", "地铁", "校门", "换鞋", "背包", "打车")),
+            ("校园课程", ("上课", "下课", "教室", "课间", "老师", "同桌", "黑板", "班会")),
+            ("补课考试", ("补课", "考试", "测验", "卷子", "复习", "考场", "错题")),
+            ("学习作业", ("作业", "自习", "刷题", "数学", "英语", "课本", "笔记", "书包")),
+            ("工作事务", ("上班", "工位", "会议", "打卡", "下班", "同事", "项目", "文档")),
+            ("家务整理", ("收拾", "整理", "扫地", "洗碗", "洗衣", "归位", "桌面", "房间")),
+            ("休息摸鱼", ("午休", "休息", "摸鱼", "躺", "趴", "沙发", "发呆", "缓一会")),
+            ("娱乐放松", ("看剧", "追番", "游戏", "刷短视频", "听歌", "小说", "漫画")),
+            ("社交互动", ("聊天", "朋友", "家人", "消息", "电话", "群聊", "回复", "打开对话框")),
+            ("购物外食", ("买", "便利店", "超市", "奶茶", "饮料", "小吃", "逛")),
+            ("户外散步", ("散步", "走一段", "吹风", "公园", "楼下", "河边", "阳台", "开窗")),
+            ("运动身体", ("运动", "跑步", "拉伸", "散操", "瑜伽", "出汗")),
+            ("洗澡睡前", ("洗澡", "睡前", "关灯", "上床", "准备睡", "入睡", "枕头")),
+        )
+        hits: list[str] = []
+        for label, tokens in category_rules:
+            if any(token in normalized for token in tokens):
+                hits.append(label)
+            if len(hits) >= 2:
+                break
+        if hits:
+            return "+".join(hits)
+        compact = re.sub(r"[，。！？、,.!?；;：:\s]+", "", normalized)
+        return compact[:8]
+
+    def _plan_signature(self, items: list[dict[str, Any]]) -> list[str]:
+        signatures: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            signature = self._plan_activity_signature(
+                f"{item.get('activity', '')} {item.get('message_seed', '')}"
+            )
+            if signature:
+                signatures.append(signature)
+        return signatures
+
+    def _format_recent_daily_plan_history_for_prompt(self, limit: int = 5) -> str:
+        history = self._recent_daily_plan_history_entries()
+        rows: list[str] = []
+        for entry in history[-limit:]:
+            if not isinstance(entry, dict):
+                continue
+            date_text = _single_line(entry.get("date"), 16)
+            signatures = entry.get("signature")
+            if not isinstance(signatures, list):
+                signatures = []
+            samples = entry.get("sample")
+            if not isinstance(samples, list):
+                samples = []
+            skeleton = " / ".join(_single_line(part, 20) for part in signatures[:12] if part)
+            sample_text = "；".join(_single_line(part, 46) for part in samples[:4] if part)
+            if skeleton:
+                line = f"- {date_text}: {skeleton}"
+                if sample_text:
+                    line += f"\n  代表活动: {sample_text}"
+                rows.append(line)
+        return "\n".join(rows) if rows else "暂无最近日程历史。"
+
+    def _plan_repetition_score(self, items: list[dict[str, str]]) -> float:
+        signatures = self._plan_signature(items)
+        if not signatures:
+            return 0.0
+        current_set = set(signatures)
+        history = self._recent_daily_plan_history_entries()
+        best_score = 0.0
+        for entry in history[-5:]:
+            if not isinstance(entry, dict):
+                continue
+            old_signatures = entry.get("signature")
+            if not isinstance(old_signatures, list) or not old_signatures:
+                continue
+            old_values = [str(value) for value in old_signatures if value]
+            old_set = set(old_values)
+            if not old_set:
+                continue
+            jaccard = len(current_set & old_set) / max(1, len(current_set | old_set))
+            paired = min(len(signatures), len(old_values))
+            same_positions = 0
+            for idx in range(paired):
+                if signatures[idx] == old_values[idx]:
+                    same_positions += 1
+            ordered = same_positions / max(1, paired)
+            best_score = max(best_score, jaccard * 0.65 + ordered * 0.35)
+        return best_score
+
+    def _plan_is_too_repetitive(self, items: list[dict[str, str]]) -> bool:
+        if not items:
+            return False
+        signatures = self._plan_signature(items)
+        if len(signatures) >= 6:
+            dominant_count = max(signatures.count(signature) for signature in set(signatures))
+            if dominant_count >= max(4, len(signatures) // 2 + 1):
+                return True
+        return self._plan_repetition_score(items) >= 0.62
+
+    def _daily_plan_history_entry(self, plan: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(plan, dict):
+            return None
+        items = plan.get("items")
+        if not isinstance(items, list) or not items:
+            return None
+        plan_date = _single_line(plan.get("date"), 16) or _today_key()
+        sample: list[str] = []
+        for item in items[:6]:
+            if not isinstance(item, dict):
+                continue
+            time_text = _single_line(item.get("time"), 8)
+            activity = _single_line(item.get("activity"), 52)
+            if activity:
+                sample.append(f"{time_text} {activity}".strip())
+        entry = {
+            "date": plan_date,
+            "generated_at": _single_line(plan.get("generated_at"), 20) or datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "source": _single_line(plan.get("source"), 16),
+            "signature": self._plan_signature(items),
+            "sample": sample,
+        }
+
+    def _recent_daily_plan_history_entries(self) -> list[dict[str, Any]]:
+        history = self.data.get("daily_plan_history", [])
+        entries = [entry for entry in history if isinstance(entry, dict)] if isinstance(history, list) else []
+        known_dates = {_single_line(entry.get("date"), 16) for entry in entries}
+        current_entry = self._daily_plan_history_entry(self.data.get("daily_plan", {}))
+        if current_entry and _single_line(current_entry.get("date"), 16) not in known_dates:
+            entries.append(current_entry)
+        return entries
+
+    def _remember_daily_plan_history(self, plan: dict[str, Any]) -> None:
+        entry = self._daily_plan_history_entry(plan)
+        if not entry:
+            return
+        plan_date = _single_line(entry.get("date"), 16)
+        history = self.data.setdefault("daily_plan_history", [])
+        if not isinstance(history, list):
+            history = []
+            self.data["daily_plan_history"] = history
+        history[:] = [
+            old
+            for old in history
+            if not (isinstance(old, dict) and _single_line(old.get("date"), 16) == plan_date)
+        ]
+        history.append(entry)
+        del history[:-10]
+
     def _add_important_date_entry(self, value: str) -> tuple[bool, str]:
         parts = value.split(maxsplit=2)
         if len(parts) < 2:
@@ -9720,6 +11684,14 @@ Bot 主动后用户回复次数：{reply_count}
             logger.warning(f"[PrivateCompanion] LLM 调用失败: {e}")
         return None
 
+    @staticmethod
+    def _task_provider(*provider_ids: str | None) -> str:
+        for provider_id in provider_ids:
+            value = str(provider_id or "").strip()
+            if value:
+                return value
+        return ""
+
     def _parse_plan_items(self, raw_text: str) -> list[dict[str, str]]:
         payload = self._extract_json_payload(raw_text)
         if payload is None:
@@ -10353,6 +12325,11 @@ Bot 主动后用户回复次数：{reply_count}
             "陪伴 梦境\n"
             "陪伴 梦境碎片\n"
             "陪伴 画像\n"
+            "陪伴 记忆\n"
+            "陪伴 表达学习\n"
+            "陪伴 气氛\n"
+            "陪伴 片段\n"
+            "陪伴 长期记忆\n"
             "陪伴 日记\n"
             "陪伴 生成日记\n"
             "陪伴 日期列表\n"
@@ -10396,6 +12373,21 @@ Bot 主动后用户回复次数：{reply_count}
 
         is_private_chat = bool(getattr(event, "is_private_chat", lambda: False)())
         if not is_private_chat:
+            if self.enable_group_context_injection and self.enable_group_companion:
+                group_id = self._extract_group_id_from_event(event)
+                if group_id and self._group_enabled_for_event(group_id):
+                    group = self._get_group(group_id)
+                    sender_id = ""
+                    try:
+                        sender_id = str(event.get_sender_id())
+                    except Exception:
+                        sender_id = ""
+                    marker = "<!-- private_companion_group_context_v1 -->"
+                    current_prompt = req.system_prompt or ""
+                    if marker not in current_prompt:
+                        req.system_prompt = (
+                            f"{current_prompt}\n\n{marker}\n{self._format_group_context_for_prompt(group, sender_id)}"
+                        ).strip()
             return
         try:
             user_id = str(event.get_sender_id())
@@ -10408,6 +12400,9 @@ Bot 主动后用户回复次数：{reply_count}
 
         state = await self._ensure_daily_state()
         injection_parts = [self._format_state_injection(state)]
+        companion_injection = self._format_companion_planner_injection(current_user)
+        if companion_injection:
+            injection_parts.append(companion_injection)
         is_wake_event = bool(getattr(event, "is_wake", False)) or bool(
             getattr(event, "is_at_or_wake_command", False)
         )
@@ -10467,19 +12462,39 @@ Bot 主动后用户回复次数：{reply_count}
         current_user = raw_users.get(user_id) if isinstance(raw_users, dict) else None
         if not isinstance(current_user, dict):
             return
-        if not self.enable_llm_timer_scheduling or "<timer" not in original_text.lower():
-            return
-        cleaned_text, payloads = self._extract_timer_directives(original_text)
-        if not payloads:
-            return
-        if cleaned_text != original_text:
-            resp.completion_text = cleaned_text
-        await self._schedule_llm_timer(
-            user_id,
-            payloads[-1],
-            source_text=cleaned_text or original_text,
-            source_origin="llm_response",
-        )
+        working_text = original_text
+        if self.enable_llm_timer_scheduling and "<timer" in original_text.lower():
+            cleaned_text, payloads = self._extract_timer_directives(original_text)
+            if payloads:
+                working_text = cleaned_text or original_text
+                resp.completion_text = working_text
+                await self._schedule_llm_timer(
+                    user_id,
+                    payloads[-1],
+                    source_text=working_text,
+                    source_origin="llm_response",
+                )
+
+        inbound_text = _single_line(current_user.get("last_user_message"), 260)
+        reviewed_text = await self._review_and_rewrite_response(current_user, inbound_text, working_text)
+        if reviewed_text != working_text:
+            resp.completion_text = reviewed_text
+            working_text = reviewed_text
+            async with self._data_lock:
+                current = self._get_user(user_id)
+                stats = current.setdefault("postprocess_stats", {})
+                if not isinstance(stats, dict):
+                    stats = {}
+                    current["postprocess_stats"] = stats
+                stats["rewritten"] = _safe_int(stats.get("rewritten"), 0, 0) + 1
+                stats["last_rewritten_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                self._save_data_sync()
+
+        async with self._data_lock:
+            current = self._get_user(user_id)
+            current["last_companion_message"] = _single_line(working_text, 500)
+            self._remember_passive_reply_topic(current, working_text, inbound_text)
+            self._save_data_sync()
 
     async def _format_proactive_reply_context(self, event: AstrMessageEvent) -> str:
         try:
@@ -10556,8 +12571,9 @@ Bot 主动后用户回复次数：{reply_count}
         return (
             "【主动消息回复上下文】\n"
             f"你在 {sent_at} 主动向用户发送了“{last_message}”。{detail}\n"
-            "用户当前消息可能是在回应这条主动消息；请优先自然承接它。如果用户明显另起话题,再自然切换。\n"
-            "不要再次完整复述刚才那条主动消息,尤其不要把同一件事换个说法再讲一遍。"
+            "用户当前消息可能是在回应这条主动消息；请优先自然承接用户这句话。如果用户明显另起话题,再自然切换。\n"
+            "上一条主动消息已经发出过,现在绝对不要完整复述,也不要同义改写其中的事实、情绪和问题。"
+            "尤其不要把刚才问过的问题再问一遍；如果用户已经回答了,先接住回答。\n"
             "如果用户问“做啥了/怎么了/发生啥了”,优先补充刚才没说过的具体动作或原因；如果没新信息,就短短承认一下。"
         )
 
@@ -10764,6 +12780,18 @@ Bot 主动后用户回复次数：{reply_count}
                 response = self._format_dream_fragment_pool_view()
             elif action in {"画像", "关系", "回复率"}:
                 response = self._format_user_profile(user)
+            elif action in {"记忆", "陪伴记忆"}:
+                response = "当前陪伴记忆：\n" + self._format_companion_memory_for_prompt(user)
+            elif action in {"表达学习", "说话风格", "口癖"}:
+                response = "当前表达学习：\n" + self._format_expression_profile_for_prompt(user)
+            elif action in {"气氛", "意图", "关系状态"}:
+                response = "当前气氛判断：\n" + (self._format_intent_relationship_injection(user) or "暂无样本。")
+            elif action in {"片段", "对话片段", "共同经历", "未完成"}:
+                episode_text = self._format_dialogue_episodes_for_prompt(user) or "暂无对话片段记忆。"
+                loop_text = self._format_open_loops_for_prompt(user) or "暂无未完成约定。"
+                response = f"当前对话片段：\n{episode_text}\n\n未完成约定/可续话头：\n{loop_text}"
+            elif action in {"长期记忆", "livingmemory", "lmem", "向量记忆"}:
+                response = self._format_livingmemory_status()
             elif action in {"日记", "bot日记", "小记"}:
                 response = self._format_diaries()
             elif action in {"生成日记", "刷新日记"}:
@@ -10947,7 +12975,98 @@ Bot 主动后用户回复次数：{reply_count}
             state = await self._ensure_daily_state(force=False)
             if not state:
                 state = await self._ensure_daily_state(force=True)
-            await self._reply(event, self._format_dream_view(state or {}))
+                await self._reply(event, self._format_dream_view(state or {}))
+        event.stop_event()
+
+    @filter.command("陪伴群", alias={"群陪伴", "群聊陪伴"})
+    async def group_companion_command(self, event: AstrMessageEvent):
+        group_id = self._extract_group_id_from_event(event)
+        if not group_id:
+            yield event.plain_result("这条命令需要在群聊里使用。")
+            return
+        if not self.enable_group_companion or not self._group_allowed_by_access_mode(group_id):
+            if self.group_access_mode == "blacklist" and group_id in self._configured_group_blacklist_ids():
+                yield event.plain_result("这个群在群聊陪伴黑名单中，暂时不启用。")
+            elif self.group_access_mode == "whitelist":
+                yield event.plain_result("这个群还没有加入群聊陪伴白名单，暂时不启用。")
+            else:
+                yield event.plain_result("这个群暂时不启用群聊陪伴。")
+            return
+        message = str(event.message_str or "").strip()
+        action = ""
+        value = ""
+        parts = message.split(maxsplit=2)
+        if len(parts) >= 2:
+            action = parts[1].strip()
+        if len(parts) >= 3:
+            value = parts[2].strip()
+        async with self._data_lock:
+            group = self._get_group(group_id)
+            if action in {"开启", "启用", "打开"}:
+                group["enabled"] = True
+                self._save_data_sync()
+                response = "群聊陪伴观察已开启。"
+            elif action in {"关闭", "停用", "关掉"}:
+                group["enabled"] = False
+                self._save_data_sync()
+                response = "群聊陪伴观察已关闭。"
+            elif action in {"黑话", "梗", "词"}:
+                slang = group.get("slang_terms") if isinstance(group.get("slang_terms"), list) else []
+                meanings = group.get("slang_meanings") if isinstance(group.get("slang_meanings"), dict) else {}
+                if slang:
+                    lines = ["当前群内常见词/梗："]
+                    for item in slang[:20]:
+                        if not isinstance(item, dict):
+                            continue
+                        term = _single_line(item.get("term"), 20)
+                        if not term:
+                            continue
+                        meaning = ""
+                        if isinstance(meanings.get(term), dict):
+                            meaning = _single_line(meanings[term].get("meaning"), 60)
+                        lines.append(f"- {term}｜出现 {item.get('count', 0)} 次" + (f"｜{meaning}" if meaning else ""))
+                    response = "\n".join(lines)
+                else:
+                    response = "还没有学到稳定的群内常见词。"
+            elif action in {"群友", "成员", "画像"}:
+                members = group.get("members") if isinstance(group.get("members"), dict) else {}
+                ranked = sorted(
+                    [item for item in members.values() if isinstance(item, dict)],
+                    key=lambda item: _safe_int(item.get("count"), 0, 0),
+                    reverse=True,
+                )[:12]
+                if ranked:
+                    response = "当前群友轻画像：\n" + "\n".join(
+                        f"- {_single_line(item.get('name'), 18) or '群友'}｜发言 {item.get('count', 0)}｜"
+                        f"{' / '.join(_single_line(x, 18) for x in (item.get('recent_phrases') or [])[:3])}"
+                        for item in ranked
+                    )
+                else:
+                    response = "还没有群友样本。"
+            elif action in {"话题", "线程"}:
+                response = "当前群聊话题线程：\n" + (self._format_group_topic_threads_for_prompt(group) or "暂无。")
+            elif action in {"片段", "群聊片段", "记忆"}:
+                response = "近期群聊片段记忆：\n" + (self._format_group_episodes_for_prompt(group) or "暂无。")
+            elif action in {"插话判定", "插话反馈", "反馈"}:
+                response = "群聊插话反馈：" + self._format_group_interjection_feedback(group)
+            elif action in {"关系网", "关系网络", "互动关系"}:
+                response = "群友互动关系：\n" + (self._format_group_relationship_graph_for_prompt(group) or "暂无。")
+            elif action in {"状态", "气氛", ""}:
+                response = self._format_group_status(group)
+            else:
+                response = (
+                    "群聊陪伴命令：\n"
+                    "陪伴群 状态\n"
+                    "陪伴群 黑话\n"
+                    "陪伴群 群友\n"
+                    "陪伴群 话题\n"
+                    "陪伴群 片段\n"
+                    "陪伴群 插话反馈\n"
+                    "陪伴群 关系网\n"
+                    "陪伴群 开启\n"
+                    "陪伴群 关闭"
+                )
+        yield event.plain_result(response)
         event.stop_event()
 
     @filter.command("陪伴模拟唤醒")
@@ -11083,7 +13202,11 @@ Bot 主动后用户回复次数：{reply_count}
             f"各主动方式承接：{self._format_action_affinity_summary(user)}\n"
             f"打扰偏好：{profile['preference']}\n"
             f"关系分：{profile['score']}\n"
-            f"人格判断：{profile.get('note') or '暂无'}"
+            f"人格判断：{profile.get('note') or '暂无'}\n"
+            f"陪伴记忆：{_single_line(self._format_companion_memory_for_prompt(user), 180)}\n"
+            f"表达学习：{_single_line(self._format_expression_profile_for_prompt(user), 180)}\n"
+            f"气氛状态：{_single_line(self._format_intent_relationship_injection(user), 180) or '暂无'}\n"
+            f"媒介偏好：{_single_line(self._action_preference_hint(user), 180) or '暂无'}"
         )
 
     def _format_diaries(self) -> str:
@@ -11293,6 +13416,15 @@ Bot 主动后用户回复次数：{reply_count}
             user["ignored_streak"] = 0
             if text:
                 user["last_user_message"] = text
+                user["episode_message_count"] = _safe_int(user.get("episode_message_count"), 0, 0) + 1
+                self._update_expression_profile_from_message(user, text)
+                self._update_companion_memory_from_message(user, text)
+                self._update_open_loops_from_message(user, text)
+                self._update_action_preferences_from_message(user, text)
+                if self.enable_intent_emotion_analysis:
+                    intent_profile = self._analyze_inbound_intent(text)
+                    user["intent_profile"] = intent_profile
+                    self._update_relationship_state_from_intent(user, intent_profile)
                 if self._cancel_inbound_conflicting_greeting(user, now=_now_ts()):
                     logger.info("[PrivateCompanion] 用户已在当前问候时段自然来聊,已取消冲突问候候选: %s", user_id)
                     if not self._simulation_active(user) and _safe_float(user.get("next_proactive_at"), 0) <= 0:
@@ -11314,6 +13446,47 @@ Bot 主动后用户回复次数：{reply_count}
             await self._reply(event, response)
             event.stop_event()
         asyncio.create_task(self._refresh_persona_relationship(user_id, user_snapshot))
+        asyncio.create_task(self._maybe_refresh_companion_memory(user_id, user_snapshot))
+        asyncio.create_task(self._maybe_refresh_dialogue_episode(user_id, user_snapshot))
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def on_group_message(self, event: AstrMessageEvent):
+        if not self.enable_group_companion:
+            return
+        text = _single_line(event.message_str, 260)
+        if not text:
+            return
+        if text.startswith(("陪伴群", "/陪伴群", "群陪伴", "群聊陪伴")):
+            return
+        group_id = self._extract_group_id_from_event(event)
+        if not group_id or not self._group_enabled_for_event(group_id):
+            return
+        try:
+            sender_id = str(event.get_sender_id())
+        except Exception:
+            sender_id = ""
+        sender_name = self._sender_display_name(event)
+        async with self._data_lock:
+            group = self._get_group(group_id)
+            self._update_group_observation(
+                group,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=text,
+            )
+            self._save_data_sync()
+            group_snapshot = dict(group)
+        asyncio.create_task(self._maybe_refresh_group_episode(group_id, group_snapshot))
+        asyncio.create_task(self._maybe_refresh_group_slang_meanings(group_id, group_snapshot))
+        await self._maybe_group_interject(event, group_snapshot, text)
+        original_interject_at = _safe_float(group.get("last_interject_at"), 0) if isinstance(group, dict) else 0
+        if _safe_float(group_snapshot.get("last_interject_at"), 0) > original_interject_at:
+            async with self._data_lock:
+                current = self._get_group(group_id)
+                current["last_interject_at"] = group_snapshot.get("last_interject_at", current.get("last_interject_at", 0))
+                current["interject_day"] = group_snapshot.get("interject_day", current.get("interject_day", ""))
+                current["interject_today"] = group_snapshot.get("interject_today", current.get("interject_today", 0))
+                self._save_data_sync()
 
     def _format_timestamp_elapsed(self, timestamp: Any) -> str:
         ts = _safe_float(timestamp, 0)
