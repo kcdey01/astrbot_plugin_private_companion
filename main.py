@@ -298,7 +298,7 @@ class _CapturedSendMessageCall:
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "2.9.0",
+    "3.0.0",
 )
 class PrivateCompanionPlugin(Star):
     @staticmethod
@@ -568,7 +568,7 @@ class PrivateCompanionPlugin(Star):
         self.forward_message_max_messages = self._cfg_int(c, "forward_message_max_messages", 80, 5, 300)
         self.forward_message_max_chars = self._cfg_int(c, "forward_message_max_chars", 5000, 800, 20000)
         self.forward_message_parse_nested = self._cfg_bool(c, "forward_message_parse_nested", True)
-        self.forward_message_image_vision = self._cfg_bool(c, "forward_message_image_vision", False)
+        self.forward_message_image_vision = self._cfg_bool(c, "forward_message_image_vision", True)
         self.forward_message_image_limit = self._cfg_int(c, "forward_message_image_limit", 4, 0, 12)
         self.enable_group_scene_awareness = self._cfg_bool(c, "enable_group_scene_awareness", True)
         self.group_scene_recent_limit = self._cfg_int(c, "group_scene_recent_limit", 5, 2, 12)
@@ -2255,13 +2255,17 @@ class PrivateCompanionPlugin(Star):
         if not bool(getattr(self, "enable_private_image_self_recognition", True)):
             return ""
         bot_name = _single_line(getattr(self, "bot_name", ""), 40)
-        persona = _single_line(self._get_default_persona_prompt(), 900)
-        schedule_persona = _single_line(getattr(self, "schedule_persona_prompt", ""), 500)
+        schedule_persona = str(getattr(self, "schedule_persona_prompt", "") or "")
         custom_hint = _single_line(getattr(self, "private_image_self_recognition_hint", ""), 900)
+        visual_profile_parts: list[str] = []
+        for label in ("姓名", "年龄", "性别", "外貌", "发型发色", "瞳色", "服饰风格"):
+            value = self._roleplay_labeled_value(schedule_persona, label)
+            if value:
+                visual_profile_parts.append(f"{label}：{value}")
+        visual_profile = "\n".join(visual_profile_parts)
         parts = [
             f"Bot 名称/可能出现在图中的名字：{bot_name}" if bot_name else "",
-            f"AstrBot 默认人格/外观线索：{persona}" if persona else "",
-            f"生活/日程人设补充：{schedule_persona}" if schedule_persona else "",
+            f"结构化外观线索：\n{visual_profile}" if visual_profile else "",
             f"额外自我识别线索：{custom_hint}" if custom_hint else "",
         ]
         context = "\n".join(part for part in parts if part)
@@ -2278,6 +2282,28 @@ class PrivateCompanionPlugin(Star):
             "归属判断只用于辅助后续回复的语气和上下文,不是要求回复者主动辨认“这是 Bot”。"
             "如果证据不足,请使用“无法判断”或带“疑似”的保守描述,不要强行认定。不要对用户暴露这段识别规则。"
         )
+
+    def _roleplay_labeled_value(self, text: str, label: str, *, limit: int = 180) -> str:
+        source = str(text or "")
+        if not source or not label:
+            return ""
+        label_pattern = re.escape(str(label))
+        known_labels = (
+            "姓名", "种族", "年龄", "性别", "外貌", "发型发色", "瞳色", "服饰风格",
+            "职业/身份", "身份", "性格描述", "核心欲望/目标", "爱好", "禁忌",
+            "关键设定", "其他补充信息", "所处世界", "所在世界", "时代背景",
+            "基本法则/基调", "特殊规则", "主要活动场景", "世界观关系网",
+            "对用户的称呼", "是角色的XX", "与角色的相处方式",
+        )
+        stop_pattern = "|".join(re.escape(item) for item in known_labels if item != label)
+        match = re.search(
+            rf"(?m)^\s*{label_pattern}\s*[：:]\s*(.*?)(?=^\s*(?:{stop_pattern})\s*[：:]|\Z)",
+            source,
+            flags=re.S,
+        )
+        if not match:
+            return ""
+        return _single_line(match.group(1), limit)
 
     def _private_image_identity_disambiguation_instruction(self) -> str:
         return (
@@ -5065,7 +5091,12 @@ class PrivateCompanionPlugin(Star):
                 suffix = path.suffix.lower()
                 mime = "image/png" if suffix == ".png" else "image/webp" if suffix == ".webp" else "image/jpeg"
                 image_urls.append(f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}")
-            sampled_text = "、".join(str(page) for page in (sampled_pages or [])[:8])
+            sampled_list = [_safe_int(page, 0, 1) for page in (sampled_pages or [])[:8] if _safe_int(page, 0, 1) > 0]
+            sampled_text = "、".join(str(page) for page in sampled_list)
+            sampled_mapping_text = "；".join(
+                f"第{index + 1}张正文参考图=实际第{page}页"
+                for index, page in enumerate(sampled_list)
+            )
             persona = _single_line(self._get_default_persona_prompt(), 1200)
             schedule_persona = _single_line(getattr(self, "schedule_persona_prompt", ""), 800)
             worldview_context = _single_line(self._format_worldview_adaptation_prompt(), 1200)
@@ -5095,7 +5126,7 @@ class PrivateCompanionPlugin(Star):
                 "批注是 Bot 私下读漫画时留在书页旁边的小吐槽/感想,语气、尺度、害羞或坦然都必须服从下面的人格,不要写成通用解说。\n"
                 "rating 是 Bot 自己读完后的主观分数,1 到 10 的整数；不是用户评分。rating_reason 用一句话说明为什么喜欢或不喜欢。preference_tags 写出这次影响喜好的关键词,用于以后慢慢找到阅读偏好。\n"
                 "只输出 JSON,不要使用 Markdown。格式：{\"impression\":\"160字以内总读后感\",\"rating\":8,\"rating_reason\":\"60字以内评分理由\",\"preference_tags\":[\"画风\",\"节奏\"],\"page_comments\":[{\"page\":12,\"comment\":\"35字以内吐槽或评论\"}]}。\n"
-                "page_comments 只为正文参考页里真正看懂的页生成；page 必须来自正文参考页数字。\n"
+                "page_comments 只为正文参考页里真正看懂的页生成；page 必须填写实际页码,不要填写第几张参考图的序号。\n"
                 f"\n【AstrBot 默认人格】\n{persona or '未读取到默认人格。'}\n"
                 f"\n【生活/日程人设补充】\n{schedule_persona or '（无）'}\n"
                 f"\n【当前状态】\n{state_text or '（无）'}\n"
@@ -5104,6 +5135,7 @@ class PrivateCompanionPlugin(Star):
                 f"标题：{_single_line(detail.get('title'), 80)}\n"
                 f"标签：{_single_line(','.join(str(item) for item in (detail.get('tags') or [])) if isinstance(detail.get('tags'), list) else detail.get('tags'), 120)}"
                 + (f"\n正文参考页：{sampled_text}" if sampled_text else "")
+                + (f"\n参考图页码对应：{sampled_mapping_text}" if sampled_mapping_text else "")
             )
             if self._llm_daily_budget_remaining() == 0:
                 self._record_llm_budget_skip(provider_id=provider_id, task="private_reading_vision", prompt=prompt)
@@ -5141,15 +5173,41 @@ class PrivateCompanionPlugin(Star):
             return {}
         if not isinstance(data, dict):
             return {}
-        allowed_pages = {_safe_int(page, 0, 1) for page in sampled_pages or []}
+        sampled_list = [_safe_int(page, 0, 1) for page in sampled_pages or [] if _safe_int(page, 0, 1) > 0]
+        allowed_pages = set(sampled_list)
+        used_pages: set[int] = set()
         comments: list[dict[str, Any]] = []
-        for item in data.get("page_comments", []):
+        for comment_index, item in enumerate(data.get("page_comments", [])):
             if not isinstance(item, dict):
                 continue
-            page = _safe_int(item.get("page"), 0, 1)
+            raw_page = _safe_int(item.get("page"), 0, 1)
+            sample_order = _safe_int(
+                item.get("sample_order")
+                or item.get("sample_index")
+                or item.get("reference_index")
+                or item.get("image_index"),
+                0,
+                1,
+            )
+            page = raw_page
+            if sampled_list:
+                if 1 <= sample_order <= len(sampled_list):
+                    page = sampled_list[sample_order - 1]
+                elif raw_page not in allowed_pages and 1 <= raw_page <= len(sampled_list):
+                    page = sampled_list[raw_page - 1]
+                elif page in used_pages and comment_index < len(sampled_list) and sampled_list[comment_index] not in used_pages:
+                    page = sampled_list[comment_index]
             comment = _single_line(item.get("comment"), 80)
             if page > 0 and comment and (not allowed_pages or page in allowed_pages):
-                comments.append({"page": page, "comment": comment})
+                comments.append(
+                    {
+                        "page": page,
+                        "comment": comment,
+                        "raw_page": raw_page,
+                        "sample_order": sample_order or (comment_index + 1 if sampled_list and comment_index < len(sampled_list) else 0),
+                    }
+                )
+                used_pages.add(page)
             if len(comments) >= 8:
                 break
         return {
@@ -5383,6 +5441,8 @@ class PrivateCompanionPlugin(Star):
                 {
                     "page": _safe_int(item.get("page"), 0, 1),
                     "comment": _single_line(item.get("comment"), 80),
+                    "raw_page": _safe_int(item.get("raw_page"), 0, 0),
+                    "sample_order": _safe_int(item.get("sample_order"), 0, 0),
                 }
                 for item in (album.get("page_comments") if isinstance(album.get("page_comments"), list) else [])
                 if isinstance(item, dict) and _safe_int(item.get("page"), 0, 1) > 0 and _single_line(item.get("comment"), 80)
@@ -25231,6 +25291,23 @@ Bot 主动后用户回复次数：{reply_count}
                     return [dict(item) for item in value if isinstance(item, dict)]
         return []
 
+    def _forward_node_data(self, node: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(node, dict):
+            return {}
+        data = node.get("data")
+        return data if isinstance(data, dict) else {}
+
+    def _forward_node_content_chain(self, node: dict[str, Any]) -> Any:
+        if not isinstance(node, dict):
+            return []
+        node_data = self._forward_node_data(node)
+        for source in (node, node_data):
+            for key in ("content", "message", "raw_message"):
+                value = source.get(key)
+                if value not in (None, "", []):
+                    return value
+        return []
+
     def _extract_forward_payload_from_message_obj(self, message_obj: Any) -> dict[str, Any]:
         if isinstance(message_obj, list):
             for item in message_obj:
@@ -25354,6 +25431,14 @@ Bot 主动后用户回复次数：{reply_count}
         return []
 
     async def _find_forward_descriptor_for_event(self, event: AstrMessageEvent) -> tuple[str, dict[str, Any]]:
+        cached = getattr(event, "_private_companion_forward_descriptor", None)
+        if (
+            isinstance(cached, tuple)
+            and len(cached) == 2
+            and isinstance(cached[0], str)
+            and isinstance(cached[1], dict)
+        ):
+            return cached
         message_obj = getattr(event, "message_obj", None)
         forward_id = ""
         forward_payload: dict[str, Any] = {}
@@ -25377,6 +25462,10 @@ Bot 主动后用户回复次数：{reply_count}
             forward_id, forward_payload = await self._extract_forward_from_reply(event, reply_seg)
         if forward_payload and not forward_id:
             forward_id = self._build_inline_forward_id(forward_payload)
+        try:
+            setattr(event, "_private_companion_forward_descriptor", (forward_id, forward_payload))
+        except Exception:
+            pass
         return forward_id, forward_payload
 
     async def _extract_forward_messages_for_prompt(
@@ -25401,18 +25490,42 @@ Bot 主动后用户回复次数：{reply_count}
         for node in messages:
             if len(rows) >= self.forward_message_max_messages:
                 break
+            node_data = self._forward_node_data(node)
             sender = node.get("sender") if isinstance(node.get("sender"), dict) else {}
-            sender_id = str(sender.get("user_id") or sender.get("uin") or node.get("user_id") or node.get("sender_id") or "").strip()
-            raw_name = _single_line(sender.get("card") or sender.get("nickname") or node.get("nickname") or node.get("name") or sender_id or "未知用户", 60)
+            if not sender and isinstance(node_data.get("sender"), dict):
+                sender = node_data.get("sender") or {}
+            sender_id = str(
+                sender.get("user_id")
+                or sender.get("uin")
+                or node.get("user_id")
+                or node.get("sender_id")
+                or node.get("uin")
+                or node_data.get("user_id")
+                or node_data.get("sender_id")
+                or node_data.get("uin")
+                or ""
+            ).strip()
+            raw_name = _single_line(
+                sender.get("card")
+                or sender.get("nickname")
+                or sender.get("name")
+                or node.get("nickname")
+                or node.get("name")
+                or node_data.get("nickname")
+                or node_data.get("name")
+                or sender_id
+                or "未知用户",
+                60,
+            )
             display_name = self._group_member_identity_name(sender_id, raw_name, limit=40) if sender_id else raw_name
             sent_at = ""
-            ts = _safe_float(node.get("time") or node.get("timestamp"), 0)
+            ts = _safe_float(node.get("time") or node.get("timestamp") or node_data.get("time") or node_data.get("timestamp"), 0)
             if ts > 0:
                 try:
                     sent_at = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
                 except Exception:
                     sent_at = ""
-            content_chain = node.get("content") or node.get("message") or node.get("raw_message") or []
+            content_chain = self._forward_node_content_chain(node)
             if isinstance(content_chain, str):
                 text = content_chain
             else:
@@ -25459,6 +25572,18 @@ Bot 主动后用户回复次数：{reply_count}
                         rows.extend(nested_rows)
                         image_urls.extend(nested_images)
                         text_parts.append("[嵌套合并消息已展开]")
+                    elif seg_type == "node":
+                        nested_rows, nested_images, child_nested = await self._extract_forward_messages_for_prompt(
+                            event,
+                            self._build_inline_forward_id({"messages": [segment]}),
+                            forward_payload={"messages": [segment]},
+                            depth=depth + 1,
+                        )
+                        nested_count += child_nested
+                        rows.extend(nested_rows)
+                        image_urls.extend(nested_images)
+                        if nested_rows:
+                            text_parts.append("[合并消息节点已展开]")
                 text = "".join(text_parts).strip()
             text = _single_line(text, 500)
             if text:
@@ -25481,11 +25606,24 @@ Bot 主动后用户回复次数：{reply_count}
             logger.info("[PrivateCompanion] 合并消息读取失败: %s", exc)
             setattr(event, "_private_companion_forward_context", "")
             return ""
+        preview = " | ".join(
+            f"{index + 1}.{_single_line(row.get('sender') or row.get('sender_id') or '未知用户', 30)}:{_single_line(row.get('text'), 90)}"
+            for index, row in enumerate(rows[:5])
+        )
+        logger.info(
+            "[PrivateCompanion] 合并消息解析结果: id=%s messages=%s images=%s nested=%s preview=%s",
+            _single_line(forward_id, 40) or "inline",
+            len(rows),
+            len(image_urls),
+            nested_count,
+            preview or "(empty)",
+        )
         if not rows:
             setattr(event, "_private_companion_forward_context", "")
             return ""
+        image_vision_text = await self._transcribe_forward_message_images(event, image_urls)
         if self.forward_message_mode == "transcribe":
-            transcribed = await self._transcribe_forward_message_rows(rows, image_urls, nested_count)
+            transcribed = await self._transcribe_forward_message_rows(rows, image_urls, nested_count, image_vision_text=image_vision_text)
             if transcribed:
                 context = (
                     "【本轮合并消息转述】\n"
@@ -25508,6 +25646,9 @@ Bot 主动后用户回复次数：{reply_count}
             lines.append(f"其中包含 {nested_count} 段嵌套合并消息，已尽量展开。")
         if image_urls:
             lines.append(f"记录中含 {len(image_urls)} 张图片占位。")
+        if image_vision_text:
+            lines.append("【合并消息图片视觉摘要】")
+            lines.append(image_vision_text)
         used = 0
         for index, row in enumerate(rows, 1):
             sender_id = row.get("sender_id") or ""
@@ -25525,11 +25666,105 @@ Bot 主动后用户回复次数：{reply_count}
         logger.info("[PrivateCompanion] 已注入合并消息上下文: id=%s messages=%s images=%s", _single_line(forward_id, 40) or "inline", len(rows), len(image_urls))
         return context
 
+    async def _transcribe_forward_message_images(self, event: AstrMessageEvent, image_sources: list[str]) -> str:
+        if not self.forward_message_image_vision:
+            return ""
+        limit = max(0, int(getattr(self, "forward_message_image_limit", 0) or 0))
+        sources = [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:limit]
+        if not sources:
+            return ""
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        provider_id, provider_source, _configured_prompt = self._private_image_caption_provider_id(umo)
+        if not provider_id:
+            logger.info("[PrivateCompanion] 合并消息图片视觉跳过: 未配置 AstrBot 识图模型或插件总视觉模型")
+            return ""
+        getter = getattr(self.context, "get_provider_by_id", None)
+        provider = getter(provider_id) if callable(getter) else None
+        if provider is None:
+            fallback_provider_id = self._task_provider(self.jm_cosmos_vision_provider_id, self.narration_provider_id)
+            if fallback_provider_id and fallback_provider_id != provider_id and callable(getter):
+                provider_id = fallback_provider_id
+                provider_source = "plugin_vision_fallback"
+                provider = getter(provider_id)
+            if provider is None:
+                logger.info("[PrivateCompanion] 合并消息图片视觉跳过: provider 不可用 id=%s", provider_id)
+                return ""
+        image_items: list[tuple[str, str]] = []
+        seen_image_keys: set[str] = set()
+        for source in sources:
+            url = self._private_image_source_to_model_url(source)
+            if not url:
+                continue
+            image_key = self._private_image_source_cache_key(source) or ("model_url:" + hashlib.sha1(url.encode("utf-8", errors="ignore")).hexdigest())
+            if image_key in seen_image_keys:
+                continue
+            seen_image_keys.add(image_key)
+            image_items.append((image_key, url))
+        image_keys = [key for key, _ in image_items]
+        image_urls = [url for _, url in image_items]
+        if not image_urls:
+            return ""
+        prompt = (
+            "请按出现顺序阅读用户转发的合并聊天记录里的图片,输出供后续聊天模型理解消息集的视觉摘要。\n"
+            "要求：\n"
+            "1. 使用“第1张、第2张...”标明每张图片的大意,不要把图片当成用户当前单独发来的图片。\n"
+            "2. 说明图片类型、可见文字、主体、情绪、梗或截图里的关键信息；如果像表情包,概括它在聊天记录中可能表达的语气。\n"
+            "3. 不要替 Bot 回复用户,不要输出工具名、模型名、路径或插件信息。\n"
+            "4. 不要编造看不见的细节；不确定时直接说明不确定。\n"
+            "5. 总体保持简洁自然,每张图片一句到两句。"
+        )
+        self_recognition_prompt = self._private_image_self_recognition_prompt()
+        if self_recognition_prompt and self_recognition_prompt not in prompt:
+            prompt = f"{prompt}\n\n{self_recognition_prompt}"
+        cache_key = self._private_image_vision_cache_key(image_keys, provider_id, prompt)
+        cached_text = self._get_private_image_vision_cache(cache_key)
+        if cached_text:
+            logger.info(
+                "[PrivateCompanion] 合并消息图片视觉命中缓存: provider=%s images=%s preview=%s",
+                provider_id,
+                len(image_urls),
+                _single_line(cached_text, 220),
+            )
+            return cached_text
+        if not self._can_run_llm_task(provider_id, task="forward_message_image_vision"):
+            self._record_llm_budget_skip(provider_id=provider_id, task="forward_message_image_vision", prompt=prompt)
+            return ""
+        try:
+            start = time.time()
+            result = await provider.text_chat(prompt=prompt, image_urls=image_urls)
+            text = str(getattr(result, "completion_text", result) or "").strip()
+            cleaned_text = _single_line(_strip_internal_message_blocks(text), 900)
+            self._record_llm_usage(
+                provider_id=provider_id,
+                task="forward_message_image_vision",
+                prompt=prompt,
+                completion=text,
+                resp=result,
+                elapsed_ms=int((time.time() - start) * 1000),
+                success=True,
+                budget_exempt=True,
+            )
+            logger.info(
+                "[PrivateCompanion] 合并消息图片视觉完成: provider=%s source=%s images=%s chars=%s preview=%s",
+                provider_id,
+                provider_source,
+                len(image_urls),
+                len(cleaned_text),
+                _single_line(cleaned_text, 220),
+            )
+            self._set_private_image_vision_cache(cache_key, cleaned_text, provider_id=provider_id, image_keys=image_keys)
+            return cleaned_text
+        except Exception as exc:
+            logger.info("[PrivateCompanion] 合并消息图片视觉失败: %s", _single_line(exc, 160))
+            return ""
+
     async def _transcribe_forward_message_rows(
         self,
         rows: list[dict[str, Any]],
         image_urls: list[str],
         nested_count: int,
+        *,
+        image_vision_text: str = "",
     ) -> str:
         provider_id = self._task_provider(self.forward_message_provider_id, self.mai_style_provider_id)
         raw_lines: list[str] = []
@@ -25554,6 +25789,8 @@ Bot 主动后用户回复次数：{reply_count}
             "聊天记录节点：\n"
             + "\n".join(raw_lines)
         )
+        if image_vision_text:
+            prompt += "\n\n合并消息图片视觉摘要：\n" + image_vision_text
         result = await self._llm_call(
             prompt,
             max_tokens=900,
@@ -26944,6 +27181,29 @@ Bot 主动后用户回复次数：{reply_count}
         text = _single_line(event.message_str, 120)
         if text.startswith(("陪伴", "/陪伴", "私聊陪伴", "主动陪伴")):
             return
+        forward_only_prompt = ""
+        if self.enable_forward_message_adaptation and not text:
+            try:
+                forward_id, forward_payload = await self._find_forward_descriptor_for_event(event)
+            except Exception as exc:
+                forward_id, forward_payload = "", {}
+                logger.info("[PrivateCompanion] 私聊合并消息预解析失败: user=%s error=%s", user_id, _single_line(exc, 120))
+            if forward_id or forward_payload:
+                forward_only_prompt = "我转发了一段聊天记录,你看看里面在说什么。"
+                text = forward_only_prompt
+                try:
+                    event.message_str = forward_only_prompt
+                    message_obj = getattr(event, "message_obj", None)
+                    if message_obj is not None:
+                        setattr(message_obj, "message_str", forward_only_prompt)
+                except Exception:
+                    pass
+                logger.info(
+                    "[PrivateCompanion] 私聊纯合并消息已补触发文本: user=%s id=%s inline=%s",
+                    user_id,
+                    _single_line(forward_id, 40) or "inline",
+                    bool(forward_payload),
+                )
 
         async with self._data_lock:
             user = self._get_user(user_id)
@@ -27008,7 +27268,7 @@ Bot 主动后用户回复次数：{reply_count}
                 self._save_data_sync()
                 event.stop_event()
                 return
-            elif is_target_user:
+            elif is_target_user and not forward_only_prompt:
                 key = self._semantic_buffer_key(f"private:{user_id}", user_id)
                 buffers = getattr(self, "_semantic_message_buffers", None)
                 existing_buffer = buffers.get(key) if isinstance(buffers, dict) else None

@@ -1539,8 +1539,8 @@
   "forward_message_image_vision": {
     "description": "合并消息图片交给视觉模型",
     "type": "bool",
-    "hint": "默认只在合并消息中标记 [图片]，不额外调用视觉模型。开启后会把少量图片 URL 附加到本轮请求中，成本会明显上升。",
-    "default": false,
+    "hint": "合并消息里出现图片时，按出现顺序交给视觉模型生成简短说明，再作为消息集上下文交给 Bot。合并转发触发频率通常较低，默认开启以避免漏读关键图片。",
+    "default": true,
     "condition": {
       "enable_forward_message_adaptation": true
     }
@@ -1548,7 +1548,7 @@
   "forward_message_image_limit": {
     "description": "合并消息视觉图片上限",
     "type": "int",
-    "hint": "开启合并消息图片视觉后，最多附加多少张图片给模型。",
+    "hint": "单次合并消息最多转述多少张图片，超过上限的图片仍会保留 [图片] 占位。",
     "slider": {
       "min": 0,
       "max": 12,

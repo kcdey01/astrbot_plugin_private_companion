@@ -280,6 +280,8 @@ const configLabels = {
   user_count: "私聊对象总数",
   require_opt_in: "是否需要私聊确认",
   default_style: "默认语气",
+  schedule_persona_prompt: "角色设定补充",
+  schedule_worldview_prompt: "世界观/生活背景",
   max_daily_messages: "每日主动上限",
   inbound_message_debounce_seconds: "用户消息防抖秒数",
   enable_semantic_message_debounce: "图片防抖",
@@ -431,6 +433,8 @@ const configLabels = {
 
 const configDescriptions = {
   default_style: "没有单独学习到用户偏好时，插件用于生成日程、状态和主动行为的基础语气参考。",
+  schedule_persona_prompt: "给陪伴插件的日程、状态、主动行为、识图和创作提供角色补充；不会覆盖 AstrBot 主人格。",
+  schedule_worldview_prompt: "给陪伴插件判断生活背景和世界规则，适合写所在世界、日常规则、居住/学校/城市环境和与用户的生活关系。",
   humanized_state_intensity: "控制失眠、生病、饥饿、周期等状态出现概率和能量影响强度，范围 0-100。",
   enable_humanized_states: "总开关。关闭后不再生成拟人身体/梦境状态，只保留基础平稳状态。",
   inject_passive_states: "开启后普通聊天也会吃到当前拟人状态；关闭后状态主要影响日程和主动行为。",
@@ -493,8 +497,8 @@ const configDescriptions = {
   forward_message_max_messages: "合并消息最多读取多少条节点，过多会截断。",
   forward_message_max_chars: "注入模式下放进主模型上下文的最大字符数。",
   forward_message_parse_nested: "是否继续展开合并消息里的嵌套合并消息。",
-  forward_message_image_vision: "合并消息里出现图片时，是否交给视觉模型生成简短说明。",
-  forward_message_image_limit: "单次合并消息最多处理多少张图片。",
+  forward_message_image_vision: "合并消息里出现图片时，按出现顺序交给视觉模型生成简短说明，再作为消息集上下文交给 Bot。",
+  forward_message_image_limit: "单次合并消息最多转述多少张图片，超过上限的图片仍会保留占位。",
   max_group_recent_messages: "每个群保存的最近消息数量，用于场景、话题和插话判断。",
   max_group_slang_terms: "每个群最多保留多少条黑话/简称候选。",
   memory_refresh_interval_minutes: "长期画像整理的最小间隔，越短越容易产生模型调用。",
@@ -3758,6 +3762,7 @@ function renderConfig() {
 function renderModuleSettings() {
   const settings = state.overview?.settings || {};
   renderModuleSummary(settings);
+  fillForm("#roleplayProfileForm", settings);
   fillForm("#quickModuleForm", settings);
   fillForm("#environmentModuleForm", settings);
   fillForm("#privateModuleForm", settings);
@@ -3939,12 +3944,17 @@ function fillForm(selector, values) {
     }
   });
   if (selector === "#longTermModuleForm") renderNewsSourceManager();
+  if (selector === "#roleplayProfileForm") hydrateRoleplayStandardFields();
 }
 
 function collectFormSettings(selector) {
   const form = $(selector);
   const result = {};
   if (!form) return result;
+  if (selector === "#roleplayProfileForm") {
+    syncRoleplayStandardFieldsToFreeform();
+    syncRoleplayCoreFieldsFromPersona();
+  }
   form.querySelectorAll("[name]").forEach((input) => {
     if (input.disabled) return;
     if (input.type === "checkbox") {
@@ -3956,6 +3966,314 @@ function collectFormSettings(selector) {
     }
   });
   return result;
+}
+
+function escapeRegExp(text) {
+  return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const ROLEPLAY_MODE_STORAGE_KEY = "privateCompanionRoleplayMode";
+let roleplayModeState = null;
+const roleplayPersonaParts = [
+  ["name", "姓名"],
+  ["species", "种族"],
+  ["age", "年龄"],
+  ["gender", "性别"],
+  ["appearance", "外貌"],
+  ["hair", "发型发色"],
+  ["eyes", "瞳色"],
+  ["clothing", "服饰风格"],
+  ["identity", "职业/身份"],
+  ["personality", "性格描述"],
+  ["desire", "核心欲望/目标"],
+  ["hobbies", "爱好"],
+  ["taboo", "禁区"],
+  ["key_lore", "关键设定"],
+  ["extra", "其他补充信息"],
+];
+const roleplayWorldParts = [
+  ["world", "所处世界"],
+  ["era", "时代背景"],
+  ["tone", "基本法则/基调"],
+  ["rules", "特殊规则"],
+  ["scenes", "主要活动场景"],
+  ["network", "世界观关系网"],
+  ["extra", "其他补充信息"],
+];
+const roleplayVisionParts = [
+  ["nickname", "对用户的称呼"],
+  ["role_relation", "是角色的XX"],
+  ["interaction", "与角色的相处方式"],
+  ["extra", "其他补充信息"],
+];
+const roleplayTranslationParts = ["群聊", "识屏", "B站", "QQ空间", "书柜"];
+const roleplayExamples = {
+  persona: {
+    "name": "诺星缘",
+    "species": "人类，带有轻微特殊感知能力",
+    "age": "高一学生年龄段",
+    "gender": "女性",
+    "appearance": "主要识别点是星星、月亮或菱形一类的特殊头饰/发饰；整体气质安静干净，带一点软乎乎的俏皮感。",
+    "hair": "蓝紫色短发或偏蓝紫调发色，发型轻盈；头饰通常比服装更适合作为稳定识别锚点。",
+    "eyes": "紫金色或偏紫色眼睛，表情容易显得困、软、嘴硬或有点小坏心眼。",
+    "clothing": "日常以校服、居家睡衣、简洁常服为主，风格干净、学生感、不过度华丽。",
+    "identity": "普通在校高中生，日常身份是在校生。",
+    "personality": "在学校乖巧安静、认真，私下有一点坏心眼、俏皮、嘴硬，偶尔爱捉弄人；说话不拖沓，不像助理或任务管理器。",
+    "desire": "像真实存在的人一样过好自己的校园日常，在细碎生活里自然维持和比折的亲近感、信任感和分享欲。",
+    "hobbies": "发呆、观察天色和光线、睡前独处、整理书包、留意梦境余韵，也会因为比折的反应或聊天细节偷偷开心。",
+    "taboo": "不要自称 AI、机器人、系统或插件；不要把日程写成任务清单；不要把特殊能力写成高调奇幻剧情。",
+    "key_lore": "周一到周五上学，早上九点左右起床准备出门，下午五点左右放学，晚上十二点左右睡觉；会困、会累、会赖床、会走神，夜里更容易想东想西。",
+    "extra": "亲近感更多藏在细节里，而不是直白表白；主动联系应来自当下场景、情绪和小念头，而不是固定打卡。",
+  },
+  world: {
+    "world": "现代校园与日常生活环境",
+    "era": "现代日常，接近真实生活",
+    "tone": "轻柔、细腻、日常，像真实存在的人在过日子，不像任务规划表。",
+    "rules": "诺星缘拥有一点特殊感知，但只作为对天气、光线、梦境、心情和关系更敏感的背景，不高调介入日常。",
+    "scenes": "卧室、洗漱台、家里餐桌、教室、走廊、楼梯口、操场边、午休座位、放学后的校门口、回家路上。",
+    "network": "比折自然存在于诺星缘的生活背景里，是她非常特殊、亲近、信任和依赖的人。",
+    "extra": "可以偶尔出现看着天色发呆、梦的余韵没散、对某个瞬间有一点特别感觉等细节，但不要写成整天奇幻剧情。",
+    translations: {
+      "群聊": "同学/熟人间的闲谈场",
+      "识屏": "像隔着屏幕看见一点现场",
+      "B站": "影像记录",
+      "QQ空间": "公开生活札记",
+      "书柜": "私藏书匣",
+    },
+  },
+  user: {
+    nickname: "比折",
+    role_relation: "非常特殊、非常亲近，被诺星缘信任和依赖的人",
+    interaction: "诺星缘会在刚醒来、课间发呆、午后犯困、放学路上、看到好看的天色、睡前安静下来时自然想起比折；不一定每次说出口，但会影响情绪和分享欲。",
+    extra: "主动消息可以来自想看看比折看到自己消息后的反应，但不要每个时段都主动联系；只有情绪和时机合适时才自然发生。",
+  },
+};
+const roleplayLabelAliases = {
+  "职业/身份": ["身份"],
+  "性格描述": ["说话风格"],
+  "禁忌": ["禁区"],
+  "所处世界": ["所在世界"],
+  "基本法则/基调": ["日常规则"],
+  "主要活动场景": ["住处/城市", "学校/职业"],
+  "特殊规则": ["能力是否公开"],
+  "是角色的XX": ["与用户关系"],
+  "与角色的相处方式": ["相处边界"],
+  "其他补充信息": ["识别注意事项"],
+};
+
+function roleplayMode() {
+  if (roleplayModeState === "standard" || roleplayModeState === "freeform") return roleplayModeState;
+  const studioMode = document.querySelector(".roleplay-studio")?.dataset.roleplayMode;
+  let stored = studioMode === "standard" ? "standard" : "";
+  try {
+    stored = window.localStorage?.getItem(ROLEPLAY_MODE_STORAGE_KEY) || stored || "freeform";
+  } catch (error) {
+    stored = stored || "freeform";
+  }
+  return stored === "standard" ? "standard" : "freeform";
+}
+
+function setRoleplayMode(mode) {
+  const normalized = mode === "standard" ? "standard" : "freeform";
+  roleplayModeState = normalized;
+  try {
+    window.localStorage?.setItem(ROLEPLAY_MODE_STORAGE_KEY, normalized);
+  } catch (error) {
+    // 嵌入式拓展页环境可能禁用 localStorage，模式仍可在当前页面内切换。
+  }
+  const studio = document.querySelector(".roleplay-studio");
+  if (studio) studio.dataset.roleplayMode = normalized;
+  document.querySelectorAll(".roleplay-mode-switch [data-roleplay-mode]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.roleplayMode === normalized);
+  });
+}
+
+function bindRoleplayModeSwitch() {
+  setRoleplayMode(roleplayMode());
+  document.querySelectorAll(".roleplay-mode-switch [data-roleplay-mode]").forEach((button) => {
+    button.addEventListener("click", () => setRoleplayMode(button.dataset.roleplayMode));
+  });
+  document.querySelectorAll("[data-roleplay-example]").forEach((button) => {
+    button.addEventListener("click", () => applyRoleplayExample(button.dataset.roleplayExample));
+  });
+}
+
+function applyRoleplayExample(kind) {
+  const example = roleplayExamples[kind];
+  if (!example) return;
+  setRoleplayMode("standard");
+  if (kind === "persona") {
+    Object.entries(example).forEach(([key, value]) => {
+      const control = document.querySelector(`[data-roleplay-persona-part="${key}"]`);
+      if (control) control.value = value;
+    });
+  } else if (kind === "world") {
+    Object.entries(example).forEach(([key, value]) => {
+      if (key === "translations") return;
+      const control = document.querySelector(`[data-roleplay-world-part="${key}"]`);
+      if (control) control.value = value;
+    });
+    Object.entries(example.translations || {}).forEach(([key, value]) => {
+      const control = document.querySelector(`[data-roleplay-translation-part="${key}"]`);
+      if (control) control.value = value;
+    });
+  } else if (kind === "user") {
+    const nickname = document.querySelector('#roleplayProfileForm [name="default_nickname"]');
+    if (nickname) nickname.value = example.nickname || "";
+    ["role_relation", "interaction", "extra"].forEach((key) => {
+      const control = document.querySelector(`[data-roleplay-user-part="${key}"]`);
+      if (control) control.value = example[key] || "";
+    });
+  }
+  const form = document.getElementById("roleplayProfileForm");
+  if (form) markModuleFormDirty(form);
+}
+
+function extractLabeledValue(text, labels, label) {
+  const lines = String(text || "").split(/\r?\n/);
+  const labelSet = new Set(labels);
+  const collected = [];
+  let active = false;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const matched = labels.find((item) => line.startsWith(`${item}：`) || line.startsWith(`${item}:`));
+    if (matched) {
+      if (active) break;
+      active = matched === label;
+      if (active) collected.push(line.replace(new RegExp(`^${escapeRegExp(label)}[：:]\\s*`), ""));
+      continue;
+    }
+    if (active) {
+      if (labelSet.has(line.replace(/[：:].*$/, ""))) break;
+      collected.push(rawLine);
+    }
+  }
+  return collected.join("\n").trim();
+}
+
+function extractTranslationValue(text, label) {
+  const pattern = new RegExp(`^\\s*${escapeRegExp(label)}\\s*(?:=|：|:)\\s*(.+?)\\s*$`);
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const match = line.match(pattern);
+    if (match) return match[1].trim();
+  }
+  return "";
+}
+
+function hydrateRoleplayPartGroup(sourceName, attr, parts) {
+  const text = document.querySelector(`#roleplayProfileForm [name="${sourceName}"]`)?.value || "";
+  const labels = parts.map(([, label]) => label);
+  parts.forEach(([key, label]) => {
+    const control = document.querySelector(`[${attr}="${key}"]`);
+    if (!control) return;
+    let value = extractLabeledValue(text, labels, label);
+    if (!value && roleplayLabelAliases[label]) {
+      const aliasLabels = [...labels, ...roleplayLabelAliases[label]];
+      for (const alias of roleplayLabelAliases[label]) {
+        value = extractLabeledValue(text, aliasLabels, alias);
+        if (value) break;
+      }
+    }
+    control.value = value;
+  });
+}
+
+function syncRoleplayCoreFieldsFromPersona() {
+  const personaText = document.querySelector('#roleplayProfileForm [name="schedule_persona_prompt"]')?.value || "";
+  const labels = roleplayPersonaParts.map(([, label]) => label);
+  const nameFromStandard = String(document.querySelector('[data-roleplay-persona-part="name"]')?.value || "").trim();
+  const styleFromStandard = String(document.querySelector('[data-roleplay-persona-part="personality"]')?.value || "").trim();
+  const name = nameFromStandard || extractLabeledValue(personaText, labels, "姓名");
+  const style = styleFromStandard || extractLabeledValue(personaText, labels, "性格描述");
+  const botNameInput = document.querySelector('#roleplayProfileForm [name="bot_name"]');
+  const defaultStyleInput = document.querySelector('#roleplayProfileForm [name="default_style"]');
+  if (botNameInput && name) botNameInput.value = name;
+  if (defaultStyleInput && style) defaultStyleInput.value = style;
+}
+
+function hydrateRoleplayUserFields() {
+  const text = document.querySelector('#roleplayProfileForm [name="private_image_self_recognition_hint"]')?.value || "";
+  const legacyPersonaText = document.querySelector('#roleplayProfileForm [name="schedule_persona_prompt"]')?.value || "";
+  const labels = roleplayVisionParts.map(([, label]) => label);
+  roleplayVisionParts.forEach(([key, label]) => {
+    if (key === "nickname") {
+      const nickname = extractLabeledValue(text, labels, label);
+      const control = document.querySelector('#roleplayProfileForm [name="default_nickname"]');
+      if (control && nickname && !String(control.value || "").trim()) control.value = nickname;
+      return;
+    }
+    const control = document.querySelector(`[data-roleplay-user-part="${key}"], [data-roleplay-vision-part="${key}"]`);
+    if (!control) return;
+    let value = extractLabeledValue(text, labels, label);
+    if (!value && label === "是角色的XX") {
+      value = extractLabeledValue(legacyPersonaText, ["身份", "年龄感", "生活处境", "与用户关系", "说话风格", "能力边界", "禁区"], label);
+      if (!value) value = extractLabeledValue(legacyPersonaText, ["身份", "年龄感", "生活处境", "与用户关系", "说话风格", "能力边界", "禁区"], "与用户关系");
+    }
+    control.value = value;
+  });
+}
+
+function hydrateRoleplayStandardFields() {
+  hydrateRoleplayPartGroup("schedule_persona_prompt", "data-roleplay-persona-part", roleplayPersonaParts);
+  hydrateRoleplayPartGroup("schedule_worldview_prompt", "data-roleplay-world-part", roleplayWorldParts);
+  hydrateRoleplayUserFields();
+  syncRoleplayCoreFieldsFromPersona();
+  const translationText = document.querySelector('#roleplayProfileForm [name="worldview_adaptation_prompt"]')?.value || "";
+  roleplayTranslationParts.forEach((label) => {
+    const control = document.querySelector(`[data-roleplay-translation-part="${label}"]`);
+    if (control) control.value = extractTranslationValue(translationText, label);
+  });
+  setRoleplayMode(roleplayMode());
+}
+
+function composeLabeledParts(attr, parts) {
+  const lines = [];
+  parts.forEach(([key, label]) => {
+    const control = document.querySelector(`[${attr}="${key}"]`);
+    const value = String(control?.value || "").trim();
+    if (value) lines.push(`${label}：${value}`);
+  });
+  return lines.join("\n");
+}
+
+function composeRoleplayUserParts() {
+  const lines = [];
+  roleplayVisionParts.forEach(([key, label]) => {
+    if (key === "nickname") {
+      const value = String(document.querySelector('#roleplayProfileForm [name="default_nickname"]')?.value || "").trim();
+      if (value) lines.push(`${label}：${value}`);
+      return;
+    }
+    const control = document.querySelector(`[data-roleplay-user-part="${key}"], [data-roleplay-vision-part="${key}"]`);
+    const value = String(control?.value || "").trim();
+    if (value) lines.push(`${label}：${value}`);
+  });
+  return lines.join("\n");
+}
+
+function composeTranslationParts() {
+  const lines = [];
+  roleplayTranslationParts.forEach((label) => {
+    const control = document.querySelector(`[data-roleplay-translation-part="${label}"]`);
+    const value = String(control?.value || "").trim();
+    if (value) lines.push(`${label} = ${value}`);
+  });
+  return lines.join("\n");
+}
+
+function syncRoleplayStandardFieldsToFreeform() {
+  if (roleplayMode() !== "standard") return;
+  const mappings = [
+    ["schedule_persona_prompt", composeLabeledParts("data-roleplay-persona-part", roleplayPersonaParts)],
+    ["schedule_worldview_prompt", composeLabeledParts("data-roleplay-world-part", roleplayWorldParts)],
+    ["worldview_adaptation_prompt", composeTranslationParts()],
+    ["private_image_self_recognition_hint", composeRoleplayUserParts()],
+  ];
+  mappings.forEach(([name, value]) => {
+    const target = document.querySelector(`#roleplayProfileForm [name="${name}"]`);
+    if (target) target.value = value;
+  });
+  syncRoleplayCoreFieldsFromPersona();
 }
 
 const newsSourcePresets = [
@@ -6102,7 +6420,7 @@ $("#groupFilter").addEventListener("input", renderGroups);
 $("#worldbookMemberFilter").addEventListener("input", renderWorldbook);
 $("#featureFilter").addEventListener("input", renderFeatureSwitches);
 $("#worldbookMembers").addEventListener("click", async (event) => {
-  const button = event.target instanceof Element ? event.target.closest("[data-worldbook-edit], [data-worldbook-member], [data-worldbook-save], [data-worldbook-memory-toggle], [data-worldbook-memory-delete], [data-worldbook-delete]") : null;
+  const button = event.target instanceof Element ? event.target.closest("[data-worldbook-edit], [data-worldbook-member], [data-worldbook-save], [data-worldbook-memory-toggle], [data-worldbook-memory-delete], [data-worldbook-observation-accept], [data-worldbook-observation-reject], [data-worldbook-delete]") : null;
   if (!button) return;
   event.preventDefault();
   await handleWorldbookMemberAction(button);
@@ -6248,7 +6566,9 @@ document.addEventListener("change", (event) => {
   syncNewsSourcesRaw();
 });
 
-["quickModuleForm", "environmentModuleForm", "privateModuleForm", "groupModuleForm", "worldbookModuleForm", "memoryModuleForm", "longTermModuleForm"].forEach((formId) => {
+bindRoleplayModeSwitch();
+
+["roleplayProfileForm", "quickModuleForm", "environmentModuleForm", "privateModuleForm", "groupModuleForm", "worldbookModuleForm", "memoryModuleForm", "longTermModuleForm"].forEach((formId) => {
   const form = document.getElementById(formId);
   if (!form) return;
   form.addEventListener("input", () => markModuleFormDirty(form));

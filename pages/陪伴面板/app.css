@@ -1938,6 +1938,273 @@ input[type="search"] {
   resize: vertical;
 }
 
+.roleplay-studio {
+  overflow: hidden;
+}
+
+.roleplay-form {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.3fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.roleplay-mode-switch {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 4px;
+  background: rgba(251, 250, 247, 0.86);
+}
+
+.roleplay-mode-switch button {
+  min-width: 96px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.roleplay-mode-switch button.is-active {
+  background: #fff;
+  color: var(--accent-strong);
+  box-shadow: var(--shadow-ring), 0 5px 14px rgba(47, 117, 102, 0.10);
+}
+
+.roleplay-studio[data-roleplay-mode="standard"] .roleplay-freeform,
+.roleplay-studio[data-roleplay-mode="freeform"] .roleplay-standard {
+  display: none;
+}
+
+.roleplay-form button {
+  grid-column: 1 / -1;
+  height: 40px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0 14px;
+  background: linear-gradient(180deg, #337d6d 0%, var(--accent-strong) 100%);
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 8px 18px rgba(47, 117, 102, 0.14);
+}
+
+.roleplay-form .roleplay-example-btn {
+  grid-column: auto;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(47, 117, 102, 0.22);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--accent-strong);
+  box-shadow: none;
+}
+
+.roleplay-form .roleplay-example-btn:hover {
+  background: #fff;
+}
+
+.persona-card,
+.world-blueprint,
+.roleplay-user-card {
+  border: 1px solid rgba(222, 217, 206, 0.86);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: var(--shadow-ring);
+}
+
+.persona-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(226, 241, 236, 0.72), rgba(255, 255, 255, 0.86) 42%),
+    #fff;
+}
+
+.persona-card-head,
+.blueprint-head,
+.roleplay-user-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.persona-avatar {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(47, 117, 102, 0.24);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 760;
+}
+
+.persona-card h3,
+.world-blueprint h3,
+.roleplay-user-card h3 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.persona-card p,
+.roleplay-user-card p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.persona-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.roleplay-textarea {
+  display: grid;
+  gap: 7px;
+}
+
+.roleplay-textarea textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+
+.roleplay-standard {
+  gap: 10px;
+}
+
+.persona-standard-grid,
+.blueprint-standard-grid,
+.user-standard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.translation-standard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  grid-column: 1 / -1;
+  padding-top: 2px;
+}
+
+.persona-standard-grid label,
+.blueprint-standard-grid label,
+.user-standard-grid label,
+.translation-standard-grid label {
+  display: grid;
+  gap: 7px;
+}
+
+.roleplay-appearance-group {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  grid-column: 1 / -1;
+  border: 1px solid rgba(47, 117, 102, 0.14);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: rgba(226, 241, 236, 0.42);
+}
+
+.roleplay-appearance-group h4 {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--accent-strong);
+  font-size: 13px;
+}
+
+.roleplay-appearance-group label {
+  display: grid;
+  gap: 7px;
+}
+
+.roleplay-standard textarea {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.world-blueprint {
+  position: relative;
+  overflow: hidden;
+  padding: 14px;
+  background:
+    linear-gradient(rgba(66, 111, 156, 0.075) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(66, 111, 156, 0.07) 1px, transparent 1px),
+    linear-gradient(135deg, rgba(229, 237, 246, 0.82), rgba(255, 255, 255, 0.9) 52%);
+  background-size: 24px 24px, 24px 24px, auto;
+}
+
+.blueprint-head {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, auto) minmax(170px, 0.35fr);
+  gap: 12px;
+  align-items: start;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.blueprint-head span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.blueprint-head label {
+  display: grid;
+  gap: 7px;
+  min-width: 160px;
+}
+
+.blueprint-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.blueprint-grid > .blueprint-standard-grid {
+  grid-column: 1 / -1;
+}
+
+.roleplay-user-card {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.38fr) minmax(220px, 0.24fr) minmax(420px, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  background: linear-gradient(135deg, rgba(239, 231, 240, 0.74), rgba(255, 255, 255, 0.9) 48%);
+}
+
+.roleplay-user-card > .roleplay-example-btn {
+  justify-self: stretch;
+}
+
+.roleplay-user-card > .roleplay-textarea,
+.roleplay-user-card > .user-standard-grid {
+  grid-column: 1 / -1;
+}
+
+.roleplay-user-fields {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.roleplay-user-fields label {
+  display: grid;
+  gap: 7px;
+}
+
 .wide-field {
   grid-column: 1 / -1;
 }
@@ -6193,6 +6460,12 @@ pre {
   padding: 18px 0;
 }
 
+@media (max-width: 1040px) {
+  .roleplay-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 860px) {
   .shell {
     width: min(100vw - 20px, 1320px);
@@ -6229,6 +6502,13 @@ pre {
   .feature-switch-list,
   .module-grid,
   .module-form,
+  .roleplay-form,
+  .persona-fields,
+  .blueprint-head,
+  .blueprint-grid,
+  .roleplay-user-card,
+  .user-standard-grid,
+  .roleplay-appearance-group,
   .module-subgroup,
   .worldbook-summary,
   .worldbook-layout,

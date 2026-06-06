@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>陪伴面板</title>
-  <link rel="stylesheet" href="./app.css" />
+  <link rel="stylesheet" href="./app.css?v=20260607-roleplay-world-layout2" />
 </head>
 <body>
   <main class="shell">
@@ -21,6 +21,7 @@
     <section class="layout">
       <nav class="tabs" aria-label="视图">
         <button class="tab is-active" data-tab="dashboard">总览</button>
+        <button class="tab" data-tab="roleplay">角色设定</button>
         <button class="tab" data-tab="private">私聊</button>
         <button class="tab" data-tab="group">群聊</button>
         <button class="tab" data-tab="worldbook">关系网</button>
@@ -80,6 +81,157 @@
             <div id="activityHeatmap" class="heatmap"></div>
           </article>
         </div>
+      </section>
+
+      <section class="panel" id="panel-roleplay">
+        <div class="section-head">
+          <div>
+            <h2>角色和世界观设定</h2>
+            <span class="muted">集中维护本插件用于日程、状态、主动行为、识图和世界观翻译的设定补充</span>
+          </div>
+        </div>
+        <article class="roleplay-studio module-card" data-roleplay-mode="freeform">
+          <div class="module-card-head">
+            <div>
+              <h2>设定工作台</h2>
+              <span class="section-desc">不会覆盖 AstrBot 主人格；这里是给陪伴插件使用的角色和生活背景补充。</span>
+            </div>
+            <span class="module-badge">Roleplay</span>
+          </div>
+          <div class="roleplay-mode-switch" role="group" aria-label="设定填写模式">
+            <button type="button" class="is-active" data-roleplay-mode="freeform">旧版文案</button>
+            <button type="button" data-roleplay-mode="standard">标准化填写</button>
+          </div>
+          <form id="roleplayProfileForm" class="roleplay-form">
+            <section class="persona-card">
+              <div class="persona-card-head">
+                <span class="persona-avatar" aria-hidden="true">设</span>
+                <div>
+                  <h3>角色</h3>
+                  <p>她是谁、怎样说话、能做到什么。</p>
+                </div>
+                <button type="button" class="roleplay-example-btn" data-roleplay-example="persona">填入示例</button>
+              </div>
+              <input name="bot_name" type="hidden" />
+              <input name="default_style" type="hidden" />
+              <label class="roleplay-textarea roleplay-freeform">角色设定补充
+                <textarea name="schedule_persona_prompt" rows="10" placeholder="姓名：
+种族：
+年龄：
+性别：
+外貌：
+发型发色：
+瞳色：
+服饰风格：
+职业/身份：
+性格描述：
+核心欲望/目标：
+爱好：
+禁忌：
+关键设定：
+其他补充信息："></textarea>
+              </label>
+              <div class="roleplay-standard persona-standard-grid">
+                <label>姓名 <textarea data-roleplay-persona-part="name" rows="2"></textarea></label>
+                <label>种族 <textarea data-roleplay-persona-part="species" rows="2"></textarea></label>
+                <label>年龄 <textarea data-roleplay-persona-part="age" rows="2"></textarea></label>
+                <label>性别 <textarea data-roleplay-persona-part="gender" rows="2"></textarea></label>
+                <div class="roleplay-appearance-group">
+                  <h4>外貌信息</h4>
+                  <label>外貌 <textarea data-roleplay-persona-part="appearance" rows="2"></textarea></label>
+                  <label>发型发色 <textarea data-roleplay-persona-part="hair" rows="2"></textarea></label>
+                  <label>瞳色 <textarea data-roleplay-persona-part="eyes" rows="2"></textarea></label>
+                  <label>服饰风格 <textarea data-roleplay-persona-part="clothing" rows="2"></textarea></label>
+                </div>
+                <label>职业/身份 <textarea data-roleplay-persona-part="identity" rows="2"></textarea></label>
+                <label>性格描述 <textarea data-roleplay-persona-part="personality" rows="2"></textarea></label>
+                <label>核心欲望/目标 <textarea data-roleplay-persona-part="desire" rows="2"></textarea></label>
+                <label>爱好 <textarea data-roleplay-persona-part="hobbies" rows="2"></textarea></label>
+                <label>禁忌 <textarea data-roleplay-persona-part="taboo" rows="2"></textarea></label>
+                <label>关键设定 <textarea data-roleplay-persona-part="key_lore" rows="2"></textarea></label>
+                <label class="wide-field">其他补充信息 <textarea data-roleplay-persona-part="extra" rows="2"></textarea></label>
+              </div>
+            </section>
+
+            <section class="world-blueprint">
+              <div class="blueprint-head">
+                <div>
+                  <span>World Blueprint</span>
+                  <h3>世界观蓝图</h3>
+                </div>
+                <button type="button" class="roleplay-example-btn" data-roleplay-example="world">填入示例</button>
+                <label>适配模式
+                  <select name="worldview_adaptation_mode">
+                    <option value="auto">auto</option>
+                    <option value="modern">modern</option>
+                    <option value="fantasy">fantasy</option>
+                    <option value="sci_fi">sci_fi</option>
+                    <option value="custom">custom</option>
+                    <option value="off">off</option>
+                  </select>
+                </label>
+              </div>
+              <div class="blueprint-grid">
+                <label class="roleplay-textarea roleplay-freeform">世界观/生活背景
+                  <textarea name="schedule_worldview_prompt" rows="8" placeholder="所处世界：
+时代背景：
+基本法则/基调：
+特殊规则：
+主要活动场景：
+世界观关系网：
+其他补充信息："></textarea>
+                </label>
+                <label class="roleplay-textarea roleplay-freeform">世界观翻译提示
+                  <textarea name="worldview_adaptation_prompt" rows="8" placeholder="群聊 = 公会闲谈
+识屏 = 水晶映像
+B站 = 影像记录
+QQ空间 = 公开札记
+书柜 = 行囊书匣"></textarea>
+                </label>
+                <div class="roleplay-standard blueprint-standard-grid">
+                  <label>所处世界 <textarea data-roleplay-world-part="world" rows="2"></textarea></label>
+                  <label>时代背景 <textarea data-roleplay-world-part="era" rows="2"></textarea></label>
+                  <label>基本法则/基调 <textarea data-roleplay-world-part="tone" rows="2"></textarea></label>
+                  <label>特殊规则 <textarea data-roleplay-world-part="rules" rows="2"></textarea></label>
+                  <label>主要活动场景 <textarea data-roleplay-world-part="scenes" rows="2"></textarea></label>
+                  <label>世界观关系网 <textarea data-roleplay-world-part="network" rows="2"></textarea></label>
+                  <label class="wide-field">其他补充信息 <textarea data-roleplay-world-part="extra" rows="2"></textarea></label>
+                </div>
+                <div class="roleplay-standard translation-standard-grid">
+                  <label>群聊 <input data-roleplay-translation-part="群聊" placeholder="例如 公会闲谈" /></label>
+                  <label>识屏 <input data-roleplay-translation-part="识屏" placeholder="例如 水晶映像" /></label>
+                  <label>B站 <input data-roleplay-translation-part="B站" placeholder="例如 影像记录" /></label>
+                  <label>QQ空间 <input data-roleplay-translation-part="QQ空间" placeholder="例如 公开札记" /></label>
+                  <label>书柜 <input data-roleplay-translation-part="书柜" placeholder="例如 行囊书匣" /></label>
+                </div>
+              </div>
+            </section>
+
+            <section class="roleplay-user-card">
+              <div>
+                <h3>用户</h3>
+                <p>角色如何称呼用户、如何理解彼此关系，以及平时怎样相处。</p>
+              </div>
+              <button type="button" class="roleplay-example-btn" data-roleplay-example="user">填入示例</button>
+              <div class="roleplay-user-fields">
+                <label>对用户的称呼 <input name="default_nickname" /></label>
+              </div>
+              <label class="roleplay-textarea roleplay-freeform">用户补充信息
+                <textarea name="private_image_self_recognition_hint" rows="5" placeholder="对用户的称呼：
+是角色的XX：
+与角色的相处方式：
+其他补充信息："></textarea>
+              </label>
+              <div class="roleplay-standard user-standard-grid">
+                <label>是角色的XX <textarea data-roleplay-user-part="role_relation" rows="2"></textarea></label>
+                <label>与角色的相处方式 <textarea data-roleplay-user-part="interaction" rows="2"></textarea></label>
+                <label class="wide-field">其他补充信息 <textarea data-roleplay-user-part="extra" rows="2"></textarea></label>
+              </div>
+            </section>
+
+            <button type="submit">保存角色设定</button>
+          </form>
+        </article>
       </section>
 
       <section class="panel" id="panel-private">
@@ -454,22 +606,8 @@
               <span class="module-badge">基础</span>
             </div>
             <form id="quickModuleForm" class="module-form">
-              <label>Bot 名字 <input name="bot_name" /></label>
               <label>目标平台 <input name="target_platform" /></label>
               <label>私聊目标 QQ <textarea name="target_user_ids" rows="4" placeholder="一行一个或逗号分隔"></textarea></label>
-              <label>默认称呼 <input name="default_nickname" /></label>
-              <label>默认语气 <input name="default_style" /></label>
-              <label>世界观适配
-                <select name="worldview_adaptation_mode">
-                  <option value="auto">auto</option>
-                  <option value="modern">modern</option>
-                  <option value="fantasy">fantasy</option>
-                  <option value="sci_fi">sci_fi</option>
-                  <option value="custom">custom</option>
-                  <option value="off">off</option>
-                </select>
-              </label>
-              <label class="wide-field">自定义适配提示 <textarea name="worldview_adaptation_prompt" rows="3" placeholder="例如：群聊=冒险者公会闲谈；书柜=行囊书匣；识屏=水晶映像。"></textarea></label>
               <label>免打扰时间 <input name="quiet_hours" placeholder="23:00-08:30" /></label>
               <button type="submit">保存快速启动</button>
             </form>
@@ -796,6 +934,6 @@
     </section>
   </main>
 
-  <script src="./app.js?v=20260529-creative-page1"></script>
+  <script src="./app.js?v=20260607-roleplay-appearance-anchor1"></script>
 </body>
 </html>
