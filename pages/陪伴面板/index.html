@@ -725,11 +725,16 @@ QQ空间 = 公开札记
               <label>打断文本 <input name="group_repeat_interrupt_text" placeholder="禁止复读" /></label>
               <label class="wide-field">打断表情包路径 <input name="group_repeat_interrupt_image_path" placeholder="C:\\path\\to\\meme.png" /></label>
               <label class="toggle-row"><input name="enable_group_repeat_follow" type="checkbox" /> <span>启用复读跟读</span></label>
-              <label class="toggle-row"><input name="enable_proactive_quote_trigger_message" type="checkbox" /> <span>主动消息引用触发消息</span></label>
+              <label class="toggle-row"><input name="enable_proactive_quote_trigger_message" type="checkbox" /> <span>群回复/主动引用触发消息</span></label>
               <label class="toggle-row"><input name="enable_group_conversation_followup" type="checkbox" /> <span>启用连续对话保持</span></label>
               <label>连续对话判断秒数 <input name="group_conversation_followup_seconds" type="number" min="0" max="600" /></label>
               <label>连续续接上限 <input name="group_conversation_followup_max_turns" type="number" min="0" max="10" /></label>
               <label>场景感知最近消息数 <input name="group_scene_recent_limit" type="number" min="2" max="12" /></label>
+              <label class="toggle-row"><input name="enable_group_high_intensity_mode" type="checkbox" /> <span>群聊高强度收口</span></label>
+              <label>高强度窗口秒数 <input name="group_high_intensity_wakeup_window_seconds" type="number" min="15" max="600" /></label>
+              <label>高强度唤醒阈值 <input name="group_high_intensity_wakeup_threshold" type="number" min="2" max="20" /></label>
+              <label>收口持续秒数 <input name="group_high_intensity_cooldown_seconds" type="number" min="30" max="1800" /></label>
+              <label>合并等待秒数 <input name="group_high_intensity_merge_seconds" type="number" min="1" max="30" /></label>
               <label class="toggle-row"><input name="enable_forward_message_adaptation" type="checkbox" /> <span>启用合并消息阅读</span></label>
               <label>合并消息适配方式
                 <select name="forward_message_mode">
@@ -776,6 +781,8 @@ QQ空间 = 公开札记
             </div>
             <form id="memoryModuleForm" class="module-form">
               <label>每日插件 Token 限额 <input name="daily_token_limit" type="number" min="0" step="10000" /></label>
+              <label class="toggle-row"><input name="enable_daily_token_soft_limit" type="checkbox" /> <span>启用每日 Token 软限额</span></label>
+              <label>每日 Token 软限额 <input name="daily_token_soft_limit" type="number" min="0" step="10000" /></label>
               <label>长期画像整理间隔分钟 <input name="memory_refresh_interval_minutes" type="number" min="30" /></label>
               <label>片段整理消息阈值 <input name="episode_memory_refresh_messages" type="number" min="1" /></label>
               <label>片段整理时间阈值分钟 <input name="episode_memory_refresh_minutes" type="number" min="1" /></label>

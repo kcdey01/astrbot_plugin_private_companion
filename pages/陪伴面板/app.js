@@ -10,6 +10,7 @@ const state = {
   availableProviders: [],
   tokenStats: null,
   bookshelfUnlocked: null,
+  bookshelfAccessToken: "",
   selectedBook: null,
   bookshelfPage: "shelf",
   selectedBookSpreadIndex: 0,
@@ -129,6 +130,7 @@ const featureMeta = {
   enable_group_scene_awareness: ["群聊场景感知", "推断当前消息是在对 Bot、某个群友还是整个群说话，减少误以为别人都在问自己。"],
   enable_group_reality_promise_guard: ["阻止群聊现实承诺", "群聊里避免承诺自己能拉人、修网、开房间或操作现实设备；私聊扮演不受影响。"],
   enable_group_wakeup_enhancement: ["群聊唤醒强化", "通过强唤醒词、弱相关唤醒词和兴趣关键词，让 Bot 在群里被自然叫到或碰到感兴趣话题时进入回复链。"],
+  enable_group_high_intensity_mode: ["群聊高强度收口", "短时间连续被 @、引用或增强唤醒后，自动合并同群后续唤醒消息，并暂停非必要群聊后台任务，减少 LLM 过载。"],
   enable_group_conversation_followup: ["连续对话保持", "群里叫过 Bot 后，短时间内判断同一用户没继续 @ 的话是否仍在对 Bot 说。"],
   enable_group_interjection: ["群主动插话", "允许 Bot 在群聊里主动插一句。谨慎开启。"],
   enable_group_repeat_follow: ["复读处理", "同一句话连续复读超过三次时，可跟读一次或打断一次。"],
@@ -152,12 +154,13 @@ const featureMeta = {
   enable_web_exploration_boredom_search: ["空档自主搜索", "空闲或无聊时先自行决定搜索主题，再调用网页搜索了解新鲜事物。"],
   enable_qzone_integration: ["QQ 空间动态", "整合查看、点赞、评论和发布说说入口。"],
   enable_qzone_life_publish: ["生活说说", "根据状态、日程和日记余味低频发布公开生活动态。"],
+  enable_photo_text_action: ["主动拍照/生图", "允许 Bot 在合适的主动动机下生成真实图片；本地 ComfyUI 可在电脑忙时自动延后。"],
   enable_private_reading_integration: ["夹层阅读素材", "检测到可用素材能力时，允许作为低频私下阅读来源。"],
   enable_private_reading_boredom_read: ["私下阅读", "空档、无聊或夜里低频自己搜索并阅读，形成内部印象。"],
   enable_private_reading_ask_recommendation: ["征求推荐", "空档或无聊时，低频私聊询问用户有没有好看的本子或漫画推荐。"],
   enable_private_reading_preference_influence: ["私密偏好影响", "评分样本足够后，把稳定偏好作为私聊私密互动的弱背景。"],
   enable_unanswered_screen_peek_followup: ["沉默后窥屏", "主动消息后用户长时间没回、且 Bot 正好无聊时，可免日次数窥屏确认用户在做什么。"],
-  enable_proactive_quote_trigger_message: ["主动引用触发消息", "群主动插话、复读跟读/打断时引用当前触发的群消息；私聊预约主动只作兼容。"],
+  enable_proactive_quote_trigger_message: ["群回复/主动引用触发消息", "群聊被 @、引用、唤醒或连续对话保持时，回复引用当前触发消息；群主动插话也可引用，复读跟读/打断不引用。"],
   enable_creative_writing: ["私下创作", "闲暇时可选地因生活小事、日记碎片或梦境灵感写一点文本作品。"],
   creative_hidden_mode: ["低调创作模式", "默认不汇报创作，只在节点或用户询问时自然提起。"],
 };
@@ -209,6 +212,7 @@ const featureGroups = [
       "enable_group_scene_awareness",
       "enable_group_reality_promise_guard",
       "enable_group_wakeup_enhancement",
+      "enable_group_high_intensity_mode",
       "enable_group_conversation_followup",
       "enable_group_slang_learning",
       "enable_group_slang_meanings",
@@ -247,6 +251,7 @@ const featureGroups = [
       "enable_web_exploration_boredom_search",
       "enable_qzone_integration",
       "enable_qzone_life_publish",
+      "enable_photo_text_action",
       "enable_private_reading_integration",
       "enable_private_reading_boredom_read",
       "enable_private_reading_ask_recommendation",
@@ -288,7 +293,7 @@ const configLabels = {
   inbound_message_debounce_seconds: "用户消息防抖秒数",
   enable_semantic_message_debounce: "图片防抖",
   semantic_message_debounce_seconds: "收口等待秒数",
-  enable_proactive_quote_trigger_message: "主动引用触发消息",
+  enable_proactive_quote_trigger_message: "群回复/主动引用触发消息",
   private_image_vision_wait_seconds: "单图等待识图秒数",
   enable_private_image_self_recognition: "图片转述增强",
   private_image_self_recognition_hint: "Bot 自我识别线索",
@@ -321,6 +326,8 @@ const configLabels = {
   max_group_recent_messages: "群聊最近消息上限",
   max_group_slang_terms: "群黑话上限",
   daily_token_limit: "每日 Token 限额",
+  enable_daily_token_soft_limit: "启用每日 Token 软限额",
+  daily_token_soft_limit: "每日 Token 软限额",
   humanized_state_intensity: "拟人状态强度",
   enable_humanized_states: "拟人身体状态",
   inject_passive_states: "被动状态注入",
@@ -365,6 +372,11 @@ const configLabels = {
   group_wakeup_fatigue_limit: "唤醒疲劳阈值",
   group_wakeup_fatigue_decay_minutes: "疲劳恢复分钟",
   group_wakeup_log_limit: "唤醒记录上限",
+  enable_group_high_intensity_mode: "群聊高强度收口",
+  group_high_intensity_wakeup_window_seconds: "高强度窗口秒数",
+  group_high_intensity_wakeup_threshold: "高强度唤醒阈值",
+  group_high_intensity_cooldown_seconds: "收口持续秒数",
+  group_high_intensity_merge_seconds: "合并等待秒数",
   worldbook_auto_import: "启动时刷新关系网",
   worldbook_member_match_aliases: "允许别名辅助匹配",
   worldbook_self_registration: "允许群聊自登记",
@@ -414,6 +426,22 @@ const configLabels = {
   enable_web_exploration_boredom_search: "空档自主搜索",
   qzone_life_publish_min_interval_hours: "说说最小间隔",
   qzone_life_publish_probability: "说说触发概率",
+  enable_photo_text_action: "主动拍照/生图",
+  photo_action_max_daily: "每日主动生图上限",
+  photo_generation_backend: "主动生图后端",
+  COMFYUI_TEXT2IMG_WORKFLOW_NAME: "文生图工作流",
+  COMFYUI_SELFIE_WORKFLOW_NAME: "自拍工作流",
+  comfyui_photo_wait_seconds: "本地生图等待秒数",
+  enable_local_photo_load_guard: "电脑高负荷保护",
+  local_photo_cpu_busy_percent: "CPU 忙碌阈值",
+  local_photo_memory_busy_percent: "内存忙碌阈值",
+  local_photo_defer_minutes: "忙时延后分钟数",
+  EXTERNAL_IMAGE_API_BASE_URL: "在线图片 API 地址",
+  EXTERNAL_IMAGE_API_MODEL: "在线图片模型",
+  external_image_api_size: "在线生图尺寸",
+  external_image_api_timeout_seconds: "在线生图超时秒数",
+  photo_generation_style: "主动生图风格",
+  photo_generation_style_custom_prompt: "自定义风格说明",
   private_reading_min_interval_hours: "阅读最小间隔",
   private_reading_max_photo_count: "页数上限",
   private_reading_share_probability: "主动提起概率",
@@ -453,10 +481,13 @@ const configDescriptions = {
   idle_minutes: "用户多久没有活跃后，才被视为适合主动触达或分享的空闲状态。",
   min_interval_minutes: "同一私聊对象两次主动消息之间的最小间隔，避免频繁打扰。",
   max_daily_messages: "每个私聊对象每天最多收到多少条插件主动消息。",
+  daily_token_limit: "插件内部 LLM 任务的每日硬限额，达到后跳过非豁免后台调用。0 表示不限。",
+  enable_daily_token_soft_limit: "作为达到限额就停止插件/停止后台链路的替代方案。开启后，达到软限额时暂缓新闻、网页探索、创作、群整理、自检和主动生图等低优先级后台任务，优先保留用户当下触发的回复。",
+  daily_token_soft_limit: "今日插件内部 LLM 消耗达到该值后进入软降载。0 表示关闭软限额，只保留每日硬限额。",
   inbound_message_debounce_seconds: "收到用户消息后等待多久再处理，用于合并短时间内连续发来的文字。",
   enable_semantic_message_debounce: "开启后，私聊单图会先进入收口窗口，等待用户是否继续补充文字，再决定是否走图片转述回复。",
   semantic_message_debounce_seconds: "语义收口窗口。用户唤醒后继续补充时，会把窗口内文本当成一轮完整发言。",
-  enable_proactive_quote_trigger_message: "开启后，群聊主动插话、复读跟读/打断会引用当前触发的群消息；模型预约的私聊主动若能追溯到同一私聊消息，也会引用。跨群转私聊、新闻、日程和随机主动不会强行引用。",
+  enable_proactive_quote_trigger_message: "开启后，群聊被 @、引用、唤醒或连续对话保持时，Bot 的普通回复会引用当前触发消息；群聊主动插话会引用触发消息；模型预约的私聊主动若能追溯到同一私聊消息，也会引用。复读跟读/打断不会引用。",
   private_image_vision_wait_seconds: "私聊单图确认没有继续补充后，最多等待视觉转述多久。不是图片防抖时间；视觉提前完成会立刻进入主链。",
   private_image_self_recognition_hint: "补充 Bot 外观、头像、名字、表情包特征或常见自称，让视觉转述更容易判断图里是不是 Bot 自己。",
   enable_private_image_vision_cache: "开启后，同一张图片或表情包会按内容哈希复用上次视觉摘要，避免重复调用识图模型；不会缓存最终聊天回复。",
@@ -497,6 +528,11 @@ const configDescriptions = {
   group_wakeup_fatigue_limit: "短时间多次唤醒累计到多少点后，Bot 会更保守、更省力。强唤醒词仍然能叫到它。",
   group_wakeup_fatigue_decay_minutes: "每隔多少分钟自然恢复 1 点唤醒疲劳。数值越大，越会保留“刚被频繁叫到”的感觉。",
   group_wakeup_log_limit: "每个群最多保留多少条唤醒命中、冷却拦截和兴趣未触发记录。",
+  enable_group_high_intensity_mode: "短时间连续被明确叫到后自动进入收口降载，合并同群后续唤醒消息，并暂停弱相关/兴趣唤醒、群片段整理、黑话释义刷新和主动插话。",
+  group_high_intensity_wakeup_window_seconds: "统计连续唤醒的时间窗口。默认 60 秒，即一分钟内连续被叫到才进入高强度收口。",
+  group_high_intensity_wakeup_threshold: "窗口内达到多少次唤醒后进入收口。默认 3 次，用于减少连续 @、连续引用造成的多次 LLM 调用。",
+  group_high_intensity_cooldown_seconds: "进入收口降载后维持多久。期间明确 @ 或引用会被合并处理，非必要后台动作会让路。",
+  group_high_intensity_merge_seconds: "高强度期间第一条明确叫到 Bot 的消息会等待多久，用来把同一群后续叫 Bot 的消息合并进同一轮回复。",
   forward_message_mode: "注入：把合并消息摘要塞进主模型上下文；转述：先用专门模型读一遍再交给主模型。",
   forward_message_max_messages: "合并消息最多读取多少条节点，过多会截断。",
   forward_message_max_chars: "注入模式下放进主模型上下文的最大字符数。",
@@ -543,6 +579,21 @@ const configDescriptions = {
   web_exploration_max_results: "每次调用 AstrBot 网页搜索时最多读取多少条结果。",
   qzone_life_publish_min_interval_hours: "两次低频生活说说之间的最小间隔。",
   qzone_life_publish_probability: "满足条件时发布生活说说的概率，0-1。",
+  photo_action_max_daily: "每个私聊对象每天最多生成几张主动图片。真实生成成功就消耗额度，避免失败重试时反复生图。",
+  photo_generation_backend: "auto 优先本地 ComfyUI；电脑高负荷且在线图片 API 可用时会绕开本地。comfyui 只用本地，external 只用在线。",
+  COMFYUI_TEXT2IMG_WORKFLOW_NAME: "用于普通随手拍、风景、桌面小物等 photo_text 的 ComfyUI 工作流名。",
+  COMFYUI_SELFIE_WORKFLOW_NAME: "用于自拍或人像类 photo_text 的 ComfyUI 工作流名。",
+  comfyui_photo_wait_seconds: "本地 ComfyUI 工作流最多等待多久。超时后不会假装已经拍照。",
+  enable_local_photo_load_guard: "开启后，本地 ComfyUI 生图前读取 CPU/内存负载；负载偏高时延后本次主动计划，或在 auto 模式下改走在线图片 API。",
+  local_photo_cpu_busy_percent: "CPU 使用率达到该百分比时，暂缓本地 ComfyUI 生图。需要 psutil 可用；不可用时会放行。",
+  local_photo_memory_busy_percent: "内存使用率达到该百分比时，暂缓本地 ComfyUI 生图。",
+  local_photo_defer_minutes: "只有本地 ComfyUI 可用且电脑忙时，保留原主动计划并延后这么久再重试。",
+  EXTERNAL_IMAGE_API_BASE_URL: "OpenAI 兼容在线生图接口地址。API Key 仍在 AstrBot 原配置页维护，不在拓展页回显。",
+  EXTERNAL_IMAGE_API_MODEL: "在线图片模型名。填写后配合 API 地址和 Key 可作为 external 或 auto 的备选后端。",
+  external_image_api_size: "在线生图尺寸，例如 1024x1024、768x1344。",
+  external_image_api_timeout_seconds: "等待在线图片 API 返回结果的最长时间。",
+  photo_generation_style: "影响主动生图提示词的整体风格倾向，可填 真实、二次元 或 其他。",
+  photo_generation_style_custom_prompt: "当风格为“其他”时，把这里作为额外风格要求注入生图提示词。",
   private_reading_min_interval_hours: "两次私下阅读之间的最小间隔。",
   private_reading_max_photo_count: "只阅读页数不超过该值的素材，避免视觉理解成本过高。",
   private_reading_share_probability: "读完后主动提起阅读体验的概率，0-1。",
@@ -600,7 +651,8 @@ const featureSettingGroups = {
   enable_group_context_injection: ["max_group_recent_messages", "group_scene_recent_limit"],
   enable_forward_message_adaptation: ["forward_message_mode", "forward_message_max_messages", "forward_message_max_chars", "forward_message_parse_nested", "forward_message_image_vision", "forward_message_image_limit"],
   enable_group_scene_awareness: ["group_scene_recent_limit", "group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
-  enable_group_wakeup_enhancement: ["group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "group_scene_recent_limit"],
+  enable_group_wakeup_enhancement: ["group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_scene_recent_limit"],
+  enable_group_high_intensity_mode: ["group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds"],
   enable_group_conversation_followup: ["group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
   enable_group_slang_learning: ["max_group_slang_terms", "max_group_recent_messages"],
   enable_group_slang_meanings: ["max_group_slang_terms"],
@@ -626,6 +678,7 @@ const featureSettingGroups = {
   enable_web_exploration_boredom_search: ["web_exploration_interests", "web_exploration_min_interval_hours", "enable_external_event_self_link", "external_event_self_link_probability", "external_event_self_link_cooldown_hours", "web_exploration_max_results"],
   enable_qzone_integration: ["qzone_life_publish_min_interval_hours", "qzone_life_publish_probability"],
   enable_qzone_life_publish: ["qzone_life_publish_min_interval_hours", "qzone_life_publish_probability"],
+  enable_photo_text_action: ["photo_action_max_daily", "photo_generation_backend", "COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "comfyui_photo_wait_seconds", "enable_local_photo_load_guard", "local_photo_cpu_busy_percent", "local_photo_memory_busy_percent", "local_photo_defer_minutes", "EXTERNAL_IMAGE_API_BASE_URL", "EXTERNAL_IMAGE_API_MODEL", "external_image_api_size", "external_image_api_timeout_seconds", "photo_generation_style", "photo_generation_style_custom_prompt"],
   enable_private_reading_integration: ["private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_default_keywords", "private_reading_blocked_tags", "enable_private_reading_preference_influence", "private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_private_reading_boredom_read: ["private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_share_probability", "private_reading_default_keywords", "private_reading_blocked_tags", "enable_private_reading_preference_influence", "private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_private_reading_ask_recommendation: ["private_reading_ask_probability"],
@@ -692,15 +745,49 @@ const featureSettingSections = {
       keys: ["group_wakeup_cooldown_seconds", "group_wakeup_debounce_pending_penalty", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes"],
     },
     {
+      title: "高强度收口",
+      note: "连续被叫到时，合并同群后续唤醒消息，减少多次 LLM 调用和后台成本。",
+      keys: ["enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds"],
+    },
+    {
       title: "记录与上下文",
       note: "控制页面记录量和场景判断参考消息数。",
       keys: ["group_wakeup_log_limit", "group_scene_recent_limit"],
+    },
+  ],
+  enable_photo_text_action: [
+    {
+      title: "后端选择",
+      note: "本地 ComfyUI 和在线图片 API 的优先关系。",
+      keys: ["photo_generation_backend", "photo_action_max_daily"],
+    },
+    {
+      title: "本地 ComfyUI",
+      note: "用于主动图片生成的工作流和等待时间。",
+      keys: ["COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "comfyui_photo_wait_seconds"],
+    },
+    {
+      title: "电脑负载保护",
+      note: "电脑忙时抑制或延后本地生图，避免影响正在使用的机器。",
+      keys: ["enable_local_photo_load_guard", "local_photo_cpu_busy_percent", "local_photo_memory_busy_percent", "local_photo_defer_minutes"],
+    },
+    {
+      title: "在线图片 API",
+      note: "作为 external 后端，或 auto 模式下本地忙时的备选后端。",
+      keys: ["EXTERNAL_IMAGE_API_BASE_URL", "EXTERNAL_IMAGE_API_MODEL", "external_image_api_size", "external_image_api_timeout_seconds"],
+    },
+    {
+      title: "画面风格",
+      note: "只影响提示词组织，不改变后端配置。",
+      keys: ["photo_generation_style", "photo_generation_style_custom_prompt"],
     },
   ],
 };
 
 const featureSettingTypes = {
   forward_message_mode: { type: "select", options: [["inject", "注入"], ["transcribe", "转述"]] },
+  photo_generation_backend: { type: "select", options: [["auto", "auto"], ["comfyui", "ComfyUI"], ["external", "在线图片 API"]] },
+  photo_generation_style: { type: "select", options: [["真实", "真实"], ["二次元", "二次元"], ["其他", "其他"]] },
   segmented_proactive_scope: { type: "select", options: [["proactive_only", "仅插件主动"], ["all_llm", "全部 LLM 纯文本回复"]] },
   segmented_proactive_split_mode: { type: "select", options: [["regex", "正则"], ["words", "分段词列表"]] },
   segmented_proactive_interval_method: { type: "select", options: [["log", "按字数对数"], ["random", "随机"]] },
@@ -714,6 +801,7 @@ const featureSettingTypes = {
   group_wakeup_context_words: { type: "textarea" },
   group_wakeup_interest_keywords: { type: "textarea" },
   private_image_self_recognition_hint: { type: "textarea" },
+  photo_generation_style_custom_prompt: { type: "textarea" },
   segmented_proactive_regex: { type: "textarea" },
   segmented_proactive_split_words: { type: "textarea" },
   segmented_proactive_content_cleanup_rule: { type: "textarea" },
@@ -744,6 +832,8 @@ const percentSettingKeys = new Set([
   "group_wakeup_interest_probability",
   "group_wakeup_topic_interest_max_boost",
   "group_wakeup_debounce_pending_penalty",
+  "local_photo_cpu_busy_percent",
+  "local_photo_memory_busy_percent",
 ]);
 
 const presetCatalog = {
@@ -1630,6 +1720,8 @@ function renderTokens() {
   const estimatedRatio = Number(totals.estimated_ratio || 0);
   const budget = stats.budget || {};
   const dailyLimit = Number(budget.limit || 0);
+  const softLimit = Number(budget.soft_limit || 0);
+  const softRemaining = budget.soft_remaining == null ? null : Number(budget.soft_remaining || 0);
   const exemptUsed = Number(budget.exempt_used || 0);
   const dailyRemaining = budget.remaining == null ? null : Number(budget.remaining || 0);
   renderTokenToolbar(stats);
@@ -1639,6 +1731,12 @@ function renderTokens() {
   const budgetCards = scope.isToday ? [
     miniStat("今日上限", dailyLimit > 0 ? formatCompactNumber(dailyLimit) : "不限"),
     miniStat("今日剩余", dailyRemaining == null ? "不限" : formatCompactNumber(dailyRemaining)),
+    miniStat(
+      budget.soft_active ? "软限额已接管" : "每日软限额",
+      budget.soft_enabled && softLimit > 0
+        ? (budget.soft_active ? `已暂缓 ${formatNumber(budget.deferred_calls || 0)} 次` : `剩 ${formatCompactNumber(softRemaining)}`)
+        : "关闭",
+    ),
     miniStat("主动消息", formatCompactNumber(exemptUsed)),
   ] : [];
   $("#tokenSummary").innerHTML = [
@@ -5329,6 +5427,7 @@ function featureDependencyLines(key) {
   if (["enable_bilibili_boredom_watch"].includes(key)) dependencies.push(["依赖", "B 站能力可用"]);
   if (["enable_web_exploration", "enable_web_exploration_boredom_search"].includes(key)) dependencies.push(["依赖", "AstrBot 网页搜索"]);
   if (["enable_qzone_life_publish"].includes(key)) dependencies.push(["依赖", "QQ 空间动态层"]);
+  if (key === "enable_photo_text_action") dependencies.push(["依赖", "ComfyUI 或在线图片 API"]);
   if (key.startsWith("enable_private_reading_")) dependencies.push(["依赖", "素材能力可用"]);
   if (key === "enable_private_image_self_recognition") dependencies.push(["依赖", "首选/备选识图模型"]);
   if (["enable_group_interjection", "enable_bilibili_boredom_watch", "enable_news_boredom_read", "enable_web_exploration_boredom_search", "enable_private_reading_boredom_read", "enable_private_reading_ask_recommendation", "enable_unanswered_screen_peek_followup"].includes(key)) {
@@ -5523,6 +5622,12 @@ const featureDetailGuides = {
     trigger: "群聊出现配置词、Bot 名字、关系网相关称呼或兴趣话题时。",
     enabled: "Bot 更像会被自然叫到，也会偶尔被感兴趣话题吸引。",
     disabled: "主要依赖 @、指令或 AstrBot 原本触发方式。",
+  },
+  enable_group_high_intensity_mode: {
+    summary: "自动识别连续唤醒的热闹群聊，把同群后续唤醒消息合并成一轮回复。",
+    trigger: "统计窗口内多次 @、引用 Bot 或增强唤醒时。",
+    enabled: "按合并等待秒数收口，减少多次 LLM 调用，并暂停弱相关/兴趣唤醒、群片段整理、黑话释义刷新和主动插话。",
+    disabled: "群聊仍按普通收口、续接和后台刷新流程运行。",
   },
   enable_group_conversation_followup: {
     summary: "群里叫过 Bot 后，判断同一用户后续没 @ 的话是否仍然是在和 Bot 说。",
@@ -5745,7 +5850,7 @@ function featureImpactLines(key) {
     lines.push(["场景", "群聊 / 转述 / 关系网"]);
   } else if (key === "enable_private_image_self_recognition") {
     lines.push(["场景", "私聊图片 / 表情包"]);
-  } else if (key.startsWith("enable_bilibili_") || key.startsWith("enable_news_") || key === "enable_external_event_self_link" || key.startsWith("enable_web_exploration") || key.startsWith("enable_qzone_") || key.startsWith("enable_private_reading_") || key === "enable_creative_writing" || key === "creative_hidden_mode") {
+  } else if (key.startsWith("enable_bilibili_") || key.startsWith("enable_news_") || key === "enable_external_event_self_link" || key.startsWith("enable_web_exploration") || key.startsWith("enable_qzone_") || key === "enable_photo_text_action" || key.startsWith("enable_private_reading_") || key === "enable_creative_writing" || key === "creative_hidden_mode") {
     lines.push(["场景", "长线主动"]);
   } else if (key.startsWith("enable_environment_") || key.includes("perception")) {
     lines.push(["场景", "日程 / 状态 / 回复"]);
@@ -6479,6 +6584,7 @@ async function deleteSelectedBookshelfItem(button = null) {
       album_id: albumId,
       title,
       date: diaryDate,
+      access_token: state.bookshelfAccessToken || state.bookshelfUnlocked?.access_token || "",
     });
     if (!result.changed) {
       showToast("没有找到要移除的书柜条目，请刷新拓展页后再试。", "error");
@@ -6489,6 +6595,7 @@ async function deleteSelectedBookshelfItem(button = null) {
       return;
     }
     state.bookshelfUnlocked = result.bookshelf || null;
+    state.bookshelfAccessToken = result.bookshelf?.access_token || state.bookshelfAccessToken || "";
     state.selectedBook = null;
     state.bookshelfPage = "shelf";
     state.selectedBookSpreadIndex = 0;
@@ -6513,8 +6620,14 @@ async function rateSelectedBookshelfItem(button = null) {
   }
   const reason = "";
   await runAction(async () => {
-    const result = await postJson("/bookshelf/rate", { album_id: albumId, rating, reason });
+    const result = await postJson("/bookshelf/rate", {
+      album_id: albumId,
+      rating,
+      reason,
+      access_token: state.bookshelfAccessToken || state.bookshelfUnlocked?.access_token || "",
+    });
     state.bookshelfUnlocked = result.bookshelf || null;
+    state.bookshelfAccessToken = result.bookshelf?.access_token || state.bookshelfAccessToken || "";
     const updated = allBookshelfBooks().find((item) => item.kind === "jm_album" && String(item.album_id || "") === String(albumId));
     if (updated) state.selectedBook = updated;
     renderBookshelf();
@@ -6547,6 +6660,7 @@ $("#bookshelfUnlockForm").addEventListener("submit", async (event) => {
   try {
     const result = await postJson("/bookshelf/unlock", { password });
     state.bookshelfUnlocked = result.bookshelf || null;
+    state.bookshelfAccessToken = result.bookshelf?.access_token || "";
     state.selectedBook = null;
     state.bookshelfPage = "shelf";
     renderBookshelf();

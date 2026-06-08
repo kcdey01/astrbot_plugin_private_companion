@@ -7,6 +7,7 @@ import shutil
 import base64
 import hashlib
 import mimetypes
+import secrets
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -480,8 +481,9 @@ class PrivateCompanionPageApi:
             async with self.plugin._data_lock:
                 if not self._bookshelf_password_matches(password, expected):
                     return self._error("密码不对。需要在聊天里自然向 Bot 询问。")
+                access_token = self._issue_bookshelf_access_token()
                 data = deepcopy(self.plugin.data)
-            return self._ok({"bookshelf": await self._bookshelf_summary(data, unlocked=True)})
+            return self._ok({"bookshelf": await self._bookshelf_summary(data, unlocked=True, access_token=access_token)})
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 解锁书柜夹层失败: {exc}", exc_info=True)
             return self._error(str(exc))
@@ -502,7 +504,42 @@ class PrivateCompanionPageApi:
             return True
         return len(normalized_expected) >= 2 and normalized_expected in normalized_provided
 
+    def _bookshelf_access_tokens(self) -> dict[str, float]:
+        store = getattr(self.plugin, "_bookshelf_access_tokens", None)
+        if not isinstance(store, dict):
+            store = {}
+            setattr(self.plugin, "_bookshelf_access_tokens", store)
+        now = time.time()
+        for token, expires_at in list(store.items()):
+            if self._float(expires_at) <= now:
+                store.pop(token, None)
+        return store
+
+    def _issue_bookshelf_access_token(self) -> str:
+        token = secrets.token_urlsafe(24)
+        self._bookshelf_access_tokens()[token] = time.time() + 2 * 3600
+        return token
+
+    def _bookshelf_access_token_valid(self, token: Any) -> bool:
+        token_text = self._single_line(token, 120)
+        if not token_text:
+            return False
+        expires_at = self._bookshelf_access_tokens().get(token_text)
+        return bool(expires_at and self._float(expires_at) > time.time())
+
+    def _bookshelf_request_token(self, payload: dict[str, Any] | None = None) -> str:
+        if isinstance(payload, dict):
+            token = self._single_line(payload.get("access_token") or payload.get("token"), 120)
+            if token:
+                return token
+        return self._single_line(request.args.get("access_token") or request.args.get("token"), 120)
+
+    def _bookshelf_access_error(self) -> dict[str, str]:
+        return {"error": "夹层访问已过期，请重新输入密码打开抽屉"}
+
     async def get_bookshelf_image(self):
+        if not self._bookshelf_access_token_valid(self._bookshelf_request_token()):
+            return self._error(self._bookshelf_access_error()["error"])
         resolved = await self._resolve_bookshelf_image_path_from_request()
         if isinstance(resolved, dict):
             return self._error(str(resolved.get("error") or "图片不存在"))
@@ -516,6 +553,8 @@ class PrivateCompanionPageApi:
             return self._error(str(exc))
 
     async def get_bookshelf_image_data(self) -> dict[str, Any]:
+        if not self._bookshelf_access_token_valid(self._bookshelf_request_token()):
+            return self._error(self._bookshelf_access_error()["error"])
         resolved = await self._resolve_bookshelf_image_path_from_request()
         if isinstance(resolved, dict):
             return self._error(str(resolved.get("error") or "图片不存在"))
@@ -590,6 +629,9 @@ class PrivateCompanionPageApi:
 
     async def delete_bookshelf_item(self) -> dict[str, Any]:
         payload = await request.get_json(silent=True) or {}
+        access_token = self._bookshelf_request_token(payload)
+        if not self._bookshelf_access_token_valid(access_token):
+            return self._error(self._bookshelf_access_error()["error"])
         kind = self._single_line(payload.get("kind"), 32)
         item_id = self._single_line(payload.get("id"), 80)
         album_payload_id = self._single_line(payload.get("album_id"), 80)
@@ -694,7 +736,7 @@ class PrivateCompanionPageApi:
                 if changed:
                     self.plugin._save_data_sync()
                 data = deepcopy(self.plugin.data)
-            return self._ok({"changed": changed, "bookshelf": await self._bookshelf_summary(data, unlocked=True)})
+            return self._ok({"changed": changed, "bookshelf": await self._bookshelf_summary(data, unlocked=True, access_token=access_token)})
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 删除书柜项目失败: {exc}", exc_info=True)
             return self._error(str(exc))
@@ -747,6 +789,9 @@ class PrivateCompanionPageApi:
 
     async def rate_bookshelf_item(self) -> dict[str, Any]:
         payload = await request.get_json(silent=True) or {}
+        access_token = self._bookshelf_request_token(payload)
+        if not self._bookshelf_access_token_valid(access_token):
+            return self._error(self._bookshelf_access_error()["error"])
         album_id = self._single_line(payload.get("album_id") or payload.get("id"), 32)
         rating = self._int(payload.get("rating"))
         reason = self._single_line(payload.get("reason"), 160)
@@ -786,7 +831,7 @@ class PrivateCompanionPageApi:
                     updater(target)
                 self.plugin._save_data_sync()
                 data = deepcopy(self.plugin.data)
-            return self._ok({"bookshelf": await self._bookshelf_summary(data, unlocked=True)})
+            return self._ok({"bookshelf": await self._bookshelf_summary(data, unlocked=True, access_token=access_token)})
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 保存夹层藏书评分失败: {exc}", exc_info=True)
             return self._error(str(exc))
@@ -1242,6 +1287,12 @@ class PrivateCompanionPageApi:
 
     def _group_wakeup_runtime(self, group: dict[str, Any]) -> dict[str, Any]:
         fatigue = group.get("group_wakeup_fatigue") if isinstance(group.get("group_wakeup_fatigue"), dict) else {}
+        high_intensity = {}
+        if hasattr(self.plugin, "_group_high_intensity_state"):
+            try:
+                high_intensity = self.plugin._group_high_intensity_state(group, mutate=False)
+            except Exception:
+                high_intensity = {}
         value = self._float(fatigue.get("value"))
         limit = self._int(fatigue.get("limit")) or int(getattr(self.plugin, "group_wakeup_fatigue_limit", 5) or 5)
         ratio = max(0.0, min(1.0, value / max(1, limit)))
@@ -1264,6 +1315,14 @@ class PrivateCompanionPageApi:
             "label": label,
             "level": level,
             "updated": self.plugin._format_timestamp_elapsed(fatigue.get("updated_ts", 0)),
+            "high_intensity": {
+                "active": bool(high_intensity.get("active")) if isinstance(high_intensity, dict) else False,
+                "reason": self._single_line(high_intensity.get("reason"), 40) if isinstance(high_intensity, dict) else "",
+                "recent_wakeups": self._int(high_intensity.get("recent_wakeups")) if isinstance(high_intensity, dict) else 0,
+                "threshold": self._int(high_intensity.get("threshold")) if isinstance(high_intensity, dict) else 0,
+                "remaining_seconds": self._float(high_intensity.get("remaining_seconds")) if isinstance(high_intensity, dict) else 0.0,
+                "merge_seconds": self._float(getattr(self.plugin, "group_high_intensity_merge_seconds", 8)),
+            },
         }
 
     def _group_wakeup_logs(self, group: dict[str, Any], limit: int = 30) -> list[dict[str, Any]]:
@@ -1531,6 +1590,7 @@ class PrivateCompanionPageApi:
             "enable_humanized_states",
             "enable_segmented_proactive_reply",
             "enable_proactive_quote_trigger_message",
+            "enable_photo_text_action",
             "inject_passive_states",
             "enable_cycle_state",
             "enable_skill_growth_simulation",
@@ -1732,6 +1792,8 @@ class PrivateCompanionPageApi:
             "worldview_adaptation_prompt",
             "quiet_hours",
             "daily_token_limit",
+            "enable_daily_token_soft_limit",
+            "daily_token_soft_limit",
             "humanized_state_intensity",
             "check_interval_seconds",
             "idle_minutes",
@@ -1741,6 +1803,22 @@ class PrivateCompanionPageApi:
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
             "enable_proactive_quote_trigger_message",
+            "enable_photo_text_action",
+            "photo_action_max_daily",
+            "photo_generation_backend",
+            "COMFYUI_TEXT2IMG_WORKFLOW_NAME",
+            "COMFYUI_SELFIE_WORKFLOW_NAME",
+            "comfyui_photo_wait_seconds",
+            "enable_local_photo_load_guard",
+            "local_photo_cpu_busy_percent",
+            "local_photo_memory_busy_percent",
+            "local_photo_defer_minutes",
+            "EXTERNAL_IMAGE_API_BASE_URL",
+            "EXTERNAL_IMAGE_API_MODEL",
+            "external_image_api_size",
+            "external_image_api_timeout_seconds",
+            "photo_generation_style",
+            "photo_generation_style_custom_prompt",
             "private_image_vision_wait_seconds",
             "enable_private_image_self_recognition",
             "private_image_self_recognition_hint",
@@ -1785,6 +1863,11 @@ class PrivateCompanionPageApi:
             "group_wakeup_fatigue_limit",
             "group_wakeup_fatigue_decay_minutes",
             "group_wakeup_log_limit",
+            "enable_group_high_intensity_mode",
+            "group_high_intensity_wakeup_window_seconds",
+            "group_high_intensity_wakeup_threshold",
+            "group_high_intensity_cooldown_seconds",
+            "group_high_intensity_merge_seconds",
             "enable_forward_message_adaptation",
             "forward_message_mode",
             "forward_message_max_messages",
@@ -1934,6 +2017,22 @@ class PrivateCompanionPageApi:
         else:
             add("warn", "私聊主动已关闭", "每日主动上限为 0", "在模块配置里调高每日主动上限")
 
+        if getattr(self.plugin, "enable_daily_token_soft_limit", True):
+            soft_limit = int(getattr(self.plugin, "daily_token_soft_limit", 0) or 0)
+            today_tokens = int(getattr(self.plugin, "_today_llm_token_total", lambda: 0)() or 0)
+            if soft_limit > 0 and today_tokens >= soft_limit:
+                add(
+                    "warn",
+                    "每日 Token 软限额已接管",
+                    f"今日已用约 {today_tokens} Token，低优先级后台 LLM 任务会暂缓",
+                )
+            elif soft_limit > 0:
+                add("ok", "每日 Token 软限额已启用", f"软限额 {soft_limit}，当前约 {today_tokens}")
+            else:
+                add("info", "每日 Token 软限额未设置", "只使用每日硬限额")
+        else:
+            add("info", "每日 Token 软限额已关闭", "功能全开时后台任务会按各自开关正常运行")
+
         if features.get("enable_companion_memory") and features.get("enable_expression_learning"):
             add("ok", "私聊学习链路完整", "长期画像与表达学习均已打开")
         else:
@@ -1959,6 +2058,18 @@ class PrivateCompanionPageApi:
                 "夹层阅读素材",
                 "已检测到可用素材能力" if jm_available else "开关已开，但暂未检测到可用素材能力",
             )
+
+        if features.get("enable_photo_text_action") and getattr(self.plugin, "enable_local_photo_load_guard", False):
+            load_state = getattr(self.plugin, "_local_photo_generation_load_state", lambda: {})()
+            if isinstance(load_state, dict):
+                if load_state.get("available"):
+                    add(
+                        "warn" if load_state.get("busy") else "ok",
+                        "本地生图负载保护",
+                        str(load_state.get("reason") or "负载正常"),
+                    )
+                else:
+                    add("info", "本地生图负载保护未采样", str(load_state.get("reason") or "无法读取系统负载"))
 
         llm_perception_available = bool(getattr(self.plugin, "_llmperception_available", lambda: False)())
         if llm_perception_available:
@@ -2272,6 +2383,7 @@ class PrivateCompanionPageApi:
             "enable_humanized_states",
             "enable_segmented_proactive_reply",
             "enable_proactive_quote_trigger_message",
+            "enable_photo_text_action",
             "inject_passive_states",
             "enable_cycle_state",
             "enable_skill_growth_simulation",
@@ -2378,6 +2490,8 @@ class PrivateCompanionPageApi:
             "worldview_adaptation_prompt",
             "quiet_hours",
             "daily_token_limit",
+            "enable_daily_token_soft_limit",
+            "daily_token_soft_limit",
             "humanized_state_intensity",
             "check_interval_seconds",
             "idle_minutes",
@@ -2387,6 +2501,21 @@ class PrivateCompanionPageApi:
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
             "enable_proactive_quote_trigger_message",
+            "photo_action_max_daily",
+            "photo_generation_backend",
+            "COMFYUI_TEXT2IMG_WORKFLOW_NAME",
+            "COMFYUI_SELFIE_WORKFLOW_NAME",
+            "comfyui_photo_wait_seconds",
+            "enable_local_photo_load_guard",
+            "local_photo_cpu_busy_percent",
+            "local_photo_memory_busy_percent",
+            "local_photo_defer_minutes",
+            "EXTERNAL_IMAGE_API_BASE_URL",
+            "EXTERNAL_IMAGE_API_MODEL",
+            "external_image_api_size",
+            "external_image_api_timeout_seconds",
+            "photo_generation_style",
+            "photo_generation_style_custom_prompt",
             "private_image_vision_wait_seconds",
             "enable_private_image_self_recognition",
             "private_image_self_recognition_hint",
@@ -2430,6 +2559,11 @@ class PrivateCompanionPageApi:
             "group_wakeup_fatigue_limit",
             "group_wakeup_fatigue_decay_minutes",
             "group_wakeup_log_limit",
+            "enable_group_high_intensity_mode",
+            "group_high_intensity_wakeup_window_seconds",
+            "group_high_intensity_wakeup_threshold",
+            "group_high_intensity_cooldown_seconds",
+            "group_high_intensity_merge_seconds",
             "enable_forward_message_adaptation",
             "forward_message_mode",
             "forward_message_max_messages",
@@ -2535,6 +2669,9 @@ class PrivateCompanionPageApi:
             if mode in {"转述", "summary", "summarize", "narrate", "relay"}:
                 return "transcribe"
             return mode if mode in {"inject", "transcribe"} else "inject"
+        if key == "photo_generation_backend":
+            mode = str(value or "auto").strip().lower()
+            return mode if mode in {"auto", "comfyui", "external"} else "auto"
         if key == "segmented_proactive_split_mode":
             mode = str(value or "regex").strip().lower()
             return mode if mode in {"regex", "words"} else "regex"
@@ -2597,9 +2734,35 @@ class PrivateCompanionPageApi:
                 return max(0, min(100, int(value)))
             except (TypeError, ValueError):
                 return 50
+        if key in {"local_photo_cpu_busy_percent", "local_photo_memory_busy_percent"}:
+            try:
+                return max(1, min(100, int(value)))
+            except (TypeError, ValueError):
+                return 85 if key == "local_photo_cpu_busy_percent" else 88
+        if key == "local_photo_defer_minutes":
+            try:
+                return max(1, min(240, int(value)))
+            except (TypeError, ValueError):
+                return 30
+        if key == "comfyui_photo_wait_seconds":
+            try:
+                return max(5, min(600, int(value)))
+            except (TypeError, ValueError):
+                return 90
+        if key == "external_image_api_timeout_seconds":
+            try:
+                return max(20, min(600, int(value)))
+            except (TypeError, ValueError):
+                return 180
+        if key == "photo_action_max_daily":
+            try:
+                return max(0, min(5, int(value)))
+            except (TypeError, ValueError):
+                return 1
         if key in {
             "check_interval_seconds",
             "daily_token_limit",
+            "daily_token_soft_limit",
             "idle_minutes",
             "min_interval_minutes",
             "max_daily_messages",
@@ -2618,6 +2781,16 @@ class PrivateCompanionPageApi:
             "group_wakeup_fatigue_limit",
             "group_wakeup_fatigue_decay_minutes",
             "group_wakeup_log_limit",
+            "group_high_intensity_wakeup_window_seconds",
+            "group_high_intensity_wakeup_threshold",
+            "group_high_intensity_cooldown_seconds",
+            "group_high_intensity_merge_seconds",
+            "photo_action_max_daily",
+            "comfyui_photo_wait_seconds",
+            "local_photo_cpu_busy_percent",
+            "local_photo_memory_busy_percent",
+            "local_photo_defer_minutes",
+            "external_image_api_timeout_seconds",
             "forward_message_max_messages",
             "forward_message_max_chars",
             "forward_message_image_limit",
@@ -2723,6 +2896,7 @@ class PrivateCompanionPageApi:
             except (TypeError, ValueError):
                 return 1.8 if key == "segmented_proactive_log_base" else 1.5
         if key in {
+            "enable_daily_token_soft_limit",
             "enable_bilibili_integration",
             "enable_bilibili_boredom_watch",
             "enable_news_integration",
@@ -2756,6 +2930,7 @@ class PrivateCompanionPageApi:
             "enable_group_scene_awareness",
             "enable_group_reality_promise_guard",
             "enable_group_wakeup_enhancement",
+            "enable_group_high_intensity_mode",
             "enable_group_repeat_follow",
             "enable_forward_message_adaptation",
             "enable_skill_growth_simulation",
@@ -2764,6 +2939,7 @@ class PrivateCompanionPageApi:
             "forward_message_image_vision",
             "enable_semantic_message_debounce",
             "enable_proactive_quote_trigger_message",
+            "enable_local_photo_load_guard",
             "enable_private_image_self_recognition",
             "enable_private_image_vision_cache",
             "enable_segmented_proactive_reply",
@@ -3198,6 +3374,7 @@ class PrivateCompanionPageApi:
         page_index: int = 0,
         cover: bool = False,
         path_value: Any = "",
+        access_token: str = "",
     ) -> str:
         if not album_id or (page_index < 1 and not cover):
             return ""
@@ -3206,6 +3383,8 @@ class PrivateCompanionPageApi:
             url += "&cover=1"
         elif page_index > 0:
             url += f"&page={page_index}"
+        if access_token:
+            url += f"&access_token={quote(str(access_token), safe='')}"
         raw_path = self._single_line(path_value, 500)
         if raw_path:
             try:
@@ -3218,16 +3397,30 @@ class PrivateCompanionPageApi:
                 pass
         return url
 
-    def _bookshelf_cover_url(self, album_id: str, item: dict[str, Any], page_items: list[dict[str, Any]], data_root: Path) -> str:
+    def _bookshelf_cover_url(
+        self,
+        album_id: str,
+        item: dict[str, Any],
+        page_items: list[dict[str, Any]],
+        data_root: Path,
+        *,
+        access_token: str = "",
+    ) -> str:
         cover_path = self._single_line(item.get("cover_path"), 500)
         if cover_path:
-            return self._bookshelf_image_url(album_id, data_root=data_root, cover=True, path_value=cover_path)
+            return self._bookshelf_image_url(
+                album_id,
+                data_root=data_root,
+                cover=True,
+                path_value=cover_path,
+                access_token=access_token,
+            )
         first_page = page_items[0] if page_items else {}
         if isinstance(first_page, dict):
             return self._single_line(first_page.get("src"), 500)
         return ""
 
-    async def _bookshelf_summary(self, data: dict[str, Any], *, unlocked: bool) -> dict[str, Any]:
+    async def _bookshelf_summary(self, data: dict[str, Any], *, unlocked: bool, access_token: str = "") -> dict[str, Any]:
         projects = data.get("creative_projects") if isinstance(data.get("creative_projects"), list) else []
         diaries = data.get("bot_diaries") if isinstance(data.get("bot_diaries"), list) else []
         shelf_items = data.get("bookshelf_items") if isinstance(data.get("bookshelf_items"), list) else []
@@ -3422,6 +3615,7 @@ class PrivateCompanionPageApi:
                         data_root=data_root,
                         page_index=index,
                         path_value=page.get("path"),
+                        access_token=access_token,
                     )
                     page_items.append(
                         {
@@ -3432,7 +3626,7 @@ class PrivateCompanionPageApi:
                     )
                 cover_src = ""
                 if album_id:
-                    cover_src = self._bookshelf_cover_url(album_id, item, page_items, data_root)
+                    cover_src = self._bookshelf_cover_url(album_id, item, page_items, data_root, access_token=access_token)
                 secret_books.append(
                     {
                         "id": f"jm-{album_id or len(secret_books)}",
@@ -3480,6 +3674,10 @@ class PrivateCompanionPageApi:
                 )
         return {
             "unlocked": unlocked,
+            "access_token": access_token if unlocked and self._bookshelf_access_token_valid(access_token) else "",
+            "access_expires_in": int(max(0, self._bookshelf_access_tokens().get(access_token, 0) - time.time()))
+            if unlocked and access_token
+            else 0,
             "public_count": len(public_books),
             "secret_count": locked_count,
             "diary_count": 1 if diaries else 0,
@@ -3814,17 +4012,30 @@ class PrivateCompanionPageApi:
                 )
         today_tokens = max(0, today_total_tokens - today_exempt_tokens)
         daily_limit = self._int(getattr(self.plugin, "daily_token_limit", 0))
+        soft_limit = self._int(getattr(self.plugin, "daily_token_soft_limit", 0))
+        soft_enabled = bool(getattr(self.plugin, "enable_daily_token_soft_limit", True))
         budget_skips = usage.get("budget_skips", {})
         today_skips = budget_skips.get(today_key, {}) if isinstance(budget_skips, dict) else {}
         budget = {
             "day": today_key,
             "limit": daily_limit,
+            "soft_limit": soft_limit,
+            "soft_enabled": soft_enabled,
+            "soft_active": bool(soft_enabled and soft_limit > 0 and today_tokens >= soft_limit),
             "used": today_tokens,
             "total_used": today_total_tokens,
             "exempt_used": today_exempt_tokens,
             "remaining": max(0, daily_limit - today_tokens) if daily_limit > 0 else None,
+            "soft_remaining": max(0, soft_limit - today_tokens) if soft_enabled and soft_limit > 0 else None,
             "ratio": round(today_tokens / daily_limit, 4) if daily_limit > 0 else 0,
+            "soft_ratio": round(today_tokens / soft_limit, 4) if soft_enabled and soft_limit > 0 else 0,
             "exceeded": bool(daily_limit > 0 and today_tokens >= daily_limit),
+            "deferred_calls": (
+                self._int(today_skips.get("daily_token_soft_limit_deferred"))
+                + self._int(today_skips.get("maintenance_token_saver_deferred"))
+            )
+            if isinstance(today_skips, dict)
+            else 0,
             "skipped_calls": self._int(today_skips.get("count")) if isinstance(today_skips, dict) else 0,
         }
         recent_raw = usage.get("recent")

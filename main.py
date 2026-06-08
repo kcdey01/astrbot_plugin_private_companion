@@ -305,7 +305,7 @@ class _CapturedSendMessageCall:
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.0.1",
+    "3.0.3",
 )
 class PrivateCompanionPlugin(Star):
     @staticmethod
@@ -376,6 +376,12 @@ class PrivateCompanionPlugin(Star):
         self.enable_almanac_perception = self._cfg_bool(c, "enable_almanac_perception", False)
         self.llm_provider_id = self._cfg_str(c, "LLM_PROVIDER_ID", "")
         self.daily_token_limit = self._cfg_int(c, "daily_token_limit", 1_000_000, 0)
+        legacy_soft_enabled = self._cfg_bool(c, "enable_maintenance_token_saver", True)
+        legacy_soft_limit = self._cfg_int(c, "maintenance_token_soft_limit", 800_000, 0)
+        self.enable_daily_token_soft_limit = self._cfg_bool(c, "enable_daily_token_soft_limit", legacy_soft_enabled)
+        self.daily_token_soft_limit = self._cfg_int(c, "daily_token_soft_limit", legacy_soft_limit, 0)
+        self.enable_maintenance_token_saver = self.enable_daily_token_soft_limit
+        self.maintenance_token_soft_limit = self.daily_token_soft_limit
         self.daily_plan_provider_id = self._cfg_str(c, "DAILY_PLAN_PROVIDER_ID", "")
         self.enable_daily_plan = self._cfg_bool(c, "enable_daily_plan", True)
         self.daily_plan_time = self._cfg_str(c, "daily_plan_time", "07:30")
@@ -478,6 +484,11 @@ class PrivateCompanionPlugin(Star):
         self.photo_generation_backend = self._cfg_str(c, "photo_generation_backend", "auto", "auto").strip().lower()
         if self.photo_generation_backend not in {"auto", "comfyui", "external"}:
             self.photo_generation_backend = "auto"
+        self.enable_local_photo_load_guard = self._cfg_bool(c, "enable_local_photo_load_guard", True)
+        self.local_photo_cpu_busy_percent = self._cfg_int(c, "local_photo_cpu_busy_percent", 85, 1, 100)
+        self.local_photo_memory_busy_percent = self._cfg_int(c, "local_photo_memory_busy_percent", 88, 1, 100)
+        self.local_photo_defer_minutes = self._cfg_int(c, "local_photo_defer_minutes", 30, 1, 240)
+        self._local_photo_load_cache: dict[str, Any] = {}
         self.external_image_api_base_url = self._cfg_str(c, "EXTERNAL_IMAGE_API_BASE_URL", "")
         self.external_image_api_key = self._cfg_str(c, "EXTERNAL_IMAGE_API_KEY", "")
         self.external_image_api_model = self._cfg_str(c, "EXTERNAL_IMAGE_API_MODEL", "")
@@ -597,6 +608,11 @@ class PrivateCompanionPlugin(Star):
         self.group_wakeup_fatigue_limit = self._cfg_int(c, "group_wakeup_fatigue_limit", 5, 1, 20)
         self.group_wakeup_fatigue_decay_minutes = self._cfg_int(c, "group_wakeup_fatigue_decay_minutes", 90, 5, 720)
         self.group_wakeup_log_limit = self._cfg_int(c, "group_wakeup_log_limit", 80, 10, 300)
+        self.enable_group_high_intensity_mode = self._cfg_bool(c, "enable_group_high_intensity_mode", True)
+        self.group_high_intensity_wakeup_window_seconds = self._cfg_int(c, "group_high_intensity_wakeup_window_seconds", 60, 15, 600)
+        self.group_high_intensity_wakeup_threshold = self._cfg_int(c, "group_high_intensity_wakeup_threshold", 3, 2, 20)
+        self.group_high_intensity_cooldown_seconds = self._cfg_int(c, "group_high_intensity_cooldown_seconds", 150, 30, 1800)
+        self.group_high_intensity_merge_seconds = self._cfg_int(c, "group_high_intensity_merge_seconds", 8, 1, 30)
         self.enable_group_interjection = self._cfg_bool(c, "enable_group_interjection", False)
         self.enable_group_repeat_follow = self._cfg_bool(c, "enable_group_repeat_follow", True)
         self.group_repeat_follow_probability = self._cfg_int(c, "group_repeat_follow_probability", 18, 0, 100) / 100
@@ -1484,6 +1500,15 @@ class PrivateCompanionPlugin(Star):
                 return name
         return _single_line(fallback, limit) or str(user_id or "") or "群友"
 
+    def _group_member_identity_label(self, user_id: str, fallback: str = "", *, limit: int = 24) -> str:
+        uid = _single_line(user_id, 40)
+        name = self._group_member_identity_name(uid, fallback, limit=limit)
+        if not uid:
+            return name
+        if not name or name == uid:
+            return f"QQ:{uid}"
+        return f"{name}[QQ:{uid}]"
+
     def _group_member_identity_note(self, user_id: str, *, limit: int = 120) -> str:
         profile = self._worldbook_profile_by_user_id(user_id)
         if not isinstance(profile, dict):
@@ -1752,6 +1777,49 @@ class PrivateCompanionPlugin(Star):
             return chain
         return [reply, *chain]
 
+    def _chain_has_reply_component(self, chain: list[Any]) -> bool:
+        for item in chain:
+            if Reply is not None and isinstance(item, Reply):
+                return True
+            if item.__class__.__name__.lower() == "reply":
+                return True
+        return False
+
+    def _group_current_reply_quote_message_id(self, event: AstrMessageEvent) -> str:
+        if not getattr(self, "enable_proactive_quote_trigger_message", False):
+            return ""
+        if not self.enable_group_companion:
+            return ""
+        if not self._extract_group_id_from_event(event):
+            return ""
+        message_id = self._event_message_id(event)
+        if not message_id:
+            return ""
+        scene = getattr(event, "private_companion_group_scene", None)
+        if isinstance(scene, dict):
+            if str(scene.get("talking_to") or "") == "bot":
+                return message_id
+            if str(scene.get("trigger") or "") in {
+                "at_bot",
+                "reply_bot",
+                "mention_bot_name",
+                "group_wakeup_direct_word",
+                "group_wakeup_context_word",
+                "group_wakeup_interest",
+                "bot_conversation_followup",
+            }:
+                return message_id
+        if getattr(event, "is_at_or_wake_command", False) or getattr(event, "is_wake", False):
+            return message_id
+        return ""
+
+    def _strip_internal_identity_anchors(self, text: str) -> str:
+        cleaned = str(text or "")
+        cleaned = re.sub(r"\[QQ:\d{5,12}\]", "", cleaned)
+        cleaned = re.sub(r"(?<![\w])QQ[:：]\d{5,12}", "", cleaned)
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        return cleaned.strip()
+
     def _event_component_stable_fingerprint_part(self, item: Any) -> str:
         class_name = item.__class__.__name__.lower()
         if isinstance(item, dict):
@@ -1911,9 +1979,15 @@ class PrivateCompanionPlugin(Star):
     def _semantic_buffer_key(self, scope: str, sender_id: str) -> str:
         return f"{scope}:{sender_id}"
 
-    def _semantic_buffer_active_snapshot(self, key: str) -> dict[str, Any]:
-        wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
-        if not self.enable_semantic_message_debounce or wait <= 0:
+    def _group_high_intensity_buffer_key(self, group_id: str) -> str:
+        return self._semantic_buffer_key(f"group:{group_id}", "__high_intensity__")
+
+    def _group_high_intensity_merge_wait_seconds(self) -> float:
+        return max(1.0, min(30.0, float(getattr(self, "group_high_intensity_merge_seconds", 8) or 8)))
+
+    def _semantic_buffer_active_snapshot(self, key: str, *, wait_seconds: float | None = None, force: bool = False) -> dict[str, Any]:
+        wait = max(0.0, float(wait_seconds if wait_seconds is not None else getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
+        if (not force and not self.enable_semantic_message_debounce) or wait <= 0:
             return {}
         buffers = getattr(self, "_semantic_message_buffers", None)
         if not isinstance(buffers, dict):
@@ -1921,6 +1995,7 @@ class PrivateCompanionPlugin(Star):
         buffer = buffers.get(key)
         if not isinstance(buffer, dict):
             return {}
+        wait = max(0.0, _safe_float(buffer.get("wait_seconds"), wait, 0.0) or wait)
         now = _now_ts()
         first_ts = _safe_float(buffer.get("first_ts"), 0.0, 0.0)
         updated_ts = _safe_float(buffer.get("updated_ts"), first_ts, first_ts)
@@ -1941,10 +2016,19 @@ class PrivateCompanionPlugin(Star):
             "texts": texts,
         }
 
-    def _note_semantic_message_buffer(self, key: str, text: str, *, sender_name: str = "", now: float | None = None) -> bool:
-        if not self.enable_semantic_message_debounce:
+    def _note_semantic_message_buffer(
+        self,
+        key: str,
+        text: str,
+        *,
+        sender_name: str = "",
+        now: float | None = None,
+        wait_seconds: float | None = None,
+        force: bool = False,
+    ) -> bool:
+        if not force and not self.enable_semantic_message_debounce:
             return False
-        wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
+        wait = max(0.0, float(wait_seconds if wait_seconds is not None else getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
         if wait <= 0:
             return False
         cleaned = _single_line(text, 260)
@@ -1960,6 +2044,7 @@ class PrivateCompanionPlugin(Star):
                 buffers.pop(item_key, None)
         current = buffers.get(key)
         if isinstance(current, dict) and now - _safe_float(current.get("updated_ts"), current.get("first_ts"), 0) <= wait + 0.8:
+            current["wait_seconds"] = wait
             messages = current.setdefault("messages", [])
             if not isinstance(messages, list):
                 messages = []
@@ -1971,6 +2056,7 @@ class PrivateCompanionPlugin(Star):
         buffers[key] = {
             "first_ts": now,
             "updated_ts": now,
+            "wait_seconds": wait,
             "messages": [{"ts": now, "text": cleaned, "sender_name": _single_line(sender_name, 40)}],
         }
         return False
@@ -2627,30 +2713,47 @@ class PrivateCompanionPlugin(Star):
             return ""
 
     async def _consume_semantic_message_buffer_for_event(self, event: AstrMessageEvent, *, private_chat: bool) -> str:
-        if not self.enable_semantic_message_debounce:
-            return ""
-        wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
-        if wait <= 0:
-            return ""
         try:
             sender_id = str(event.get_sender_id())
         except Exception:
             sender_id = ""
         if not sender_id:
             return ""
+        force_consume = False
         if private_chat:
+            if not self.enable_semantic_message_debounce:
+                return ""
+            wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
+            if wait <= 0:
+                return ""
             scope = f"private:{sender_id}"
+            key = self._semantic_buffer_key(scope, sender_id)
         else:
             group_id = self._extract_group_id_from_event(event)
             if not group_id:
                 return ""
             scope = f"group:{group_id}"
-        key = self._semantic_buffer_key(scope, sender_id)
+            high_intensity = getattr(event, "private_companion_group_high_intensity", None)
+            buffers = getattr(self, "_semantic_message_buffers", None)
+            high_key = self._group_high_intensity_buffer_key(group_id)
+            if isinstance(high_intensity, dict) and high_intensity.get("active") and isinstance(buffers, dict) and isinstance(buffers.get(high_key), dict):
+                key = high_key
+                force_consume = True
+            else:
+                if not self.enable_semantic_message_debounce:
+                    return ""
+                wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
+                if wait <= 0:
+                    return ""
+                key = self._semantic_buffer_key(scope, sender_id)
         buffers = getattr(self, "_semantic_message_buffers", None)
         if not isinstance(buffers, dict):
             return ""
         buffer = buffers.get(key)
         if not isinstance(buffer, dict):
+            return ""
+        wait = max(0.0, _safe_float(buffer.get("wait_seconds"), getattr(self, "semantic_message_debounce_seconds", 0.0), 0.0))
+        if wait <= 0:
             return ""
         deadline_guard = _now_ts() + max(wait + 2.0, min(30.0, wait * 3.0 + 2.0))
         while True:
@@ -2676,7 +2779,11 @@ class PrivateCompanionPlugin(Star):
                 continue
             text = _single_line(item.get("text"), 260)
             if text:
-                lines.append(text)
+                name = _single_line(item.get("sender_name"), 40)
+                if force_consume and name:
+                    lines.append(f"{name}: {text}")
+                else:
+                    lines.append(text)
         if len(lines) <= 1:
             return ""
         return "\n".join(f"{idx + 1}. {line}" for idx, line in enumerate(lines))
@@ -2902,7 +3009,7 @@ class PrivateCompanionPlugin(Star):
         for item in recent[-8:]:
             if not isinstance(item, dict):
                 continue
-            name = self._group_member_identity_name(
+            name = self._group_member_identity_label(
                 str(item.get("sender_id") or ""),
                 item.get("identity_name") or item.get("name"),
                 limit=20,
@@ -2916,9 +3023,9 @@ class PrivateCompanionPlugin(Star):
 只回答 YES 或 NO，不要解释。
 
 已知：
-- 上一次明确和 Bot 对话的人：{_single_line(active.get('sender_name'), 40) or sender_id}
+- 上一次明确和 Bot 对话的人：{self._group_member_identity_label(str(active.get('sender_id') or sender_id), active.get('sender_name'), limit=24)}
 - 上一次明确对 Bot 说的话：{_single_line(active.get('last_text'), 120)}
-- 当前发言者：{_single_line(sender_name, 40) or sender_id}
+- 当前发言者：{self._group_member_identity_label(sender_id, sender_name, limit=24)}
 - 当前消息：{_single_line(text, 180)}
 - 规则初判：trigger={_single_line(scene.get('trigger'), 40)} talking_to={_single_line(scene.get('talking_to'), 40)}
 
@@ -2930,6 +3037,7 @@ class PrivateCompanionPlugin(Star):
 - 如果当前消息明显转向群友、全群、第三人、另一个话题，回答 NO。
 - 如果中间有人插话，但当前消息仍明确指向 Bot，可以回答 YES。
 - 不要因为同一用户还在窗口内就直接 YES。
+- 方括号里的 QQ 是内部身份锚点；不同 QQ 即使外号相似也不是同一人。
 """.strip()
         raw = await self._llm_call(
             prompt,
@@ -3796,6 +3904,61 @@ class PrivateCompanionPlugin(Star):
         limit = max(10, _safe_int(getattr(self, "group_wakeup_log_limit", 80), 80, 10))
         del logs[:-limit]
 
+    def _group_recent_wakeup_count(self, group: dict[str, Any], *, now: float | None = None, window_seconds: int | None = None) -> int:
+        now = now or _now_ts()
+        window = max(15, int(window_seconds or getattr(self, "group_high_intensity_wakeup_window_seconds", 60) or 60))
+        logs = group.get("group_wakeup_logs") if isinstance(group.get("group_wakeup_logs"), list) else []
+        count = 0
+        for item in reversed(logs):
+            if not isinstance(item, dict):
+                continue
+            ts = _safe_float(item.get("ts"), 0.0, 0.0)
+            if ts <= 0:
+                continue
+            if now - ts > window:
+                break
+            if str(item.get("result") or "") == "woke":
+                count += 1
+        return count
+
+    def _group_high_intensity_state(self, group: dict[str, Any], *, now: float | None = None, mutate: bool = True) -> dict[str, Any]:
+        now = now or _now_ts()
+        if not getattr(self, "enable_group_high_intensity_mode", True):
+            return {"active": False, "reason": "disabled", "recent_wakeups": 0, "threshold": 0, "until_ts": 0.0}
+        window = max(15, _safe_int(getattr(self, "group_high_intensity_wakeup_window_seconds", 60), 60, 15, 600))
+        threshold = max(2, _safe_int(getattr(self, "group_high_intensity_wakeup_threshold", 3), 3, 2, 20))
+        cooldown = max(30, _safe_int(getattr(self, "group_high_intensity_cooldown_seconds", 150), 150, 30, 1800))
+        recent_wakeups = self._group_recent_wakeup_count(group, now=now, window_seconds=window)
+        fatigue = self._group_wakeup_fatigue(group)
+        until_ts = _safe_float(group.get("group_high_intensity_until"), 0.0, 0.0)
+        reason = ""
+        triggered = False
+        if recent_wakeups >= threshold:
+            triggered = True
+            reason = "recent_wakeups"
+        elif str(fatigue.get("level") or "") == "high":
+            triggered = True
+            reason = "fatigue_high"
+        if triggered and mutate:
+            next_until = now + cooldown
+            if next_until > until_ts:
+                group["group_high_intensity_until"] = round(next_until, 3)
+                until_ts = next_until
+        active = bool(triggered or until_ts > now)
+        if active and not reason:
+            reason = "cooldown"
+        return {
+            "active": active,
+            "reason": reason,
+            "recent_wakeups": recent_wakeups,
+            "threshold": threshold,
+            "window_seconds": window,
+            "cooldown_seconds": cooldown,
+            "until_ts": round(until_ts, 3) if until_ts > 0 else 0.0,
+            "remaining_seconds": round(max(0.0, until_ts - now), 1),
+            "fatigue": dict(fatigue),
+        }
+
     def _group_wakeup_topic_interest_context(
         self,
         group: dict[str, Any],
@@ -3932,6 +4095,21 @@ class PrivateCompanionPlugin(Star):
                     "reason": "direct_wakeup_word",
                     "instruction": "群友提到了你的名字或强唤醒词；这不一定是正式提问,要像群聊里被自然叫到一样接话。",
                 }
+        high_intensity = self._group_high_intensity_state(group)
+        if high_intensity.get("active"):
+            if any(self._text_contains_wakeup_word(cleaned, word) for word in list(self.group_wakeup_context_words or []) + self._group_wakeup_interest_words(group)):
+                self._record_group_wakeup_log(
+                    group,
+                    scene=scene,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    text=cleaned,
+                    wakeup={"type": "high_intensity", "word": "", "reason": "high_intensity", "probability": 0.0},
+                    result="blocked",
+                    strength="",
+                    note="群聊处于高强度收口模式,暂停弱相关和兴趣唤醒,优先合并处理明确叫到 Bot 的消息。",
+                )
+            return {}
         if self.group_wakeup_cooldown_seconds > 0 and now - _safe_float(group.get("last_group_wakeup_at"), 0) < self.group_wakeup_cooldown_seconds:
             if any(self._text_contains_wakeup_word(cleaned, word) for word in list(self.group_wakeup_context_words or []) + self._group_wakeup_interest_words(group)):
                 self._record_group_wakeup_log(
@@ -4067,7 +4245,7 @@ class PrivateCompanionPlugin(Star):
             scene.update({
                 "trigger": "at_other",
                 "talking_to": target_id,
-                "talking_to_name": self._group_member_identity_name(target_id, target.get("name"), limit=40),
+                "talking_to_name": self._group_member_identity_label(target_id, target.get("name"), limit=40),
                 "reason": "explicit_at_other",
             })
             return scene
@@ -4085,7 +4263,7 @@ class PrivateCompanionPlugin(Star):
             scene.update({
                 "trigger": "reply_other",
                 "talking_to": reply_to_id,
-                "talking_to_name": self._group_member_identity_name(reply_to_id, target_name, limit=40),
+                "talking_to_name": self._group_member_identity_label(reply_to_id, target_name, limit=40),
                 "reason": "reply_to_other",
             })
             return scene
@@ -4107,7 +4285,7 @@ class PrivateCompanionPlugin(Star):
                 scene.update({
                     "trigger": "reply_in_flow",
                     "talking_to": target_id,
-                    "talking_to_name": self._group_member_identity_name(target_id, last_other.get("identity_name") or last_other.get("name"), limit=40),
+                    "talking_to_name": self._group_member_identity_label(target_id, last_other.get("identity_name") or last_other.get("name"), limit=40),
                     "reason": "recent_message_addressed_sender",
                 })
             elif time_gap < 15 and str(last_other.get("talking_to") or "group") == "group":
@@ -4115,14 +4293,14 @@ class PrivateCompanionPlugin(Star):
                 scene.update({
                     "trigger": "quick_follow",
                     "talking_to": target_id,
-                    "talking_to_name": self._group_member_identity_name(target_id, last_other.get("identity_name") or last_other.get("name"), limit=40),
+                    "talking_to_name": self._group_member_identity_label(target_id, last_other.get("identity_name") or last_other.get("name"), limit=40),
                     "reason": "quick_follow_after_group_message",
                 })
         return scene
 
     def _scene_talking_to_text(self, scene: dict[str, Any]) -> str:
         target = str(scene.get("talking_to") or "group")
-        name = _single_line(scene.get("talking_to_name"), 40)
+        name = _single_line(scene.get("talking_to_name"), 80)
         if target == "bot":
             return "你（Bot）"
         if target == "group":
@@ -5299,6 +5477,14 @@ class PrivateCompanionPlugin(Star):
                 + (f"\n正文参考页：{sampled_text}" if sampled_text else "")
                 + (f"\n参考图页码对应：{sampled_mapping_text}" if sampled_mapping_text else "")
             )
+            if self._daily_token_soft_limit_should_defer("private_reading_vision"):
+                self._record_llm_budget_skip(
+                    provider_id=provider_id,
+                    task="private_reading_vision",
+                    prompt=prompt,
+                    error="daily_token_soft_limit_deferred",
+                )
+                return {}
             if self._llm_daily_budget_remaining() == 0:
                 self._record_llm_budget_skip(provider_id=provider_id, task="private_reading_vision", prompt=prompt)
                 return {}
@@ -9584,7 +9770,7 @@ class PrivateCompanionPlugin(Star):
         if isinstance(scene, dict):
             record.update({
                 "talking_to": _single_line(scene.get("talking_to"), 40) or "group",
-                "talking_to_name": _single_line(scene.get("talking_to_name"), 40),
+                "talking_to_name": _single_line(scene.get("talking_to_name"), 80),
                 "scene_trigger": _single_line(scene.get("trigger"), 40),
                 "scene_reason": _single_line(scene.get("reason"), 60),
                 "wakeup_word": _single_line(scene.get("wakeup_word"), 60),
@@ -9637,6 +9823,7 @@ class PrivateCompanionPlugin(Star):
             )
 
         if self.enable_group_slang_learning:
+            self._learn_group_nickname_correction(group, cleaned)
             self._learn_group_slang(group, cleaned)
         if self.enable_group_topic_threads:
             self._update_group_topic_threads(group, sender_id=sender_id, sender_name=sender_name, text=cleaned)
@@ -9788,7 +9975,7 @@ class PrivateCompanionPlugin(Star):
             ),
         )
         speaker_id = str(chosen.get("sender_id") or "")
-        speaker = self._group_member_identity_name(speaker_id, chosen.get("identity_name") or chosen.get("name"), limit=24)
+        speaker = self._group_member_identity_label(speaker_id, chosen.get("identity_name") or chosen.get("name"), limit=24)
         text = _single_line(chosen.get("text"), 100)
         if not text:
             return None
@@ -9798,7 +9985,7 @@ class PrivateCompanionPlugin(Star):
         for item in candidate_lines[-6:]:
             if not isinstance(item, dict):
                 continue
-            name = self._group_member_identity_name(
+            name = self._group_member_identity_label(
                 str(item.get("sender_id") or ""),
                 item.get("identity_name") or item.get("name"),
                 limit=16,
@@ -9816,7 +10003,7 @@ class PrivateCompanionPlugin(Star):
         for participant_id in participant_ids[:8]:
             member = members.get(participant_id) if isinstance(members, dict) else None
             name_hint = member.get("identity_name") or member.get("name") if isinstance(member, dict) else participant_id
-            participant_names.append(self._group_member_identity_name(participant_id, name_hint, limit=16))
+            participant_names.append(self._group_member_identity_label(participant_id, name_hint, limit=16))
         duration_minutes = max(1, int((max(_safe_float(item.get("ts"), now) for item in window if isinstance(item, dict)) - min(_safe_float(item.get("ts"), now) for item in window if isinstance(item, dict))) / 60))
         topic_summary = (
             f"这不是单独一句话,而是群里约 {duration_minutes} 分钟里围绕“{topic}”滚起来的一段话题；"
@@ -9891,13 +10078,13 @@ class PrivateCompanionPlugin(Star):
             return None
         chosen = abusive[-1] if abusive else addressed[-1]
         speaker_id = str(chosen.get("sender_id") or "")
-        speaker = self._group_member_identity_name(speaker_id, chosen.get("identity_name") or chosen.get("name"), limit=24)
+        speaker = self._group_member_identity_label(speaker_id, chosen.get("identity_name") or chosen.get("name"), limit=24)
         text = _single_line(chosen.get("text"), 100)
         summary_items = []
         for item in window[-5:]:
             if not isinstance(item, dict):
                 continue
-            name = self._group_member_identity_name(
+            name = self._group_member_identity_label(
                 str(item.get("sender_id") or ""),
                 item.get("identity_name") or item.get("name"),
                 limit=16,
@@ -10039,6 +10226,119 @@ class PrivateCompanionPlugin(Star):
         terms.sort(key=lambda item: (_safe_int(item.get("count"), 0, 0), _safe_float(item.get("last_seen"), 0)), reverse=True)
         del terms[self.max_group_slang_terms:]
 
+    def _group_member_identity_label_for_token(self, group: dict[str, Any], token: str) -> str:
+        query = re.sub(r"\s+", "", _single_line(token, 40))
+        if not query:
+            return ""
+        members = group.get("members") if isinstance(group.get("members"), dict) else {}
+        for user_id, member in members.items():
+            if not isinstance(member, dict):
+                continue
+            candidates = [
+                member.get("name"),
+                member.get("identity_name"),
+                member.get("display_name"),
+                member.get("nickname"),
+                member.get("card"),
+            ]
+            profile = self._worldbook_profile_by_user_id(str(user_id))
+            if isinstance(profile, dict):
+                candidates.extend([profile.get("name"), *(profile.get("aliases") or []), *(profile.get("observed_names") or [])])
+            for candidate in candidates:
+                value = re.sub(r"\s+", "", _single_line(candidate, 40))
+                if value and value == query:
+                    return self._group_member_identity_label(str(user_id), candidate, limit=24)
+        return ""
+
+    def _learn_group_nickname_correction(self, group: dict[str, Any], text: str) -> None:
+        cleaned = _single_line(text, 180)
+        if not cleaned:
+            return
+        cleaned = re.sub(r"\[CQ:at,qq=\d+(?:,[^\]]*)?\]", "", cleaned)
+        token = r"[\u4e00-\u9fffA-Za-z0-9_]{2,16}"
+        updates: dict[str, dict[str, str]] = {}
+        negatives: dict[str, list[str]] = {}
+
+        for match in re.finditer(rf"(?P<nick>{token})(?:是|就是)(?P<owner>{token})(?:的)?(?:外号|昵称|别称)?", cleaned):
+            nick = _single_line(match.group("nick"), 20)
+            owner = _single_line(match.group("owner"), 20)
+            if not nick or not owner or nick == owner:
+                continue
+            owner_label = self._group_member_identity_label_for_token(group, owner)
+            if not owner_label:
+                continue
+            updates[nick] = {
+                "meaning": f"{owner_label} 的外号/称呼",
+                "usage": "称呼该群友时使用；身份以 QQ 锚点为准",
+            }
+            suffix = cleaned[match.end(): match.end() + 24]
+            neg_match = re.match(rf"(?:不是|不等于|并不是)(?P<owner>{token})", suffix)
+            if neg_match:
+                negative_owner = _single_line(neg_match.group("owner"), 20)
+                if negative_owner and negative_owner != owner:
+                    negative_label = self._group_member_identity_label_for_token(group, negative_owner) or negative_owner
+                    negatives.setdefault(nick, []).append(negative_label)
+
+        for match in re.finditer(rf"(?P<owner>{token})(?:的)?(?:外号|昵称|别称)(?:是|叫)(?P<nick>{token})", cleaned):
+            owner = _single_line(match.group("owner"), 20)
+            nick = _single_line(match.group("nick"), 20)
+            if not nick or not owner or nick == owner:
+                continue
+            owner_label = self._group_member_identity_label_for_token(group, owner)
+            if not owner_label:
+                continue
+            updates[nick] = {
+                "meaning": f"{owner_label} 的外号/称呼",
+                "usage": "称呼该群友时使用；身份以 QQ 锚点为准",
+            }
+
+        for match in re.finditer(rf"(?P<nick>{token})(?:不是|不等于|并不是)(?P<owner>{token})", cleaned):
+            nick = _single_line(match.group("nick"), 20)
+            owner = _single_line(match.group("owner"), 20)
+            if nick and owner and nick != owner:
+                if nick not in updates and self._group_member_identity_label_for_token(group, nick):
+                    continue
+                owner_label = self._group_member_identity_label_for_token(group, owner) or owner
+                negatives.setdefault(nick, []).append(owner_label)
+
+        if not updates and not negatives:
+            return
+        meanings = group.setdefault("slang_meanings", {})
+        if not isinstance(meanings, dict):
+            meanings = {}
+            group["slang_meanings"] = meanings
+        now_text = datetime.now().strftime("%Y-%m-%d %H:%M")
+        for nick, payload in updates.items():
+            existing = meanings.get(nick) if isinstance(meanings.get(nick), dict) else {}
+            negative_values = list(negatives.get(nick) or [])
+            existing_negative = existing.get("not_owner") if isinstance(existing, dict) else ""
+            if existing_negative:
+                negative_values.extend([item for item in re.split(r"[、,，;；]+", str(existing_negative)) if item])
+            meanings[nick] = {
+                "meaning": payload["meaning"],
+                "usage": payload["usage"],
+                "not_owner": "、".join(dict.fromkeys(negative_values)),
+                "source": "explicit_correction",
+                "evidence": cleaned,
+                "updated_at": now_text,
+            }
+        for nick, negative_values in negatives.items():
+            if nick in updates:
+                continue
+            existing = meanings.get(nick) if isinstance(meanings.get(nick), dict) else {}
+            merged = []
+            if isinstance(existing, dict) and existing.get("not_owner"):
+                merged.extend([item for item in re.split(r"[、,，;；]+", str(existing.get("not_owner") or "")) if item])
+            merged.extend(negative_values)
+            meanings[nick] = {
+                "meaning": _single_line(existing.get("meaning"), 90) if isinstance(existing, dict) else "外号归属被纠正，具体对象未确认",
+                "usage": _single_line(existing.get("usage"), 90) if isinstance(existing, dict) else "遇到该称呼时不要猜归属",
+                "not_owner": "、".join(dict.fromkeys(merged)),
+                "source": "explicit_correction",
+                "evidence": cleaned,
+                "updated_at": now_text,
+            }
+
     def _group_member_name_tokens(self, group: dict[str, Any]) -> set[str]:
         tokens: set[str] = set()
 
@@ -10093,6 +10393,11 @@ class PrivateCompanionPlugin(Star):
         removed: set[str] = set()
         for item in terms:
             term = _single_line(item.get("term") if isinstance(item, dict) else item, 40)
+            meanings = group.get("slang_meanings")
+            meaning_item = meanings.get(term) if isinstance(meanings, dict) else None
+            if isinstance(meaning_item, dict) and meaning_item.get("source") == "explicit_correction":
+                kept.append(item)
+                continue
             if term and self._looks_like_group_member_name(group, term):
                 removed.add(term)
                 continue
@@ -10305,8 +10610,8 @@ class PrivateCompanionPlugin(Star):
         for item in ranked:
             a_id = str(item.get("a") or "")
             b_id = str(item.get("b") or "")
-            a_name = self._group_member_identity_name(a_id, item.get("a_name"), limit=16) if a_id else (_single_line(item.get("a_name"), 16) or "群友A")
-            b_name = self._group_member_identity_name(b_id, item.get("b_name"), limit=16) if b_id else (_single_line(item.get("b_name"), 16) or "群友B")
+            a_name = self._group_member_identity_label(a_id, item.get("a_name"), limit=16) if a_id else (_single_line(item.get("a_name"), 16) or "群友A")
+            b_name = self._group_member_identity_label(b_id, item.get("b_name"), limit=16) if b_id else (_single_line(item.get("b_name"), 16) or "群友B")
             tone = item.get("tone") if isinstance(item.get("tone"), dict) else {}
             main_tone = "普通"
             if tone:
@@ -10324,8 +10629,15 @@ class PrivateCompanionPlugin(Star):
                 continue
             meaning = _single_line(item.get("meaning"), 80)
             usage = _single_line(item.get("usage"), 80)
+            not_owner = _single_line(item.get("not_owner"), 80)
             if meaning:
-                lines.append(f"- {term}：{meaning}" + (f"｜用法：{usage}" if usage else ""))
+                source = _single_line(item.get("source"), 30)
+                lines.append(
+                    f"- {term}：{meaning}"
+                    + (f"｜不是：{not_owner}" if not_owner else "")
+                    + (f"｜用法：{usage}" if usage else "")
+                    + ("｜显式纠正" if source == "explicit_correction" else "")
+                )
         return "\n".join(lines)
 
     def _format_group_topic_threads_for_prompt(self, group: dict[str, Any]) -> str:
@@ -10341,7 +10653,7 @@ class PrivateCompanionPlugin(Star):
                 continue
             participants = item.get("participants") if isinstance(item.get("participants"), list) else []
             participant_names = [
-                self._group_member_identity_name(str(participant), str(participant), limit=12)
+                self._group_member_identity_label(str(participant), str(participant), limit=12)
                 for participant in participants[:4]
             ]
             participant_text = "、".join(name for name in participant_names if name)
@@ -10514,7 +10826,8 @@ class PrivateCompanionPlugin(Star):
                 "；".join(injected),
             )
         for profile in profiles:
-            aliases = "、".join(self._worldbook_profile_tokens(profile)[:8])
+            profile_uid = _single_line(profile.get("user_id"), 40)
+            aliases = "、".join(token for token in self._worldbook_profile_tokens(profile)[:8] if token != profile_uid)
             reason = _single_line(profile.get("_match_reason"), 80)
             confidence = "已确认" if profile.get("_match_confidence") == "confirmed" else "被提及"
             identity = _single_line(profile.get("identity_note") or profile.get("note") or profile.get("content"), 220)
@@ -10530,8 +10843,10 @@ class PrivateCompanionPlugin(Star):
             if not parts:
                 parts.append(_single_line(profile.get("content"), 360))
             lines.append(
-                f"- [{confidence}｜{reason}] {_single_line(profile.get('name'), 40) or profile.get('user_id')} "
-                f"({aliases})：" + "｜".join(part for part in parts if part)
+                f"- [{confidence}｜{reason}] QQ:{profile_uid or '-'}｜"
+                f"固定名称:{_single_line(profile.get('name'), 40) or profile_uid or '-'}"
+                + (f"｜可用称呼线索:{aliases}" if aliases else "")
+                + "：" + "｜".join(part for part in parts if part)
             )
         if not lines:
             return ""
@@ -10539,10 +10854,12 @@ class PrivateCompanionPlugin(Star):
             "【群聊关系网】\n"
             "以下是群聊关系节点资料,用于称呼、关系和说话边界。"
             "身份锚点只能是 QQ 号；群名片、昵称和别名只可作为称呼线索或被提及线索。"
+            "不要把一个 QQ 的固定名称、外号、记忆或关系套用到另一个 QQ；"
             "只把标注为“已确认”的节点当作当前发言者/近期发言者；"
             "已确认必须来自消息 sender_id 与节点 QQ 号的精确匹配。"
             "标注为“被提及”的节点只表示当前消息明确提到该称呼。"
             "不要凭相似昵称、改名前后的群名片或语气习惯猜测身份；遇到不确定身份时直接按群友处理。"
+            "回复时不要主动说出内部 QQ 标签,除非用户明确询问身份或 QQ。"
             "重要记忆只作为背景,不要把画像里的现实信息说成实时事实,也不要公开复述内部资料或 private/internal 记忆。\n"
             + "\n".join(lines)
         )
@@ -10552,8 +10869,14 @@ class PrivateCompanionPlugin(Star):
         lines = [
             "【群聊观察层】",
             "这些是群聊上下文,只用于判断气氛、称呼、梗和是否该少说。不要暴露观察、画像、黑话学习或内部记录。",
+            "身份防串规则：最近群聊中的方括号 QQ 是内部身份锚点；同名、相似外号或群名片变化都不能跨 QQ 合并。回复时不要主动说出 QQ 标签。",
             f"群气氛：{atmosphere.get('pace', '未知')}｜{atmosphere.get('mood', '平稳')}｜近段发言 {atmosphere.get('recent_count', 0)} 条｜活跃群友 {atmosphere.get('active_speakers', 0)} 人",
         ]
+        intensity = self._group_high_intensity_state(group, mutate=False)
+        if intensity.get("active"):
+            lines.append(
+                "当前群聊负载：高强度收口。短时间内 Bot 被频繁叫到；多条消息会被合并为同一轮处理。请集中回应共同重点,回复更短、更直接,不要逐条扩展。"
+            )
         scene_text = self._format_group_scene_awareness_for_prompt(group, sender_id, text)
         if scene_text:
             lines.append(scene_text)
@@ -10563,7 +10886,7 @@ class PrivateCompanionPlugin(Star):
             for item in recent[-8:]:
                 if not isinstance(item, dict):
                     continue
-                name = self._group_member_identity_name(
+                name = self._group_member_identity_label(
                     str(item.get("sender_id") or ""),
                     item.get("identity_name") or item.get("name"),
                     limit=20,
@@ -10607,7 +10930,7 @@ class PrivateCompanionPlugin(Star):
                 identity_note = _single_line(member.get("identity_note"), 80)
                 boundary_note = _single_line(member.get("boundary_note"), 80)
                 lines.append(
-                    f"当前发言者：{self._group_member_identity_name(sender_id, member.get('identity_name') or member.get('name'), limit=24)}"
+                    f"当前发言者：{self._group_member_identity_label(sender_id, member.get('identity_name') or member.get('name'), limit=24)}"
                     f"｜发言样本 {member.get('count', 0)} 条"
                     + (f"｜近期短句：{phrase_text}" if phrase_text else "")
                     + (f"｜关系备注：{identity_note}" if identity_note else "")
@@ -10646,7 +10969,7 @@ class PrivateCompanionPlugin(Star):
             current = recent[-1] if recent and isinstance(recent[-1], dict) else None
         if not isinstance(current, dict):
             return ""
-        sender_name = self._group_member_identity_name(str(current.get("sender_id") or ""), current.get("identity_name") or current.get("name"), limit=40)
+        sender_name = self._group_member_identity_label(str(current.get("sender_id") or ""), current.get("identity_name") or current.get("name"), limit=40)
         scene = {
             "talking_to": current.get("talking_to") or "group",
             "talking_to_name": current.get("talking_to_name") or "",
@@ -10677,7 +11000,7 @@ class PrivateCompanionPlugin(Star):
         for item in recent[-max(2, self.group_scene_recent_limit):]:
             if not isinstance(item, dict):
                 continue
-            name = self._group_member_identity_name(str(item.get("sender_id") or ""), item.get("identity_name") or item.get("name"), limit=24)
+            name = self._group_member_identity_label(str(item.get("sender_id") or ""), item.get("identity_name") or item.get("name"), limit=24)
             item_scene = {
                 "talking_to": item.get("talking_to") or "group",
                 "talking_to_name": item.get("talking_to_name") or "",
@@ -10693,7 +11016,7 @@ class PrivateCompanionPlugin(Star):
         for item in recent[-12:]:
             if not isinstance(item, dict):
                 continue
-            name = self._group_member_identity_name(str(item.get("sender_id") or ""), item.get("identity_name") or item.get("name"), limit=20)
+            name = self._group_member_identity_label(str(item.get("sender_id") or ""), item.get("identity_name") or item.get("name"), limit=20)
             if name and name not in participants:
                 participants.append(name)
         if len(participants) > 1:
@@ -10831,12 +11154,11 @@ class PrivateCompanionPlugin(Star):
         return {"action": "follow", "text": cleaned, "image_path": ""}
 
     async def _maybe_group_interject(self, event: AstrMessageEvent, group: dict[str, Any], text: str) -> None:
-        quote_message_id = self._event_message_id(event) if getattr(self, "enable_proactive_quote_trigger_message", False) else ""
         repeat_action = self._update_group_repeat_follow_state(group, text)
         if repeat_action:
             repeat_reply = _single_line(repeat_action.get("text"), 80)
             image_path = str(repeat_action.get("image_path") or "")
-            await self._reply_with_optional_media(event, repeat_reply, image_path=image_path, quote_message_id=quote_message_id)
+            await self._reply_with_optional_media(event, repeat_reply, image_path=image_path, quote_message_id="")
             now = _now_ts()
             group["last_interject_at"] = now
             group["interject_today"] = _safe_int(group.get("interject_today"), 0, 0) + 1
@@ -10848,6 +11170,7 @@ class PrivateCompanionPlugin(Star):
                 "topic_signature": self._group_topic_signature(text),
             }
             return
+        quote_message_id = self._event_message_id(event) if getattr(self, "enable_proactive_quote_trigger_message", False) else ""
         allowed, reason = self._group_interjection_allowed(group, text)
         if not allowed:
             return
@@ -11048,7 +11371,11 @@ class PrivateCompanionPlugin(Star):
             if not isinstance(meanings, dict):
                 meanings = {}
                 current["slang_meanings"] = meanings
-            meanings.update(normalized)
+            for term, payload in normalized.items():
+                existing = meanings.get(term)
+                if isinstance(existing, dict) and existing.get("source") == "explicit_correction":
+                    continue
+                meanings[term] = payload
             current["last_slang_summary_at"] = now
             self._save_data_sync()
 
@@ -11718,6 +12045,10 @@ Bot 主动后用户回复次数：{reply_count}
             return False, "计划动机不适合当前时间"
         planned_action = str(user.get("planned_proactive_action") or "message")
         if not self._action_is_available(planned_action, user):
+            load_defer_note = self._photo_text_load_defer_note(planned_action)
+            if load_defer_note:
+                self._defer_planned_photo_text_for_load(user, now=now, note=load_defer_note)
+                return False, load_defer_note
             self._mark_planned_candidate_status(user, "blocked", "动作不可用或媒体额度不足")
             self._clear_pending_proactive_plan(user)
             self._schedule_next_proactive(user, now=now, delay_hours=(2, 6))
@@ -13671,17 +14002,100 @@ Bot 主动后用户回复次数：{reply_count}
             and self.external_image_api_model
         )
 
+    def _local_photo_generation_load_state(self, *, force_refresh: bool = False) -> dict[str, Any]:
+        now = _now_ts()
+        if not self.enable_local_photo_load_guard:
+            return {"enabled": False, "busy": False, "reason": "负载保护未启用", "sampled_at": now}
+        cached = getattr(self, "_local_photo_load_cache", {}) if isinstance(getattr(self, "_local_photo_load_cache", {}), dict) else {}
+        if cached and not force_refresh and now - _safe_float(cached.get("sampled_at"), 0) < 20:
+            return dict(cached)
+        state: dict[str, Any] = {
+            "enabled": True,
+            "available": False,
+            "busy": False,
+            "cpu_percent": 0.0,
+            "memory_percent": 0.0,
+            "reason": "",
+            "sampled_at": now,
+        }
+        try:
+            psutil = importlib.import_module("psutil")
+            cpu_percent = float(psutil.cpu_percent(interval=0.05))
+            memory_percent = float(getattr(psutil.virtual_memory(), "percent", 0.0) or 0.0)
+            state.update(
+                {
+                    "available": True,
+                    "cpu_percent": round(cpu_percent, 1),
+                    "memory_percent": round(memory_percent, 1),
+                }
+            )
+            reasons = []
+            if cpu_percent >= self.local_photo_cpu_busy_percent:
+                reasons.append(f"CPU {cpu_percent:.0f}%")
+            if memory_percent >= self.local_photo_memory_busy_percent:
+                reasons.append(f"内存 {memory_percent:.0f}%")
+            state["busy"] = bool(reasons)
+            state["reason"] = "、".join(reasons) if reasons else "负载正常"
+        except Exception as exc:
+            state["reason"] = f"无法读取系统负载:{exc.__class__.__name__}"
+        self._local_photo_load_cache = dict(state)
+        return state
+
+    def _local_photo_generation_busy_state(self, *, force_refresh: bool = False) -> dict[str, Any] | None:
+        state = self._local_photo_generation_load_state(force_refresh=force_refresh)
+        if bool(state.get("enabled")) and bool(state.get("available")) and bool(state.get("busy")):
+            return state
+        return None
+
+    def _action_has_photo_text(self, action: str) -> bool:
+        return "photo_text" in {part.strip() for part in str(action or "").split("+") if part.strip()}
+
+    def _photo_text_load_defer_note(self, action: str = "photo_text", *, force_refresh: bool = False) -> str:
+        if not self._action_has_photo_text(action):
+            return ""
+        if self._daily_token_soft_limit_should_defer("photo_prompt"):
+            return (
+                "每日 Token 软限额已暂缓主动生图"
+                f"（今日已用约 {self._today_llm_token_total()} Token；软限额 {self.daily_token_soft_limit}）"
+            )
+        if self.photo_generation_backend == "external":
+            return ""
+        if not self._comfyui_photo_available():
+            return ""
+        state = self._local_photo_generation_busy_state(force_refresh=force_refresh)
+        if not state:
+            return ""
+        if self.photo_generation_backend == "auto" and self._external_photo_available():
+            return ""
+        return (
+            "电脑高负荷,已延后本地生图"
+            f"（{state.get('reason') or '负载偏高'}；{self.local_photo_defer_minutes} 分钟后重试）"
+        )
+
+    def _defer_planned_photo_text_for_load(self, user: dict[str, Any], *, now: float, note: str) -> None:
+        delay_seconds = max(60, int(self.local_photo_defer_minutes) * 60)
+        jitter_seconds = random.uniform(0, min(300, delay_seconds * 0.2))
+        user["next_proactive_at"] = now + delay_seconds + jitter_seconds
+        user["proactive_sending"] = False
+        user["proactive_sending_started_at"] = 0
+        self._mark_planned_candidate_status(user, "accepted", note)
+
     def _photo_text_available(self, user: dict[str, Any] | None = None) -> bool:
         if not self.enable_photo_text_action:
             return False
+        if self._daily_token_soft_limit_should_defer("photo_prompt"):
+            return False
         if self.photo_generation_backend == "comfyui":
             if not self._comfyui_photo_available():
+                return False
+            if self._local_photo_generation_busy_state():
                 return False
         elif self.photo_generation_backend == "external":
             if not self._external_photo_available():
                 return False
         else:
-            if not (self._comfyui_photo_available() or self._external_photo_available()):
+            comfyui_available = self._comfyui_photo_available() and not self._local_photo_generation_busy_state()
+            if not (comfyui_available or self._external_photo_available()):
                 return False
         if user and self.photo_action_max_daily > 0:
             today = datetime.now().strftime("%Y-%m-%d")
@@ -14425,18 +14839,19 @@ Bot 主动后用户回复次数：{reply_count}
         if _now_ts() - _safe_float(share.get("created_ts"), 0) > 3 * 3600:
             return ""
         group_id = _single_line(share.get("group_id"), 24)
-        speaker = _single_line(share.get("speaker"), 24) or "群友"
+        speaker = _single_line(share.get("speaker"), 64) or "群友"
         text = _single_line(share.get("text"), 120)
         summary = _single_line(share.get("summary"), 220)
         topic_summary = _single_line(share.get("topic_summary"), 260)
         topic = _single_line(share.get("topic"), 60)
         participants = share.get("participants") if isinstance(share.get("participants"), list) else []
-        participant_text = "、".join(_single_line(item, 16) for item in participants[:6] if _single_line(item, 16))
+        participant_text = "、".join(_single_line(item, 64) for item in participants[:6] if _single_line(item, 64))
         window_minutes = _safe_int(share.get("window_minutes"), 0, 0)
         parts = [
             f"群聊分享线索：群 {group_id}" if group_id else "群聊分享线索",
             f"时间窗：最近约 {window_minutes} 分钟的一段群聊" if window_minutes else "",
             f"参与者：{participant_text}" if participant_text else "",
+            "身份锚点：[QQ:...] 只用于内部区分群友,不要写进最终私聊消息。" if participant_text or speaker else "",
             f"这段话题发生了什么：{topic_summary}" if topic_summary else "",
             f"代表性片段：{speaker}: {text}" if text else "",
             f"话题推进样本：{summary}" if summary else "",
@@ -15302,6 +15717,7 @@ Bot 主动后用户回复次数：{reply_count}
 - 不要用动作描写暗示状态,例如"差点把茶打翻""笔帽弹到桌子底下""喝了一口咳出来"
 - 不要写任何“我正在做某事”的汇报式语句
 - 不要输出 JSON、标题、解释或标注
+- 如果上下文里出现 [QQ:...] 或 QQ:... 这样的身份锚点,只用于区分群友身份,不要把它写进最终消息
 
 下面才是本次主动消息的动态输入：
 
@@ -15362,6 +15778,7 @@ Bot 主动后用户回复次数：{reply_count}
 - 不要用动作描写暗示状态,例如"差点把茶打翻""笔帽弹到桌子底下""喝了一口咳出来"。
 - 不要写任何“我正在做某事”的汇报式语句。
 - 不要输出 JSON、标题、解释或标注
+- 如果上下文里出现 [QQ:...] 或 QQ:... 这样的身份锚点,只用于区分群友身份,不要把它写进最终消息
 - 只输出你要发给 {{name}} 的那一段正文
 """.strip()
 
@@ -16982,6 +17399,9 @@ Bot 主动后用户回复次数：{reply_count}
     async def _run_photo_text_action(self, user: dict[str, Any], name: str, reason: str) -> str:
         if not self.enable_photo_text_action:
             return "photo_text：未启用"
+        load_defer_note = self._photo_text_load_defer_note("photo_text", force_refresh=True)
+        if load_defer_note:
+            return f"photo_text：{load_defer_note},不能假装已经拍照"
         if not self._photo_text_available(user):
             return "photo_text：今日发图额度已用完或生图后端不可用,不能假装已经拍照"
         if not self._photo_text_available():
@@ -17030,6 +17450,9 @@ Bot 主动后用户回复次数：{reply_count}
         if preferred == "comfyui":
             if not self._comfyui_photo_available():
                 return "ComfyUI", "", "ComfyUI 后端不可用或未配置"
+            busy_state = self._local_photo_generation_busy_state(force_refresh=True)
+            if busy_state:
+                return "ComfyUI", "", f"电脑高负荷,已跳过本地生图（{busy_state.get('reason') or '负载偏高'}）"
             workflow_name = self._choose_photo_workflow_name(workflow_kind)
             if not workflow_name:
                 return "ComfyUI", "", f"未配置 {workflow_kind} 对应的 ComfyUI 工作流"
@@ -17048,18 +17471,22 @@ Bot 主动后用户回复次数：{reply_count}
             )
             return "在线图片 API", image_path, note
         if self._comfyui_photo_available():
-            workflow_name = self._choose_photo_workflow_name(workflow_kind)
-            if workflow_name:
-                image_path, note = await self._run_comfyui_photo_workflow(
-                    workflow_name,
-                    prompt_text,
-                    session_key=session_key,
-                )
-                if image_path:
-                    return "ComfyUI", image_path, note
-                comfyui_note = note
+            busy_state = self._local_photo_generation_busy_state(force_refresh=True)
+            if busy_state:
+                comfyui_note = f"电脑高负荷,已跳过本地生图（{busy_state.get('reason') or '负载偏高'}）"
             else:
-                comfyui_note = f"未配置 {workflow_kind} 对应的 ComfyUI 工作流"
+                workflow_name = self._choose_photo_workflow_name(workflow_kind)
+                if workflow_name:
+                    image_path, note = await self._run_comfyui_photo_workflow(
+                        workflow_name,
+                        prompt_text,
+                        session_key=session_key,
+                    )
+                    if image_path:
+                        return "ComfyUI", image_path, note
+                    comfyui_note = note
+                else:
+                    comfyui_note = f"未配置 {workflow_kind} 对应的 ComfyUI 工作流"
         else:
             comfyui_note = "ComfyUI 后端不可用或未配置"
         if self._external_photo_available():
@@ -18046,6 +18473,29 @@ Bot 主动后用户回复次数：{reply_count}
                 await asyncio.sleep(await self._calc_segmented_proactive_interval(segment))
 
     @filter.on_decorating_result()
+    async def strip_group_internal_identity_anchors(self, event: AstrMessageEvent):
+        if not self.enabled:
+            return
+        if not self.enable_group_companion:
+            return
+        if not self._extract_group_id_from_event(event):
+            return
+        result = event.get_result()
+        chain = list(getattr(result, "chain", []) or []) if result is not None else []
+        if not chain:
+            return
+        for comp in chain:
+            if not isinstance(comp, Plain):
+                continue
+            original = str(getattr(comp, "text", "") or "")
+            cleaned = self._strip_internal_identity_anchors(original)
+            if cleaned != original:
+                try:
+                    comp.text = cleaned
+                except Exception:
+                    pass
+
+    @filter.on_decorating_result()
     async def apply_segmented_llm_reply_scope(self, event: AstrMessageEvent):
         if not self.enabled:
             return
@@ -18070,15 +18520,45 @@ Bot 主动后用户回复次数：{reply_count}
         if len(segments) <= 1:
             cleaned_text = segments[0] if segments else ""
             if cleaned_text and cleaned_text != text:
-                event.set_result(self._build_result_from_chain([Plain(cleaned_text)]))
+                quote_message_id = self._group_current_reply_quote_message_id(event)
+                event.set_result(self._build_result_from_chain(self._with_optional_reply([Plain(cleaned_text)], quote_message_id)))
             return
         logger.debug("[PrivateCompanion] 按插件规则分段 LLM 回复: %s -> %s 段", len(text), len(segments))
+        quote_message_id = self._group_current_reply_quote_message_id(event)
         for index, segment in enumerate(segments):
-            await event.send(event.plain_result(segment))
+            chain = self._with_optional_reply([Plain(segment)], quote_message_id) if index == 0 else [Plain(segment)]
+            await event.send(event.chain_result(chain))
+            quote_message_id = ""
             if index < len(segments) - 1:
                 await asyncio.sleep(await self._calc_segmented_proactive_interval(segment))
         event.clear_result()
         event.stop_event()
+
+    @filter.on_decorating_result()
+    async def attach_group_reply_quote(self, event: AstrMessageEvent):
+        if not self.enabled:
+            return
+        quote_message_id = self._group_current_reply_quote_message_id(event)
+        if not quote_message_id:
+            return
+        result = event.get_result()
+        if result is None:
+            return
+        try:
+            if hasattr(result, "is_llm_result") and not result.is_llm_result():
+                return
+        except Exception:
+            pass
+        chain = list(getattr(result, "chain", []) or [])
+        if not chain or self._chain_has_reply_component(chain):
+            return
+        quoted_chain = self._with_optional_reply(chain, quote_message_id)
+        if quoted_chain == chain:
+            return
+        try:
+            result.chain = quoted_chain
+        except Exception:
+            event.set_result(self._build_result_from_chain(quoted_chain))
 
     def _is_proactive_plan_stale(self, user: dict[str, Any], *, now: float | None = None) -> bool:
         next_at = _safe_float(user.get("next_proactive_at"), 0)
@@ -18269,6 +18749,7 @@ Bot 主动后用户回复次数：{reply_count}
         cleaned = re.sub(r"<[^>\n]{0,200}>", "", cleaned)
         cleaned = cleaned.replace("[图片]", "").replace("【图片】", "")
         cleaned = cleaned.replace("（图片已送达）", "").replace("(图片已送达)", "")
+        cleaned = self._strip_internal_identity_anchors(cleaned)
         cleaned = re.sub(r"^```(?:text)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
         cleaned = cleaned.strip().strip('"').strip("'")
@@ -23842,13 +24323,62 @@ Bot 主动后用户回复次数：{reply_count}
             return None
         return max(0, limit - self._today_llm_token_total())
 
+    def _daily_token_soft_limit_should_defer(self, task: str | None = None) -> bool:
+        if not getattr(self, "enable_daily_token_soft_limit", True):
+            return False
+        soft_limit = _safe_int(getattr(self, "daily_token_soft_limit", 0), 0)
+        if soft_limit <= 0 or self._today_llm_token_total() < soft_limit:
+            return False
+        task_key = _single_line(task, 40) or "other"
+        if self._is_llm_budget_exempt_task(task_key):
+            return False
+        low_priority_tasks = {
+            "news_digest",
+            "external_event_self_link",
+            "web_exploration_query",
+            "web_exploration_digest",
+            "qzone_comment",
+            "qzone_publish",
+            "creative_project",
+            "creative_writing",
+            "group_interject",
+            "group_episode",
+            "group_slang",
+            "dialogue_episode",
+            "memory_profile",
+            "response_review",
+            "relationship",
+            "screen_narration",
+            "photo_prompt",
+            "private_reading_vision",
+            "proactive_framework",
+            "voice_framework",
+            "voice",
+            "voice_repair",
+            "yesterday_summary",
+            "worldbook_registration",
+        }
+        return task_key in low_priority_tasks
+
+    def _maintenance_token_saver_should_defer(self, task: str | None = None) -> bool:
+        return self._daily_token_soft_limit_should_defer(task)
+
     def _can_run_llm_task(self, provider_id: str = "", *, task: str | None = None) -> bool:
         task_key = _single_line(task, 40) or "other"
         if self._is_llm_budget_exempt_task(task_key):
             return True
+        if self._daily_token_soft_limit_should_defer(task_key):
+            return False
         return self._llm_daily_budget_remaining() != 0
 
-    def _record_llm_budget_skip(self, *, provider_id: str, task: str, prompt: str) -> None:
+    def _record_llm_budget_skip(
+        self,
+        *,
+        provider_id: str,
+        task: str,
+        prompt: str,
+        error: str = "daily_token_limit_exceeded",
+    ) -> None:
         now_ts = _now_ts()
         day = _today_key()
         store = self.data.setdefault("token_usage", {})
@@ -23863,6 +24393,7 @@ Bot 主动后用户回复次数：{reply_count}
         if isinstance(skip_bucket, dict):
             skip_bucket["count"] = _safe_int(skip_bucket.get("count"), 0) + 1
             skip_bucket["last_ts"] = now_ts
+            skip_bucket[error] = _safe_int(skip_bucket.get(error), 0) + 1
         recent = store.setdefault("recent", [])
         if not isinstance(recent, list):
             recent = []
@@ -23881,18 +24412,27 @@ Bot 主动后用户回复次数：{reply_count}
                 "elapsed_ms": 0,
                 "prompt_chars": len(str(prompt or "")),
                 "completion_chars": 0,
-                "error": "daily_token_limit_exceeded",
+                "error": error,
             }
         )
         del recent[:-240]
         store["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if getattr(self, "_token_limit_logged_day", "") != day:
-            self._token_limit_logged_day = day
-            logger.warning(
-                "[PrivateCompanion] 今日插件 Token 限额已达到: %s/%s",
-                self._today_llm_token_total(),
-                self.daily_token_limit,
-            )
+        log_key = f"{day}:{error}"
+        if getattr(self, "_token_budget_skip_logged_key", "") != log_key:
+            self._token_budget_skip_logged_key = log_key
+            if error in {"daily_token_soft_limit_deferred", "maintenance_token_saver_deferred"}:
+                logger.info(
+                    "[PrivateCompanion] 每日 Token 软限额已暂缓低优先级 LLM 任务: used=%s soft_limit=%s task=%s",
+                    self._today_llm_token_total(),
+                    self.daily_token_soft_limit,
+                    task or "other",
+                )
+            else:
+                logger.warning(
+                    "[PrivateCompanion] 今日插件 Token 限额已达到: %s/%s",
+                    self._today_llm_token_total(),
+                    self.daily_token_limit,
+                )
         last_save = _safe_float(getattr(self, "_token_usage_last_save_at", 0), 0)
         if now_ts - last_save >= 60:
             self._token_usage_last_save_at = now_ts
@@ -23912,6 +24452,14 @@ Bot 主动后用户回复次数：{reply_count}
         selected_provider = str(provider_id or self.llm_provider_id or "").strip()
         task_key = _single_line(task, 40) or self._classify_llm_prompt(prompt)
         budget_exempt = self._is_llm_budget_exempt_task(task_key)
+        if not budget_exempt and self._daily_token_soft_limit_should_defer(task_key):
+            self._record_llm_budget_skip(
+                provider_id=selected_provider,
+                task=task_key,
+                prompt=prompt,
+                error="daily_token_soft_limit_deferred",
+            )
+            return None
         if not budget_exempt and self._llm_daily_budget_remaining() == 0:
             self._record_llm_budget_skip(provider_id=selected_provider, task=task_key, prompt=prompt)
             return None
@@ -24531,6 +25079,14 @@ Bot 主动后用户回复次数：{reply_count}
             proactive_quote_message_id = self._planned_proactive_quote_message_id(user, str(user.get("umo") or ""))
             planned_opener_mode_for_send = str(user.get("planned_opener_mode") or "")
             planned_followup_kind_for_send = str(user.get("planned_followup_kind") or "")
+            load_defer_note = self._photo_text_load_defer_note(planned_action_for_send, force_refresh=True)
+            if load_defer_note:
+                async with self._data_lock:
+                    current_for_defer = self._get_user(user_id)
+                    self._defer_planned_photo_text_for_load(current_for_defer, now=_now_ts(), note=load_defer_note)
+                    self._save_data_sync()
+                self._debug_tick_skip(user_id, load_defer_note, prefix="延后")
+                continue
             task_start_last_seen = _safe_float(user.get("last_seen"), 0)
             task_start_inbound_count = _safe_int(user.get("inbound_count"), 0)
             reason, text, image_path, extra_components, action_summary, effective_action_for_send = await self._render_message(user)
@@ -24829,7 +25385,80 @@ Bot 主动后用户回复次数：{reply_count}
     def _private_only_text(self) -> str:
         return "为了避免误打扰,陪伴功能需要在私聊里管理。"
 
-    async def _reply(self, event: AstrMessageEvent, text: str):
+    def _configured_admin_ids(self) -> set[str]:
+        ids: set[str] = set()
+        configs: list[Any] = []
+        context = getattr(self, "context", None)
+        get_config = getattr(context, "get_config", None)
+        if callable(get_config):
+            for args in ((), ("default",)):
+                try:
+                    configs.append(get_config(*args))
+                except Exception:
+                    continue
+        config = getattr(self, "config", None)
+        if config is not None:
+            configs.append(config)
+        for cfg in configs:
+            raw = None
+            if isinstance(cfg, dict):
+                raw = cfg.get("admins_id") or cfg.get("admins") or cfg.get("admin_ids")
+            else:
+                raw = getattr(cfg, "admins_id", None) or getattr(cfg, "admins", None) or getattr(cfg, "admin_ids", None)
+            if isinstance(raw, str):
+                parts = re.split(r"[\s,，、;；]+", raw)
+            elif isinstance(raw, list):
+                parts = raw
+            else:
+                parts = []
+            for item in parts:
+                value = str(item or "").strip()
+                if value and value.isdigit():
+                    ids.add(value)
+        return ids
+
+    def _is_plugin_manager_user_id(self, user_id: str) -> bool:
+        user_id = str(user_id or "").strip()
+        if not user_id:
+            return False
+        if user_id in set(self._configured_target_ids()):
+            return True
+        return user_id in self._configured_admin_ids()
+
+    def _is_group_admin_event(self, event: AstrMessageEvent) -> bool:
+        message_obj = getattr(event, "message_obj", None)
+        sender = getattr(message_obj, "sender", None) if message_obj is not None else None
+        raw_role = ""
+        for attr in ("role", "user_role", "group_role"):
+            value = getattr(sender, attr, None) if sender is not None else None
+            if value:
+                raw_role = str(value)
+                break
+        raw_role = _single_line(raw_role, 20).lower()
+        return raw_role in {"owner", "admin", "群主", "管理员"}
+
+    def _can_manage_private_companion(self, event: AstrMessageEvent) -> bool:
+        try:
+            user_id = str(event.get_sender_id())
+        except Exception:
+            user_id = ""
+        return self._is_plugin_manager_user_id(user_id)
+
+    def _can_manage_group_companion(self, event: AstrMessageEvent) -> bool:
+        try:
+            user_id = str(event.get_sender_id())
+        except Exception:
+            user_id = ""
+        return self._is_plugin_manager_user_id(user_id) or self._is_group_admin_event(event)
+
+    def _management_denied_text(self) -> str:
+        return "这个操作会修改插件状态,需要 Bot 管理员、配置目标用户或群管理员来执行。"
+
+    async def _reply(self, event: AstrMessageEvent, text: str, *, quote_current: bool = True):
+        quote_message_id = self._group_current_reply_quote_message_id(event) if quote_current else ""
+        if quote_message_id and text:
+            await event.send(event.chain_result(self._with_optional_reply([Plain(text)], quote_message_id)))
+            return
         await event.send(event.plain_result(text))
 
     async def _reply_with_optional_media(
@@ -24856,7 +25485,7 @@ Bot 主动后用户回复次数：{reply_count}
             return
         if not text:
             return
-        await self._reply(event, text)
+        await event.send(event.plain_result(text))
 
     def _atrelay_tool_instruction(self) -> str:
         if not (self.enabled and self.enable_atrelay_tools):
@@ -24870,6 +25499,8 @@ Bot 主动后用户回复次数：{reply_count}
 - 发到群并点名某人：destination=`group`,group_hint=群号/群名,recipient_hint=目标昵称或 QQ,message=要说的话；工具会自动 @ 并解析关系网/群名片。
 - 私聊某人：destination=`private`,recipient_hint=QQ 或称呼；如果称呼不是 QQ,尽量提供 group_hint 以便从群成员里解析。
 - 默认使用“语气转译”：不要把用户原话机械复制给对方,而是保留事实意图,按你的人格、你和说话人/收话人的关系改写成自然转述。例如“你帮我跟 A 说一下别忘了交作业”可以转成“A,刚才他说让你记得交作业,我顺手提醒一下。”
+- 构造 message 时不要随意给当前发起人套外号；如果需要说明“谁让我带话”,只能使用当前发言者的固定名称、群名片或 QQ 精确身份锚点对应的名称。不要从黑话、猜测外号或相似昵称推断发起人是谁。
+- 用户说“告诉 A：B / 跟 A 说 B”时,优先只把 B 转述给 A；除非用户要求说明来源,否则不要额外添加“某某让我转告你”。
 - 只有用户明确要求“原话/照原话/一字不改/截图式转发”时才用原话模式,调用工具时把 `relay_mode` 填 `original`；其他情况填 `persona` 或留空。
 - 对敏感、私密、带强情绪、告白/指责/吵架/金钱/密码/身体健康/秘密类内容,发送前先问用户要“原样带过去”还是“委婉一点”。工具也会二次拦截；得到用户确认后再调用,并把 `sensitive_confirmed` 设为 true。
 - 普通提醒、约时间、作业/待办/到场通知等低风险内容可以直接转述。
@@ -26360,11 +26991,19 @@ Bot 主动后用户回复次数：{reply_count}
                         combined_text = await self._consume_semantic_message_buffer_for_event(event, private_chat=False)
                         extra = ""
                         if combined_text:
-                            extra = (
-                                "\n\n【本轮用户连续补充】\n"
-                                "用户刚刚在短时间内连续补充了几句,请把它们当作同一轮完整发言理解,不要逐条回复：\n"
-                                f"{combined_text}"
-                            )
+                            high_intensity = getattr(event, "private_companion_group_high_intensity", None)
+                            if isinstance(high_intensity, dict) and high_intensity.get("active"):
+                                extra = (
+                                    "\n\n【本轮高强度合并消息】\n"
+                                    "群里刚刚短时间内多次叫到你,下面这些消息已合并为同一轮处理。请集中回应共同重点,不要逐条分别回复,也不要扩展太多旁支：\n"
+                                    f"{combined_text}"
+                                )
+                            else:
+                                extra = (
+                                    "\n\n【本轮用户连续补充】\n"
+                                    "用户刚刚在短时间内连续补充了几句,请把它们当作同一轮完整发言理解,不要逐条回复：\n"
+                                    f"{combined_text}"
+                                )
                         wakeup_effect = getattr(event, "private_companion_group_wakeup_state_effect", None)
                         wakeup_state_text = ""
                         if isinstance(wakeup_effect, dict) and wakeup_effect:
@@ -26902,6 +27541,30 @@ Bot 主动后用户回复次数：{reply_count}
             event.stop_event()
             return
 
+        management_actions = {
+            "重置插件", "重置", "全部重置",
+            "查看提示词", "提示词", "prompt",
+            "重置细化", "重置日程",
+            "生成状态", "刷新状态", "重生状态",
+            "增添状态", "添加状态",
+            "完整测试", "真实测试", "完整真实测试",
+            "结束完整测试", "停止完整测试", "取消完整测试",
+            "生成日记", "刷新日记",
+            "重置夹层密码", "重设夹层密码", "重新生成夹层密码", "重置书柜密码", "重设书柜密码", "重新生成书柜密码",
+            "测试本子", "测试书柜本子", "测试夹层本子", "测试夹层阅读", "测试私密阅读",
+            "测试QQ空间", "测试空间", "QQ空间测试", "测试说说",
+            "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
+            "测试AI早报", "AI早报测试", "测试早报", "测试AI日报", "AI日报测试",
+            "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
+            "日期添加", "添加日期", "重要日期添加",
+            "日期删除", "删除日期", "重要日期删除",
+            "清空记忆", "忘记我",
+        }
+        if action in management_actions and not self._can_manage_private_companion(event):
+            await self._reply(event, self._management_denied_text())
+            event.stop_event()
+            return
+
         user_id = str(event.get_sender_id())
         async with self._data_lock:
             user = self._get_user(user_id)
@@ -27298,6 +27961,9 @@ Bot 主动后用户回复次数：{reply_count}
             action = parts[1].strip()
         if len(parts) >= 3:
             value = parts[2].strip()
+        if action in {"开启", "启用", "打开", "关闭", "停用", "关掉"} and not self._can_manage_group_companion(event):
+            yield event.plain_result(self._management_denied_text())
+            return
         async with self._data_lock:
             group = self._get_group(group_id)
             if action in {"开启", "启用", "打开"}:
@@ -27894,12 +28560,15 @@ Bot 主动后用户回复次数：{reply_count}
         wakeup_state_effect: dict[str, Any] = {}
         group_for_judge: dict[str, Any] = {}
         active_for_judge: dict[str, Any] = {}
+        high_intensity_state: dict[str, Any] = {}
+        group_snapshot_high_intensity: dict[str, Any] = {}
         async with self._data_lock:
             if self._is_duplicate_inbound_message(event, scope=f"group:{group_id}", sender_id=sender_id, text=text):
                 self._save_data_sync()
                 return
             group = self._get_group(group_id)
             scene = self._infer_group_scene(event, group, sender_id=sender_id, sender_name=sender_name, text=text)
+            high_intensity_state = self._group_high_intensity_state(group)
             continuation = await self._group_message_is_bot_continuation(
                 group,
                 sender_id,
@@ -27909,8 +28578,11 @@ Bot 主动后用户回复次数：{reply_count}
                 allow_llm=False,
             )
             if continuation is None:
-                group_for_judge = deepcopy(group)
-                active_for_judge = deepcopy(self._group_active_conversation(group))
+                if high_intensity_state.get("active"):
+                    continuation = False
+                else:
+                    group_for_judge = deepcopy(group)
+                    active_for_judge = deepcopy(self._group_active_conversation(group))
 
         if continuation is None:
             judged = await self._group_followup_llm_judge(
@@ -28037,12 +28709,6 @@ Bot 主动后用户回复次数：{reply_count}
                         fatigue.get("label"),
                     )
             talking_to_bot = str(scene.get("talking_to") or "") == "bot"
-            setattr(event, "private_companion_group_scene", dict(scene))
-            setattr(event, "private_companion_group_sender_name", sender_name)
-            setattr(event, "private_companion_group_text", text)
-            setattr(event, "private_companion_group_contextual_followup", bool(continuation))
-            if wakeup_state_effect:
-                setattr(event, "private_companion_group_wakeup_state_effect", dict(wakeup_state_effect))
             if (
                 not talking_to_bot
                 and
@@ -28050,10 +28716,83 @@ Bot 主动后用户回复次数：{reply_count}
                 and str(self._group_active_conversation(group).get("sender_id") or "") != str(sender_id or "")
             ):
                 self._mark_group_bot_conversation(group, sender_id, sender_name, active=False)
-            if talking_to_bot and self._note_semantic_message_buffer(
-                self._semantic_buffer_key(f"group:{group_id}", sender_id),
-                text,
-                sender_name=sender_name,
+            scene_trigger = str(scene.get("trigger") or "")
+            if talking_to_bot and scene_trigger in {"at_bot", "reply_bot"}:
+                strength = self._group_wakeup_strength("direct_word", group, scene)
+                fatigue = self._bump_group_wakeup_fatigue(group, "direct_word")
+                scene.setdefault("wakeup_strength", strength)
+                scene.setdefault("wakeup_strength_label", self._group_wakeup_strength_label(strength))
+                scene["wakeup_fatigue"] = dict(fatigue)
+                group["last_group_wakeup_at"] = _now_ts()
+                group["last_group_wakeup"] = {
+                    "ts": _now_ts(),
+                    "type": "direct_word",
+                    "word": "@" if scene_trigger == "at_bot" else "reply",
+                    "strength": strength,
+                    "strength_label": self._group_wakeup_strength_label(strength),
+                    "fatigue": dict(fatigue),
+                    "sender_id": sender_id,
+                    "sender_name": _single_line(sender_name, 40),
+                    "text": _single_line(text, 120),
+                }
+                self._record_group_wakeup_log(
+                    group,
+                    scene=scene,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    text=text,
+                    wakeup=group["last_group_wakeup"],
+                    result="woke",
+                    strength=strength,
+                    fatigue=fatigue,
+                    note="群友明确 @ 或引用了 Bot。",
+                )
+            high_intensity_state = self._group_high_intensity_state(group)
+            if high_intensity_state.get("active"):
+                setattr(event, "private_companion_group_high_intensity", dict(high_intensity_state))
+            setattr(event, "private_companion_group_scene", dict(scene))
+            setattr(event, "private_companion_group_sender_name", sender_name)
+            setattr(event, "private_companion_group_text", text)
+            setattr(event, "private_companion_group_contextual_followup", bool(continuation))
+            if wakeup_state_effect:
+                setattr(event, "private_companion_group_wakeup_state_effect", dict(wakeup_state_effect))
+            if high_intensity_state.get("active") and talking_to_bot:
+                high_key = self._group_high_intensity_buffer_key(group_id)
+                if self._note_semantic_message_buffer(
+                    high_key,
+                    text,
+                    sender_name=sender_name,
+                    wait_seconds=self._group_high_intensity_merge_wait_seconds(),
+                    force=True,
+                ):
+                    self._update_group_observation(
+                        group,
+                        sender_id=sender_id,
+                        sender_name=sender_name,
+                        text=text,
+                        group_id=group_id,
+                        scene=scene,
+                        message_id=self._event_message_id(event),
+                    )
+                    self._save_data_sync()
+                    logger.info(
+                        "[PrivateCompanion] 群聊高强度消息已合并等待: group=%s sender=%s recent_wakeups=%s wait=%ss text=%s",
+                        group_id,
+                        sender_id,
+                        high_intensity_state.get("recent_wakeups"),
+                        self._group_high_intensity_merge_wait_seconds(),
+                        _single_line(text, 80),
+                    )
+                    event.stop_event()
+                    return
+            if (
+                talking_to_bot
+                and not high_intensity_state.get("active")
+                and self._note_semantic_message_buffer(
+                    self._semantic_buffer_key(f"group:{group_id}", sender_id),
+                    text,
+                    sender_name=sender_name,
+                )
             ):
                 self._save_data_sync()
                 event.stop_event()
@@ -28078,6 +28817,7 @@ Bot 主动后用户回复次数：{reply_count}
             share_scheduled = self._maybe_schedule_group_private_share(group_id, group, trigger_sender_id=sender_id)
             self._save_data_sync()
             group_snapshot = deepcopy(group)
+            group_snapshot_high_intensity = dict(high_intensity_state)
         await self._dispatch_due_atrelay_tasks(event, group_id, sender_id)
         if isinstance(registration_payload, dict) and registration_payload.get("blocked_reply"):
             await self._reply(event, str(registration_payload.get("blocked_reply") or "你是小猪"))
@@ -28092,9 +28832,19 @@ Bot 主动后用户回复次数：{reply_count}
             asyncio.create_task(self._refresh_worldbook_self_registration_impression(registration_payload))
         if share_scheduled:
             asyncio.create_task(self._kick_proactive_loop_once())
-        asyncio.create_task(self._maybe_refresh_group_episode(group_id, group_snapshot))
-        asyncio.create_task(self._maybe_refresh_group_slang_meanings(group_id, group_snapshot))
-        await self._maybe_group_interject(event, group_snapshot, text)
+        if not group_snapshot_high_intensity.get("active"):
+            asyncio.create_task(self._maybe_refresh_group_episode(group_id, group_snapshot))
+            asyncio.create_task(self._maybe_refresh_group_slang_meanings(group_id, group_snapshot))
+            await self._maybe_group_interject(event, group_snapshot, text)
+        else:
+            logger.info(
+                "[PrivateCompanion] 群聊高强度收口生效: group=%s recent_wakeups=%s threshold=%s reason=%s merge_wait=%ss skip=followup-refresh/interject",
+                group_id,
+                group_snapshot_high_intensity.get("recent_wakeups"),
+                group_snapshot_high_intensity.get("threshold"),
+                group_snapshot_high_intensity.get("reason"),
+                self._group_high_intensity_merge_wait_seconds(),
+            )
         original_interject_at = _safe_float(group.get("last_interject_at"), 0) if isinstance(group, dict) else 0
         repeat_state_changed = group_snapshot.get("repeat_follow_state") != (
             group.get("repeat_follow_state") if isinstance(group, dict) else {}

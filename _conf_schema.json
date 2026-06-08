@@ -29,6 +29,19 @@
     "hint": "仅限制本插件内部发起的 LLM 任务，达到后会跳过日程、梦境、记忆整理、群聊分析、创作等后台模型调用。填 0 表示不限制。",
     "default": 1000000
   },
+  "enable_daily_token_soft_limit": {
+    "description": "启用每日 Token 软限额",
+    "type": "bool",
+    "hint": "作为达到限额就停止插件/停止后台链路的替代方案。开启后，达到软限额时优先保留用户当下触发的回复，自动暂缓新闻、网页探索、创作、群聊整理、自检、主动生图等低优先级后台 LLM 任务。",
+    "default": true
+  },
+  "daily_token_soft_limit": {
+    "description": "每日 Token 软限额",
+    "type": "int",
+    "hint": "今日插件内部 LLM 消耗达到该值后启用软降载；填 0 表示不启用软限额，只使用每日硬限额。",
+    "default": 800000,
+    "condition": "enable_daily_token_soft_limit"
+  },
   "target_user_ids": {
     "description": "私聊主动目标 QQ 号",
     "type": "list",
@@ -491,9 +504,9 @@
     "default": true
   },
   "enable_proactive_quote_trigger_message": {
-    "description": "主动消息引用触发消息",
+    "description": "群回复/主动引用触发消息",
     "type": "bool",
-    "hint": "开启后，群聊主动插话、复读跟读/打断会引用当前触发的群消息；模型预约的私聊主动若能追溯到同一私聊消息，也会引用。跨群转私聊、新闻、日程和随机主动等无同会话触发消息的场景不会强行引用。",
+    "hint": "开启后，群聊中明确 @、引用、唤醒或连续对话保持触发的 Bot 回复会引用当前消息；群聊主动插话会引用触发消息；模型预约的私聊主动若能追溯到同一私聊消息，也会引用。复读跟读/打断不会引用。",
     "default": false
   },
   "max_proactive_plan_lag_minutes": {
@@ -1748,6 +1761,71 @@
       "enable_group_wakeup_enhancement": true
     }
   },
+  "enable_group_high_intensity_mode": {
+    "description": "群聊高强度收口模式",
+    "type": "bool",
+    "hint": "短时间连续被 @、引用或增强唤醒后，自动进入收口降载：暂停弱相关/兴趣唤醒和后台群聊刷新，把同一群里连续叫 Bot 的消息合并成一轮处理，减少 LLM 过载。",
+    "default": true,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_high_intensity_wakeup_window_seconds": {
+    "description": "高强度统计窗口秒数",
+    "type": "int",
+    "hint": "在多少秒内统计连续唤醒次数。窗口内唤醒达到阈值后进入高强度收口模式。",
+    "slider": {
+      "min": 15,
+      "max": 600,
+      "step": 5
+    },
+    "default": 60,
+    "condition": {
+      "enable_group_high_intensity_mode": true
+    }
+  },
+  "group_high_intensity_wakeup_threshold": {
+    "description": "高强度唤醒阈值",
+    "type": "int",
+    "hint": "统计窗口内被明确叫到多少次后进入高强度收口。默认 3 次，适合一分钟内连续 @ 或引用 Bot 的场景。",
+    "slider": {
+      "min": 2,
+      "max": 20,
+      "step": 1
+    },
+    "default": 3,
+    "condition": {
+      "enable_group_high_intensity_mode": true
+    }
+  },
+  "group_high_intensity_cooldown_seconds": {
+    "description": "高强度收口持续秒数",
+    "type": "int",
+    "hint": "进入收口降载后维持多久。持续期间弱相关和兴趣唤醒会更保守，明确 @ 或引用会合并处理。",
+    "slider": {
+      "min": 30,
+      "max": 1800,
+      "step": 10
+    },
+    "default": 150,
+    "condition": {
+      "enable_group_high_intensity_mode": true
+    }
+  },
+  "group_high_intensity_merge_seconds": {
+    "description": "高强度合并等待秒数",
+    "type": "int",
+    "hint": "高强度收口期间，第一条明确叫到 Bot 的消息会等待这么久，把同一群后续叫 Bot 的消息合并进同一轮回复，减少多次 LLM 调用。",
+    "slider": {
+      "min": 1,
+      "max": 30,
+      "step": 1
+    },
+    "default": 8,
+    "condition": {
+      "enable_group_high_intensity_mode": true
+    }
+  },
   "enable_group_slang_learning": {
     "description": "启用群内黑话/梗学习",
     "type": "bool",
@@ -2443,6 +2521,60 @@
     "default": 90,
     "condition": {
       "enable_photo_text_action": true
+    }
+  },
+  "enable_local_photo_load_guard": {
+    "description": "电脑高负荷时延后本地生图",
+    "type": "bool",
+    "hint": "开启后，本地 ComfyUI 生图前会读取 CPU/内存负载；负载偏高时跳过或延后本地生图。auto 模式下若在线图片 API 可用，会改走在线后端；只有本地 ComfyUI 时会延后本次主动行为。",
+    "default": true,
+    "condition": {
+      "enable_photo_text_action": true
+    }
+  },
+  "local_photo_cpu_busy_percent": {
+    "description": "本地生图 CPU 忙碌阈值",
+    "type": "int",
+    "hint": "系统 CPU 使用率达到该百分比时，认为电脑正忙，暂缓本地 ComfyUI 生图。需要环境中可导入 psutil；不可用时会放行。",
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
+    },
+    "default": 85,
+    "condition": {
+      "enable_photo_text_action": true,
+      "enable_local_photo_load_guard": true
+    }
+  },
+  "local_photo_memory_busy_percent": {
+    "description": "本地生图内存忙碌阈值",
+    "type": "int",
+    "hint": "系统内存使用率达到该百分比时，认为电脑正忙，暂缓本地 ComfyUI 生图。",
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
+    },
+    "default": 88,
+    "condition": {
+      "enable_photo_text_action": true,
+      "enable_local_photo_load_guard": true
+    }
+  },
+  "local_photo_defer_minutes": {
+    "description": "本地生图忙时延后分钟数",
+    "type": "int",
+    "hint": "只有本地 ComfyUI 可用且电脑高负荷时，本次 photo_text 主动计划会保留并延后这么久再重试。",
+    "slider": {
+      "min": 1,
+      "max": 240,
+      "step": 1
+    },
+    "default": 30,
+    "condition": {
+      "enable_photo_text_action": true,
+      "enable_local_photo_load_guard": true
     }
   },
   "EXTERNAL_IMAGE_API_BASE_URL": {
