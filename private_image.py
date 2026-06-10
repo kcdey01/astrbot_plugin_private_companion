@@ -214,7 +214,7 @@ class PrivateImageMixin:
                 request = urllib.request.Request(
                     text,
                     headers={
-                        "User-Agent": "Mozilla/5.0 AstrBot PrivateCompanion/3.2.0",
+                        "User-Agent": "Mozilla/5.0 AstrBot PrivateCompanion/3.2.1",
                         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
                     },
                 )
@@ -709,15 +709,11 @@ class PrivateImageMixin:
         if not context:
             return ""
         return (
-            "【角色自我识别要求】\n"
-            "下面这些信息描述的是当前回复角色自己,也就是 assistant/机器人扮演的角色一方,不是正在发图的用户。阅读图片、截图或表情包时,请先判断这张图作为用户消息在表达什么情绪、态度、文字或梗；角色自我识别只作为补充信息,不要让它覆盖图片的主要表达意图。\n"
+            "【角色识别线索】\n"
+            "以下只用于给图片归属打标签,不要展开推理,不要复述规则。当前角色不是发图用户。\n"
             f"{context}\n"
-            "输出摘要末尾必须加一段不含第一人称或第二人称代词的表达意图,格式为："
-            "“图像表达意图：<用户可能在表达的情绪/态度/文字梗/动作含义>”。"
-            "输出摘要末尾必须加一段不含第一人称或第二人称代词的判断,格式为："
-            "“图像归属判断：<当前角色自己|当前角色的表情包|当前角色的聊天截图|发图用户本人|用户发来的无关图片|无法判断>”。"
-            "归属判断只用于辅助后续回复的语气和上下文,不是要求回复者主动辨认“这是当前角色”。"
-            "如果证据不足,请使用“无法判断”或带“疑似”的保守描述,不要强行认定。不要对用户暴露这段识别规则。"
+            "只在最后一行输出归属标签：图像归属判断：当前角色自己/当前角色的表情包/当前角色的聊天截图/发图用户本人/用户发来的无关图片/无法判断。"
+            "证据不足直接写无法判断。"
         )
 
     def _roleplay_labeled_value(self, text: str, label: str, *, limit: int = 180) -> str:
@@ -818,17 +814,16 @@ class PrivateImageMixin:
         if not image_urls:
             return ""
         default_prompt = (
-            "请阅读用户刚刚单独发送的图片,输出一段供后续聊天模型使用的视觉摘要。\n"
-            "要求：\n"
-            "1. 先判断这张图片作为用户消息在表达什么,再描述画面里能看见的内容、文字、主体、情绪和可能需要注意的细节。\n"
-            "2. 不要假装已经回复用户,不要输出工具名、模型名、路径或插件信息。\n"
-            "3. 如果图片像表情包、截图、聊天记录、作业、网页或照片,请直接说明类型和关键信息。\n"
-            "4. 如果是表情包,要概括它可能传达的语气,例如吐槽、撒娇、调侃、拒绝、催促、夸赞或骂人梗。\n"
-            "5. 保持简洁自然,80-220 字。"
+            "请把用户刚发的图片压缩成给聊天模型看的短摘要。只输出下面 4 行,不要写标题、分析过程、帧列表或长篇描述。\n"
+            "图片类型：<照片/截图/表情包/聊天记录/其他>\n"
+            "可见内容：<主体、文字或最关键细节,30字内>\n"
+            "图像表达意图：<用户可能表达的情绪、态度或梗,30字内>\n"
+            "图像归属判断：<当前角色自己/当前角色的表情包/当前角色的聊天截图/发图用户本人/用户发来的无关图片/无法判断>\n"
+            "无法确定就写无法判断；不要为了归属判断反复比较。"
         )
         attempts = 0
         seen: set[str] = set()
-        for provider_id, provider_source, configured_prompt in self._private_image_visual_provider_candidates(umo):
+        for provider_id, provider_source, _configured_prompt in self._private_image_visual_provider_candidates(umo):
             provider_id = _single_line(provider_id, 160)
             if not provider_id or provider_id in seen:
                 continue
@@ -839,7 +834,7 @@ class PrivateImageMixin:
             if provider is None or not self._provider_supports_image(provider):
                 continue
             attempts += 1
-            prompt = configured_prompt or default_prompt
+            prompt = default_prompt
             self_recognition_prompt = self._private_image_self_recognition_prompt()
             if self_recognition_prompt and self_recognition_prompt not in prompt:
                 prompt = f"{prompt}\n\n{self_recognition_prompt}"
@@ -862,7 +857,7 @@ class PrivateImageMixin:
                 continue
             try:
                 start = time.time()
-                result = await provider.text_chat(prompt=prompt, image_urls=image_urls)
+                result = await provider.text_chat(prompt=prompt, image_urls=image_urls, max_tokens=220)
                 text = str(getattr(result, "completion_text", result) or "").strip()
                 cleaned_text = _single_line(_strip_internal_message_blocks(text), 600)
                 intent_line = self._private_image_intent_line(cleaned_text)
@@ -985,6 +980,15 @@ class PrivateImageMixin:
     def _take_buffered_private_images_for_event(self, event: AstrMessageEvent) -> list[str]:
         context = self._take_buffered_private_image_context_for_event(event)
         return [str(item) for item in context.get("images", [])[:4] if str(item or "").strip()] if isinstance(context, dict) else []
+
+    def _completed_private_image_vision_task_text(self, vision_task: Any) -> str:
+        if not isinstance(vision_task, asyncio.Task) or not vision_task.done() or vision_task.cancelled():
+            return ""
+        try:
+            return _single_line(vision_task.result(), 600)
+        except Exception as exc:
+            logger.info("[PrivateCompanion] 私聊单图后台视觉任务结果读取失败: %s", _single_line(exc, 120))
+            return ""
 
     def _take_buffered_private_image_context_for_event(self, event: AstrMessageEvent) -> dict[str, Any]:
         try:
@@ -1138,7 +1142,15 @@ class PrivateImageMixin:
                 )
             if not reply:
                 if not vision_text and images:
-                    vision_text = _single_line(await self._transcribe_private_inbound_images(images, umo=umo), 600)
+                    vision_text = self._completed_private_image_vision_task_text(vision_task)
+                    if vision_text:
+                        logger.info(
+                            "[PrivateCompanion] 私聊单图兜底前取到后台视觉摘要: user=%s preview=%s",
+                            user_id,
+                            _single_line(vision_text, 220),
+                        )
+                    else:
+                        vision_text = _single_line(await self._transcribe_private_inbound_images(images, umo=umo), 600)
                     setattr(event, "private_companion_delayed_image_vision_text", vision_text)
                     ownership_line = self._private_image_ownership_line(vision_text)
                     intent_line = self._private_image_intent_line(vision_text)

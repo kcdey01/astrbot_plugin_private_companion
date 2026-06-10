@@ -725,17 +725,13 @@ class ForwardMessageMixin:
         if not image_urls:
             return ""
         default_prompt = (
-            "请按出现顺序阅读用户转发的合并聊天记录里的图片,输出供后续聊天模型理解消息集的视觉摘要。\n"
-            "要求：\n"
-            "1. 使用“第1张、第2张...”标明每张图片的大意,不要把图片当成用户当前单独发来的图片。\n"
-            "2. 说明图片类型、可见文字、主体、情绪、梗或截图里的关键信息；如果像表情包,概括它在聊天记录中可能表达的语气。\n"
-            "3. 不要替 Bot 回复用户,不要输出工具名、模型名、路径或插件信息。\n"
-            "4. 不要编造看不见的细节；不确定时直接说明不确定。\n"
-            "5. 总体保持简洁自然,每张图片一句到两句。"
+            "请按出现顺序把合并消息里的图片压缩成短摘要。每张图只写一行,不要写标题、分析过程或长篇描述。\n"
+            "格式：第N张：<图片类型>；<可见文字/主体/关键细节,40字内>；<可能表达的语气或用途,30字内>。\n"
+            "看不清就写看不清；不要猜测人物关系。"
         )
         attempts = 0
         seen_providers: set[str] = set()
-        for provider_id, provider_source, configured_prompt in self._private_image_visual_provider_candidates(umo):
+        for provider_id, provider_source, _configured_prompt in self._private_image_visual_provider_candidates(umo):
             provider_id = _single_line(provider_id, 160)
             if not provider_id or provider_id in seen_providers:
                 continue
@@ -746,7 +742,7 @@ class ForwardMessageMixin:
             if provider is None or not self._provider_supports_image(provider):
                 continue
             attempts += 1
-            prompt = configured_prompt or default_prompt
+            prompt = default_prompt
             self_recognition_prompt = self._private_image_self_recognition_prompt()
             if self_recognition_prompt and self_recognition_prompt not in prompt:
                 prompt = f"{prompt}\n\n{self_recognition_prompt}"
@@ -767,9 +763,9 @@ class ForwardMessageMixin:
                 start = time.time()
                 timeout = max(0.0, float(getattr(self, "forward_message_image_vision_timeout_seconds", 6.0) or 0.0))
                 if timeout > 0:
-                    result = await asyncio.wait_for(provider.text_chat(prompt=prompt, image_urls=image_urls), timeout=timeout)
+                    result = await asyncio.wait_for(provider.text_chat(prompt=prompt, image_urls=image_urls, max_tokens=260), timeout=timeout)
                 else:
-                    result = await provider.text_chat(prompt=prompt, image_urls=image_urls)
+                    result = await provider.text_chat(prompt=prompt, image_urls=image_urls, max_tokens=260)
                 text = str(getattr(result, "completion_text", result) or "").strip()
                 cleaned_text = _single_line(_strip_internal_message_blocks(text), 900)
                 self._record_llm_usage(
