@@ -296,6 +296,7 @@ class DailyStateMixin:
         plan = await self._generate_daily_plan()
         async with self._data_lock:
             self.data["daily_plan"] = plan
+            self._refresh_daily_state_location_from_plan(plan=plan)
             self._save_data_sync()
         await self._ensure_daily_news_reading(force=force)
         return plan
@@ -378,6 +379,7 @@ class DailyStateMixin:
                     "interaction_updates": [],
                     "coverage_repair_done": bool(segment.get("_coverage_repair")),
                 }
+                self._refresh_daily_state_location_from_plan(plan=plan, detail=detail)
                 self._reschedule_users_for_new_detail_events(segment)
                 self._save_data_sync()
             await self._apply_detail_presence_status(segment, detail)
@@ -1400,6 +1402,7 @@ class DailyStateMixin:
                     await self._generate_state_conditions(weather)
                 )
                 self.data["state_generated_day"] = today
+            self._ensure_time_based_hunger_condition()
             state = self._compose_state_from_conditions(weather)
             self.data["daily_state"] = state
             self._save_data_sync()
@@ -1548,6 +1551,53 @@ class DailyStateMixin:
             )
         return conditions
 
+    def _ensure_time_based_hunger_condition(self) -> None:
+        profile = self._persona_state_profile()
+        if not profile.get("allow_hunger", True):
+            return
+        if any(str(cond.get("kind") or "") == "hunger" for cond in self._get_active_conditions()):
+            return
+        now_dt = datetime.now()
+        minute = now_dt.hour * 60 + now_dt.minute
+        windows = [
+            ("breakfast", 7 * 60, 9 * 60 + 30, "早上胃里有点空,想找点热乎的东西垫一下", "柔软", -4, 2),
+            ("lunch", 11 * 60, 13 * 60 + 40, "午饭点有点饿,注意力会往吃的上飘", "走神", -6, 2),
+            ("afternoon", 15 * 60, 17 * 60, "下午有点想吃甜的,情绪会比平时软一点", "柔软", 2, 2),
+            ("dinner", 17 * 60 + 30, 20 * 60, "晚饭前有点饿,对温暖的食物会更在意", "黏人", -5, 3),
+            ("late_snack", 21 * 60 + 30, 23 * 60 + 30, "夜里有一点想吃东西的念头,但不想折腾太大", "松散", -3, 2),
+        ]
+        matched = next((item for item in windows if item[1] <= minute <= item[2]), None)
+        if not matched:
+            return
+        window_id, _start, _end, label, mood, energy_delta, duration_hours = matched
+        attempts = self.data.get("hunger_window_attempts")
+        if not isinstance(attempts, dict):
+            attempts = {}
+        today = _today_key()
+        attempt_key = f"{today}:{window_id}"
+        if attempts.get("last_key") == attempt_key:
+            return
+        attempts["last_key"] = attempt_key
+        attempts["last_attempt_ts"] = _now_ts()
+        self.data["hunger_window_attempts"] = attempts
+        intensity = max(0.0, min(1.0, self.humanized_state_intensity / 100))
+        chance = 0.35 + 0.45 * intensity
+        if random.random() > chance:
+            return
+        self.data.setdefault("state_conditions", []).append(
+            self._make_condition(
+                kind="hunger",
+                title="饭点",
+                label=label,
+                mood=mood,
+                energy_delta=int(energy_delta * max(0.55, intensity)),
+                duration_hours=duration_hours,
+                intensity=random.randint(45, 82),
+                phase=window_id,
+                cause="饭点自然波动",
+            )
+        )
+
     def _infer_body_cycle_phase(self, label: str) -> str:
         text = str(label or "")
         if "前" in text:
@@ -1606,7 +1656,7 @@ class DailyStateMixin:
             days_late = max(0.0, (now - expected_ts) / 86400)
             chance = min(0.65, 0.18 + days_late * 0.12) * max(0.35, min(1.15, intensity))
         else:
-            chance = 0.045 * max(0.25, min(1.2, intensity))
+            chance = 0.085 * max(0.35, min(1.2, intensity))
         if random.random() > chance:
             return neutral
         return random.choices(cycle_pool[1:], weights=[0.45, 0.55], k=1)[0]
@@ -2135,6 +2185,86 @@ class DailyStateMixin:
                     ),
                 )
             )
+        return changed
+
+    def _detect_food_feedback(self, text: str) -> dict[str, Any]:
+        normalized = _single_line(text, 220)
+        if not normalized:
+            return {"is_food": False}
+        food_markers = (
+            "吃饭", "吃点", "吃些", "吃个", "吃什么", "吃啥", "晚饭", "晚餐", "午饭", "午餐",
+            "早饭", "早餐", "夜宵", "外卖", "点餐", "做饭", "煮", "炒", "饭", "面", "粥",
+            "汤", "菜", "肉", "蛋", "奶茶", "甜品", "水果", "火锅", "烧烤", "便当", "饺子",
+            "馄饨", "米粉", "汉堡", "披萨", "三明治", "咖啡", "零食", "吃了", "吃过",
+            "吃完", "吃饱", "饱了"
+        )
+        if not any(marker in normalized for marker in food_markers):
+            return {"is_food": False}
+        suggestion = bool(re.search(r"吧|可以|试试|要不|不如|推荐|建议|先|去|点|吃点|吃些|喝点", normalized))
+        already_ate = bool(re.search(r"我吃了|我刚吃|吃过了|吃完了|吃饱了|我饱了", normalized))
+        bot_directed = bool(re.search(r"你(先|去|也|就|可以|要不|不如|记得|别忘了)?.{0,8}(吃|喝|点|煮|买)", normalized))
+        meal = ""
+        for token, label in (("早餐", "早餐"), ("早饭", "早餐"), ("午餐", "午餐"), ("午饭", "午餐"), ("晚餐", "晚餐"), ("晚饭", "晚餐"), ("夜宵", "夜宵")):
+            if token in normalized:
+                meal = label
+                break
+        if not meal:
+            hour = datetime.now().hour
+            if 10 <= hour < 15:
+                meal = "午餐"
+            elif 15 <= hour < 21:
+                meal = "晚餐"
+            elif hour >= 21 or hour < 3:
+                meal = "夜宵"
+            else:
+                meal = "加餐"
+        return {
+            "is_food": True,
+            "suggestion": suggestion or bot_directed,
+            "already_ate": already_ate,
+            "bot_directed": bot_directed,
+            "meal": meal,
+            "food_hint": _single_line(normalized, 80),
+        }
+
+    def _apply_food_feedback_to_state(self, text: str) -> bool:
+        feedback = self._detect_food_feedback(text)
+        if not feedback.get("is_food"):
+            return False
+        now = _now_ts()
+        changed = False
+        conditions = self.data.setdefault("state_conditions", [])
+        if not isinstance(conditions, list):
+            self.data["state_conditions"] = []
+            conditions = self.data["state_conditions"]
+        for cond in conditions:
+            if not isinstance(cond, dict) or str(cond.get("kind") or "") != "hunger":
+                continue
+            if _safe_float(cond.get("end_ts"), 0) <= now:
+                continue
+            remaining = max(0.0, _safe_float(cond.get("end_ts"), now) - now)
+            if feedback.get("suggestion") or feedback.get("already_ate"):
+                cond["end_ts"] = now + remaining * 0.45
+                cond["duration_hours"] = max(1, int((cond["end_ts"] - _safe_float(cond.get("start_ts"), now)) / 3600))
+                cond["mood"] = "回稳"
+                cond["label"] = _single_line(f"有了吃什么的方向,{cond.get('label') or '饥饿感'}开始往回落", 80)
+                cond["cause"] = "用户给了饮食反馈"
+                changed = True
+        if feedback.get("suggestion"):
+            conditions.append(
+                self._make_condition(
+                    kind="hunger",
+                    title="饮食反馈",
+                    label=f"{feedback.get('meal') or '饭点'}有了用户给的主意",
+                    mood="柔和",
+                    energy_delta=3,
+                    duration_hours=2,
+                    intensity=45,
+                    cause=_single_line(feedback.get("food_hint"), 80),
+                    phase="food_feedback",
+                )
+            )
+            changed = True
         return changed
 
     def _pick_diary_fragment(self) -> str:
@@ -2948,8 +3078,12 @@ class DailyStateMixin:
         return active
 
     def _compose_state_from_conditions(self, weather: dict[str, Any] | None = None) -> dict[str, Any]:
-        active = self._get_active_conditions()
-        values = self._base_state_values()
+        profile = self._persona_state_profile()
+        active = [
+            cond for cond in self._get_active_conditions()
+            if self._state_condition_allowed(str(cond.get("kind") or ""), profile)
+        ]
+        values = self._base_state_values(profile)
         weather_text = self._weather_summary_text(weather)
         energy = 75
         mood_candidates = []
@@ -2967,6 +3101,9 @@ class DailyStateMixin:
         remembered_dream = self._remembered_daily_dream_label()
         if values.get("dream") == "没有记住梦" and remembered_dream:
             values["dream"] = remembered_dream
+        inferred_location = self._current_location_state_text({"location": values.get("location", "")})
+        if inferred_location:
+            values["location"] = inferred_location
         energy = max(10, min(100, energy))
         mood_bias = (
             sorted(mood_candidates, key=lambda item: item[1], reverse=True)[0][0]
@@ -3434,7 +3571,13 @@ class DailyStateMixin:
 
     def _persona_state_profile(self) -> dict[str, bool]:
         prompt = self._get_default_persona_prompt()
-        text = str(prompt or "").lower()
+        role_prompt = str(getattr(self, "schedule_persona_prompt", "") or "")
+        text = unicodedata.normalize("NFKC", f"{prompt}\n{role_prompt}").lower()
+        compact = re.sub(r"\s+", "", text)
+
+        def has_any(markers: tuple[str, ...]) -> bool:
+            return any(marker in text or marker in compact for marker in markers)
+
         strong_non_human_markers = (
             "机器人", "机械体", "机体", "仿生", "android", "robot", "电子生命", "终端人格"
         )
@@ -3445,35 +3588,81 @@ class DailyStateMixin:
             "人类", "学生", "上班", "工作", "生活", "年龄", "岁",
             "吃饭", "睡觉", "起床", "洗漱", "身体", "生理期"
         )
-        has_human_markers = any(marker in text for marker in explicitly_human_markers)
-        has_strong_non_human = any(marker in text for marker in strong_non_human_markers)
+        bodyless_markers = (
+            "无实体", "没有实体", "没有身体", "无身体", "纯意识", "虚拟人格", "虚拟形象",
+            "全息投影", "投影形态", "灵体", "幽灵", "意识体"
+        )
+        health_block_markers = (
+            "不会生病", "不生病", "不会感冒", "免疫疾病", "免疫生病", "没有病痛",
+            "无病痛", "不受疾病影响", "不适用生病", "没有健康状态"
+        )
+        hunger_block_markers = (
+            "不需要吃饭", "不用吃饭", "不吃饭", "无需吃饭", "不需要进食", "不用进食",
+            "无需进食", "不进食", "没有饥饿感", "不会饿", "不需要食物", "不吃东西",
+            "不适用饥饿"
+        )
+        cycle_block_markers = (
+            "男性", "男生", "男孩子", "少年", "男孩", "男人", "男性人类",
+            "无生理期", "没有生理期", "不会有生理期", "不来生理期",
+            "无月经", "没有月经", "不会来月经", "不来月经",
+            "无例假", "没有例假", "不会来例假", "不来例假", "不适用周期"
+        )
+        explicit_cycle_markers = (
+            "女性", "女生", "女孩子", "女孩", "少女", "女人", "成年女性",
+            "生理期", "月经", "例假"
+        )
+
+        has_human_markers = has_any(explicitly_human_markers)
+        has_bodyless_markers = has_any(bodyless_markers)
+        has_strong_non_human = has_any(strong_non_human_markers)
         soft_non_human_hits = sum(1 for marker in soft_non_human_markers if marker in text)
         is_non_human = (has_strong_non_human or soft_non_human_hits >= 2) and not has_human_markers
+        no_biological_body = is_non_human or has_bodyless_markers
+        allow_health = not no_biological_body and not has_any(health_block_markers)
+        allow_hunger = not no_biological_body and not has_any(hunger_block_markers)
+        allow_cycle = (
+            self.enable_cycle_state
+            and not no_biological_body
+            and not has_any(cycle_block_markers)
+            and (has_human_markers or has_any(explicit_cycle_markers))
+        )
         return {
-            "non_human": is_non_human,
-            "allow_health": not is_non_human,
-            "allow_hunger": not is_non_human,
-            "allow_cycle": not is_non_human and self.enable_cycle_state,
+            "non_human": is_non_human or has_bodyless_markers,
+            "allow_health": allow_health,
+            "allow_hunger": allow_hunger,
+            "allow_cycle": allow_cycle,
         }
 
-    def _base_state_values(self) -> dict[str, str]:
-        profile = self._persona_state_profile()
+    def _base_state_values(self, profile: dict[str, bool] | None = None) -> dict[str, str]:
+        profile = profile or self._persona_state_profile()
         values = {
             "sleep": "睡眠平稳",
             "dream": "没有记住梦",
             "health": "状态正常",
             "hunger": "饥饿感平稳",
             "body_cycle": "无明显周期影响",
-            "location": "地点无明显变化",
+            "location": "",
         }
-        if profile.get("non_human"):
+        if not profile.get("allow_health", True):
             values["health"] = "该人格不适用生病状态"
+        if not profile.get("allow_hunger", True):
             values["hunger"] = "该人格不适用饥饿状态"
+        if not profile.get("allow_cycle", False):
             values["body_cycle"] = "该人格不适用周期状态"
         return values
 
     def _is_inapplicable_state_text(self, text: str) -> bool:
         return "不适用" in str(text or "")
+
+    @staticmethod
+    def _state_condition_allowed(kind: str, profile: dict[str, bool]) -> bool:
+        if kind == "health":
+            return bool(profile.get("allow_health", True))
+        if kind == "hunger":
+            return bool(profile.get("allow_hunger", True))
+        if kind == "body_cycle":
+            return bool(profile.get("allow_cycle", False))
+        return True
 
     def _should_show_condition(self, cond: dict[str, Any]) -> bool:
         if not isinstance(cond, dict):
@@ -3722,21 +3911,21 @@ class DailyStateMixin:
             if prior_wakes > 0:
                 return payload(
                     source="睡眠中再次被唤醒",
-                    note="当前日程处于休息/睡眠段,用户又发来消息；回复应带一点被重新叫醒的迟钝感,但不要埋怨用户。若用户继续聊,可以慢慢醒一点；若用户停下,她会很快继续睡回去。",
-                    immediate_reaction="她又被消息轻轻拽醒一下,反应会慢半拍,像从被窝或半梦里抬头。",
+                    note="当前日程处于休息/睡眠段,用户又发来消息；回复语气应带一点被重新叫醒的迟钝感,但必须清楚理解用户的话,不要埋怨用户。若用户继续聊,可以慢慢醒一点；若用户停下,她会很快继续睡回去。",
+                    immediate_reaction="她又被消息轻轻拽醒一下,语气会慢半拍,但会看清用户说了什么再回应。",
                     state_updates=["清醒程度：再次被唤起/半梦半醒", "语气：慢半拍、短一点", "后续安排：用户不继续打扰就继续睡"],
                     intensity="中",
                     scope="当前休息段",
-                    carry_rule="当前段回复必须有刚被重新唤起的感觉；如果后续没有用户消息,下一段细化应让她继续休息或睡回去。",
+                    carry_rule="当前段回复必须有刚被重新唤起的语气感觉,但不得降低理解和回答质量；如果后续没有用户消息,下一段细化应让她继续休息或睡回去。",
                 )
             return payload(
                 source="睡眠中被用户唤醒",
-                note="当前日程处于休息/睡眠段,用户发来消息把她轻轻叫醒；回复应像刚醒或半梦半醒,不要立刻精神饱满。若用户没有继续打扰,后续应自然睡回去或继续休息。",
-                immediate_reaction="她会先迷糊地看一眼消息,像刚从睡意里被捞起来,反应慢一点。",
+                note="当前日程处于休息/睡眠段,用户发来消息把她轻轻叫醒；回复语气应像刚醒或半梦半醒,不要立刻精神饱满,但必须看懂并正面回应用户。若用户没有继续打扰,后续应自然睡回去或继续休息。",
+                immediate_reaction="她会先带着睡意看一眼消息,语气慢一点,但不会乱接或漏掉用户真正的问题。",
                 state_updates=["清醒程度：刚被唤醒/迷糊", "语气：轻、短、带睡意", "后续安排：用户不继续打扰就继续睡"],
                 intensity="强",
                 scope="当前休息段和后续短时间",
-                carry_rule="回复与后续细化必须承接“刚被用户唤醒”：先迷糊回应；如果没有连续聊天,不要强行清醒活动,要睡回去或继续休息。",
+                carry_rule="回复与后续细化必须承接“刚被用户唤醒”的语气状态,但不得牺牲理解、事实和回答质量；如果没有连续聊天,不要强行清醒活动,要睡回去或继续休息。",
             )
 
         if re.search(r"换元|代入|公式|思路|解法|答案|步骤|这题|函数题|数学题|阅读题|作文|作业|代码|报错|bug|怎么写|这样做|你试试|应该是", normalized):
@@ -3751,6 +3940,19 @@ class DailyStateMixin:
                 intensity="强",
                 scope="当前段、下一段、今日后续",
                 carry_rule="如果后续仍写学习/作业/任务,必须体现已经被用户提示影响过：进度推进、情绪松动、或换了做法。",
+            )
+        food_feedback = self._detect_food_feedback(normalized)
+        if food_feedback.get("is_food") and (food_feedback.get("suggestion") or food_feedback.get("bot_directed")):
+            meal = _single_line(food_feedback.get("meal"), 20) or "饭点"
+            food_hint = _single_line(food_feedback.get("food_hint"), 80)
+            return payload(
+                source="饮食反馈",
+                note=f"用户刚刚给了关于{meal}或吃什么的反馈；后续日程要把这当成一个已经影响生活安排的小事实,可以调整饭点、胃口、准备食物或晚餐选择。",
+                immediate_reaction="她会把这句当成一个可执行的小主意,刚才悬着的“吃什么”落下来一点。",
+                state_updates=[f"{meal}选择：受用户反馈影响", "饥饿感：开始回落", "后续安排：可能按反馈调整吃饭/点餐/做饭"],
+                intensity="中",
+                scope="当前段和今日后续饭点",
+                carry_rule=f"后续细化如果涉及吃饭、晚餐、休息或外出,要自然承接用户这句饮食反馈：{food_hint}。不要生硬复述,也不要像没有问过一样重置。",
             )
         if re.search(r"去睡|早点睡|睡觉|休息|别写了|别弄了|先洗澡|先吃饭|吃点|喝水|别熬|躺会|停一下|歇会", normalized):
             return payload(
@@ -3998,6 +4200,87 @@ class DailyStateMixin:
                 return label
         return ""
 
+    def _infer_location_from_plan_context(
+        self,
+        *,
+        plan: dict[str, Any] | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> str:
+        candidates: list[str] = []
+        if isinstance(detail, dict):
+            for key in ("summary", "scene", "event", "topic"):
+                text = _single_line(detail.get(key), 160)
+                if text:
+                    candidates.append(text)
+            for list_key in ("today_events", "proactive_events"):
+                raw_items = detail.get(list_key)
+                if not isinstance(raw_items, list):
+                    continue
+                for item in raw_items[:6]:
+                    if not isinstance(item, dict):
+                        continue
+                    candidates.append(
+                        " ".join(
+                            _single_line(item.get(key), 80)
+                            for key in ("scene", "event", "content", "detail", "description", "topic", "why")
+                            if _single_line(item.get(key), 80)
+                        )
+                    )
+        plan = plan if isinstance(plan, dict) else self.data.get("daily_plan", {})
+        current_item = self._get_current_plan_item(plan if isinstance(plan, dict) else {})
+        if isinstance(current_item, dict):
+            candidates.append(
+                " ".join(
+                    _single_line(current_item.get(key), 120)
+                    for key in ("activity", "mood", "message_seed")
+                    if _single_line(current_item.get(key), 120)
+                )
+            )
+        if isinstance(plan, dict) and isinstance(plan.get("items"), list):
+            now_minutes = self._effective_plan_now_minutes(str(plan.get("date") or ""))
+            nearby: list[tuple[int, str]] = []
+            for item in plan.get("items", []):
+                if not isinstance(item, dict):
+                    continue
+                item_minutes = self._parse_hhmm_to_minutes(item.get("time"))
+                if item_minutes is None:
+                    continue
+                distance = abs(item_minutes - now_minutes) if now_minutes is not None else item_minutes
+                text = " ".join(
+                    _single_line(item.get(key), 120)
+                    for key in ("activity", "mood", "message_seed")
+                    if _single_line(item.get(key), 120)
+                )
+                if text:
+                    nearby.append((distance, text))
+            for _, text in sorted(nearby, key=lambda row: row[0])[:3]:
+                candidates.append(text)
+        for text in candidates:
+            inferred = self._infer_location_from_text(text)
+            if inferred:
+                return inferred
+        return ""
+
+    def _refresh_daily_state_location_from_plan(
+        self,
+        *,
+        plan: dict[str, Any] | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> bool:
+        location = self._infer_location_from_plan_context(plan=plan, detail=detail)
+        if not location:
+            return False
+        state = self.data.get("daily_state")
+        if not isinstance(state, dict) or state.get("date") != _today_key():
+            return False
+        current = _single_line(state.get("location"), 40)
+        if current == location:
+            return False
+        state["location"] = location
+        state["location_source"] = "detail" if isinstance(detail, dict) else "daily_plan"
+        state["location_updated_at"] = datetime.now().strftime("%H:%M")
+        return True
+
     def _current_location_state_text(self, state: dict[str, Any] | None = None) -> str:
         snapshot = self._current_story_plan_snapshot()
         for candidate in (
@@ -4175,6 +4458,7 @@ class DailyStateMixin:
         energy = _safe_int(state.get("energy"), 70, 0, 100)
         mood = _single_line(state.get("mood_bias"), 20)
         hints: list[str] = []
+        hints.append("无论当前状态多困、低能量或刚醒,都必须先准确理解用户的话；状态只能改变语气、长短和节奏,不能降低回答质量、事实判断或承接能力。")
         if energy <= 38:
             hints.append("回复可以短一点、慢一点；不要直接说状态标签、数值或内部感受说明。")
         elif energy <= 55:
@@ -4204,6 +4488,7 @@ class DailyStateMixin:
             "除非用户明确询问近况、状态或刚才在做什么,否则不要主动汇报状态标签、数值、原因、日程片段或内部感受说明。\n"
             "普通聊天时先回应用户正在说的那句话；禁止用“今天/今晚状态……”“我现在情绪……”“能量……”“下午/上午做了什么所以……”开场。\n"
             "状态只影响回复长度、回复速度感、语气软硬和话题选择。不要直接宣告“我累了/我吓了一跳/我正在写作业”,也不要用“差点把茶打翻/笔帽掉了/喝水呛到”这类动作描写来表演状态。\n"
+            "即使处于困倦、刚醒、半梦半醒、低能量或生病状态,也要保持清楚理解、事实准确和正常承接；不要为了表现迷糊而答非所问、乱猜、漏看用户需求或降低推理质量。\n"
             "如果确实需要表达状态,只用最短口语,例如“困了”“别说了”“有点烦”；更多时候直接接话、慢回、短回或不解释。\n"
             "如果用户表达关心、摸摸、抱抱、安慰,优先承接用户此刻的动作和情绪；不要借机解释背景或表演日常。\n\n"
             "【表达倾向提醒】\n"
@@ -5751,6 +6036,16 @@ class DailyStateMixin:
                 current["last_proactive_action"] = effective_action_for_send or planned_action_for_send or "message"
                 current["last_proactive_behavior_summary"] = action_summary
                 current["last_proactive_motive"] = planned_motive_for_send
+                food_prompt_hint = " ".join(
+                    _single_line(value, 120)
+                    for value in (
+                        planned_motive_for_send,
+                        current.get("planned_proactive_topic"),
+                        current.get("planned_proactive_reason"),
+                    )
+                )
+                if any(token in food_prompt_hint for token in ("吃什么", "吃点", "饭", "饭点", "嘴馋", "饿", "吃的")):
+                    current["last_food_prompt_at"] = current["last_sent"]
                 self._remember_proactive_topic(
                     current,
                     text=text,

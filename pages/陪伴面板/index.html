@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>陪伴面板</title>
-  <link rel="stylesheet" href="./app.css?v=20260607-proactive-quote1" />
+  <link rel="stylesheet" href="./app.css?v=20260610-bookshelf-comments1" />
 </head>
 <body>
   <main class="shell">
@@ -171,6 +171,11 @@
                 <label>关键设定 <textarea data-roleplay-persona-part="key_lore" rows="2"></textarea></label>
                 <label class="wide-field">其他补充信息 <textarea data-roleplay-persona-part="extra" rows="2"></textarea></label>
               </div>
+              <label class="roleplay-textarea">图片自我识别线索
+                <textarea name="private_image_self_recognition_hint" rows="4" placeholder="只写当前角色自己的外观、头像、表情包、聊天截图昵称或二创形象线索。
+例如：常见头像、发色/瞳色、服装、代表物、表情包文字风格。
+不要写用户性别、用户职业、与用户关系。"></textarea>
+              </label>
             </section>
 
             <section class="world-blueprint">
@@ -237,7 +242,7 @@ QQ空间 = 公开札记
                 <label>对用户的称呼 <input name="default_nickname" /></label>
               </div>
               <label class="roleplay-textarea roleplay-freeform">用户补充信息
-                <textarea name="private_image_self_recognition_hint" rows="5" placeholder="对用户的称呼：
+                <textarea name="roleplay_user_profile_prompt" rows="5" placeholder="对用户的称呼：
 用户性别：
 用户生日：
 用户职业：
@@ -961,18 +966,26 @@ QQ空间 = 公开札记
           <h2>分项能力模型</h2>
           <span class="muted">模型分流</span>
         </div>
+        <div id="providerSummary" class="provider-summary"></div>
         <div id="providerFlow" class="provider-flow"></div>
-        <div class="actions compact">
-          <button id="testAllProvidersBtn" type="button">测试全部模型</button>
+        <div class="provider-toolbar">
+          <input id="providerFilter" type="search" placeholder="筛选模型名称 / 配置键 / 用途" />
+          <div class="provider-mode-switch" aria-label="模型配置筛选">
+            <button type="button" data-provider-mode="all" class="active">全部</button>
+            <button type="button" data-provider-mode="configured">已配置</button>
+            <button type="button" data-provider-mode="inherited">自动回退</button>
+            <button type="button" data-provider-mode="vision">视觉/外部</button>
+          </div>
+          <div class="provider-toolbar-actions">
+            <button id="testAllProvidersBtn" type="button">测试全部模型</button>
+            <button id="saveProvidersBtn" type="button">保存模型配置</button>
+          </div>
         </div>
-        <form id="providerForm" class="provider-grid"></form>
-        <div class="actions">
-          <button id="saveProvidersBtn" type="button">保存模型配置</button>
-        </div>
+        <form id="providerForm" class="provider-groups"></form>
       </section>
     </section>
   </main>
 
-  <script src="./app.js?v=20260607-proactive-quote1"></script>
+  <script src="./app.js?v=20260610-provider-ui1"></script>
 </body>
 </html>

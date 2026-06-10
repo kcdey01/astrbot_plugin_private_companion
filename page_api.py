@@ -841,6 +841,44 @@ class PrivateCompanionPageApi:
                 break
         return tags
 
+    def _normalize_bookshelf_page_comment(self, value: Any, *, limit: int = 100) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        page_no = self._int(value.get("page"))
+        comment_text = self._single_line(value.get("comment"), limit)
+        if page_no <= 0 or not comment_text:
+            return None
+        return {
+            "page": page_no,
+            "comment": comment_text,
+            "raw_page": self._int(value.get("raw_page")),
+            "sample_order": self._int(
+                value.get("sample_order")
+                or value.get("sample_index")
+                or value.get("reference_index")
+                or value.get("image_index")
+            ),
+        }
+
+    def _merge_bookshelf_page_comments(self, *sources: Any, limit: int = 24) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[int, str]] = set()
+        for source in sources:
+            if not isinstance(source, list):
+                continue
+            for item in source:
+                normalized = self._normalize_bookshelf_page_comment(item)
+                if not normalized:
+                    continue
+                key = (normalized["page"], normalized["comment"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(normalized)
+                if len(merged) >= limit:
+                    return merged
+        return merged
+
     async def update_bookshelf_item_tags(self) -> dict[str, Any]:
         payload = await request.get_json(silent=True) or {}
         access_token = self._bookshelf_request_token(payload)
@@ -983,31 +1021,22 @@ class PrivateCompanionPageApi:
             page_comments = vision_result.get("page_comments") if isinstance(vision_result.get("page_comments"), list) else []
             normalized_comments: list[dict[str, Any]] = []
             for comment in page_comments[:8]:
-                if not isinstance(comment, dict):
-                    continue
-                page_no = self._int(comment.get("page"))
-                comment_text = self._single_line(comment.get("comment"), 80)
-                if page_no > 0 and comment_text:
-                    normalized_comments.append({"page": page_no, "comment": comment_text})
+                normalized = self._normalize_bookshelf_page_comment(comment, limit=80)
+                if normalized:
+                    normalized_comments.append(normalized)
             if normalized_comments:
                 existing_comments = target_snapshot.get("page_comments") if isinstance(target_snapshot.get("page_comments"), list) else []
-                merged_by_page: dict[int, dict[str, Any]] = {}
-                for comment in existing_comments:
-                    if not isinstance(comment, dict):
-                        continue
-                    page_no = self._int(comment.get("page"))
-                    comment_text = self._single_line(comment.get("comment"), 80)
-                    if page_no > 0 and comment_text:
-                        merged_by_page[page_no] = {**comment, "page": page_no, "comment": comment_text}
-                for comment in normalized_comments:
-                    page_no = self._int(comment.get("page"))
-                    comment_text = self._single_line(comment.get("comment"), 80)
-                    if page_no > 0 and comment_text:
-                        merged_by_page[page_no] = {"page": page_no, "comment": comment_text}
-                updates["page_comments"] = [
-                    merged_by_page[page]
-                    for page in sorted(merged_by_page)
-                ][:12]
+                previous_comments = (
+                    target_snapshot.get("page_comments_previous")
+                    if isinstance(target_snapshot.get("page_comments_previous"), list)
+                    else []
+                )
+                updates["page_comments"] = self._merge_bookshelf_page_comments(
+                    existing_comments,
+                    normalized_comments,
+                    previous_comments,
+                    limit=24,
+                )
                 updates["page_comments_previous"] = existing_comments[:12]
             async with self.plugin._data_lock:
                 items = self.plugin.data.get("bookshelf_items") if isinstance(self.plugin.data.get("bookshelf_items"), list) else []
@@ -1917,11 +1946,15 @@ class PrivateCompanionPageApi:
             "GROUP_SLANG_PROVIDER_ID",
             "GROUP_FOLLOWUP_JUDGE_PROVIDER_ID",
             "FORWARD_MESSAGE_PROVIDER_ID",
-            "PRIVATE_READING_VISION_PROVIDER_ID",
+            "PLUGIN_VISION_PROVIDER_ID",
             "NEWS_PROVIDER_ID",
             "WEB_EXPLORATION_PROVIDER_ID",
         ]
         values = {key: self._config_get(key) for key in keys}
+        if not values.get("PLUGIN_VISION_PROVIDER_ID"):
+            values["PLUGIN_VISION_PROVIDER_ID"] = (
+                str(getattr(self.plugin, "jm_cosmos_vision_provider_id", "") or "")
+            )
         if not values.get("DREAM_DIARY_PROVIDER_ID"):
             values["DREAM_DIARY_PROVIDER_ID"] = str(getattr(self.plugin, "dream_diary_provider_id", "") or "")
         return values
@@ -2034,6 +2067,7 @@ class PrivateCompanionPageApi:
             "default_style",
             "schedule_persona_prompt",
             "schedule_worldview_prompt",
+            "roleplay_user_profile_prompt",
             "worldview_adaptation_mode",
             "worldview_adaptation_prompt",
             "quiet_hours",
@@ -2517,12 +2551,17 @@ class PrivateCompanionPageApi:
             "GROUP_SLANG_PROVIDER_ID": "group_slang_provider_id",
             "GROUP_FOLLOWUP_JUDGE_PROVIDER_ID": "group_followup_judge_provider_id",
             "FORWARD_MESSAGE_PROVIDER_ID": "forward_message_provider_id",
+            "PLUGIN_VISION_PROVIDER_ID": "jm_cosmos_vision_provider_id",
             "PRIVATE_READING_VISION_PROVIDER_ID": "jm_cosmos_vision_provider_id",
             "NEWS_PROVIDER_ID": "news_provider_id",
             "WEB_EXPLORATION_PROVIDER_ID": "web_exploration_provider_id",
         }
         if key in attr_map:
             setattr(self.plugin, attr_map[key], str(value or "").strip())
+            if key == "PLUGIN_VISION_PROVIDER_ID":
+                self._set_config_value("PRIVATE_READING_VISION_PROVIDER_ID", str(value or "").strip())
+            elif key == "PRIVATE_READING_VISION_PROVIDER_ID" and not self._config_get("PLUGIN_VISION_PROVIDER_ID"):
+                self._set_config_value("PLUGIN_VISION_PROVIDER_ID", str(value or "").strip())
             if key == "DREAM_DIARY_PROVIDER_ID":
                 shared = str(value or "").strip()
                 self.plugin.dream_provider_id = shared
@@ -2722,6 +2761,7 @@ class PrivateCompanionPageApi:
             "GROUP_SLANG_PROVIDER_ID",
             "GROUP_FOLLOWUP_JUDGE_PROVIDER_ID",
             "FORWARD_MESSAGE_PROVIDER_ID",
+            "PLUGIN_VISION_PROVIDER_ID",
             "PRIVATE_READING_VISION_PROVIDER_ID",
             "NEWS_PROVIDER_ID",
             "WEB_EXPLORATION_PROVIDER_ID",
@@ -2748,6 +2788,7 @@ class PrivateCompanionPageApi:
             "default_style",
             "schedule_persona_prompt",
             "schedule_worldview_prompt",
+            "roleplay_user_profile_prompt",
             "worldview_adaptation_mode",
             "worldview_adaptation_prompt",
             "quiet_hours",
@@ -2997,7 +3038,7 @@ class PrivateCompanionPageApi:
             return mode if mode in {"persona", "soft", "original"} else "persona"
         if key == "worldview_adaptation_prompt":
             return str(value or "").strip()[:1200]
-        if key in {"schedule_persona_prompt", "schedule_worldview_prompt"}:
+        if key in {"schedule_persona_prompt", "schedule_worldview_prompt", "roleplay_user_profile_prompt"}:
             return str(value or "").strip()[:2000]
         if key == "humanized_state_intensity":
             try:
@@ -3098,7 +3139,8 @@ class PrivateCompanionPageApi:
             "private_image_vision_cache_max_items",
         }:
             try:
-                return max(0, int(value))
+                parsed = max(0, int(value))
+                return parsed
             except (TypeError, ValueError):
                 return 0
         if key == "group_wakeup_interest_probability":
@@ -3937,8 +3979,12 @@ class PrivateCompanionPageApi:
                     if tag_text:
                         detail_parts.append(f"标签：{tag_text}")
                     album_description = "；".join(detail_parts) or "这本藏书暂时没有整理出明确简介。"
-                page_comment_map: dict[int, str] = {}
-                raw_comments = item.get("page_comments") if isinstance(item.get("page_comments"), list) else []
+                page_comment_map: dict[int, list[str]] = {}
+                raw_comments = self._merge_bookshelf_page_comments(
+                    item.get("page_comments") if isinstance(item.get("page_comments"), list) else [],
+                    item.get("page_comments_previous") if isinstance(item.get("page_comments_previous"), list) else [],
+                    limit=32,
+                )
                 sampled_pages = [
                     self._int(page)
                     for page in (item.get("sampled_pages") if isinstance(item.get("sampled_pages"), list) else [])
@@ -3964,8 +4010,10 @@ class PrivateCompanionPageApi:
                         elif page_no in page_comment_map and comment_index < len(sampled_pages) and sampled_pages[comment_index] not in page_comment_map:
                             page_no = sampled_pages[comment_index]
                     comment_text = self._single_line(comment_item.get("comment"), 100)
-                    if page_no > 0 and comment_text and page_no not in page_comment_map:
-                        page_comment_map[page_no] = comment_text
+                    if page_no > 0 and comment_text:
+                        page_comments = page_comment_map.setdefault(page_no, [])
+                        if comment_text not in page_comments:
+                            page_comments.append(comment_text)
                 page_items = []
                 data_root = Path(str(getattr(self.plugin, "data_dir", ""))).resolve()
                 for page in pages:
@@ -3985,7 +4033,7 @@ class PrivateCompanionPageApi:
                         {
                             "index": index,
                             "src": page_src,
-                            "comment": page_comment_map.get(index, ""),
+                            "comment": "\n".join(page_comment_map.get(index, [])),
                         }
                     )
                 cover_src = ""
@@ -4041,10 +4089,11 @@ class PrivateCompanionPageApi:
                         "user_tags_updated": bool(item.get("user_tags_updated_ts")),
                         "cover_src": cover_src,
                         "pages": page_items,
-                        "page_comment_count": len(page_comment_map),
+                        "page_comment_count": sum(len(comments) for comments in page_comment_map.values()),
                         "page_comments": [
                             {"page": page, "comment": comment}
-                            for page, comment in sorted(page_comment_map.items())
+                            for page, comments in sorted(page_comment_map.items())
+                            for comment in comments
                         ],
                     }
                 )

@@ -1162,6 +1162,7 @@ class ProactiveEngineMixin:
             self._pick_pending_followup_event(user, now),
             self._pick_daily_greeting_event(user, now),
             self._habit_proactive_event_for_user(user, now=now),
+            self._pick_state_need_event(user, now=now),
             self._pick_story_plan_event(now, user=user),
         ):
             if not isinstance(event, dict):
@@ -1199,6 +1200,67 @@ class ProactiveEngineMixin:
         )
         top = ranked[:3]
         return random.choice(top)[1]
+
+    def _pick_state_need_event(
+        self,
+        user: dict[str, Any],
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        now = now or _now_ts()
+        state = self.data.get("daily_state", {})
+        if not isinstance(state, dict) or state.get("date") != _today_key():
+            return None
+        hunger_text = _single_line(state.get("hunger"), 80)
+        if hunger_text in {"", "饥饿感平稳", "该人格不适用饥饿状态"}:
+            return None
+        if _safe_float(user.get("last_food_prompt_at"), 0) + 5 * 3600 > now:
+            return None
+        if _safe_float(user.get("last_food_feedback_at"), 0) + 2 * 3600 > now:
+            return None
+        active_hunger = None
+        for cond in self._get_active_conditions():
+            if isinstance(cond, dict) and str(cond.get("kind") or "") == "hunger":
+                active_hunger = cond
+                break
+        if not isinstance(active_hunger, dict):
+            return None
+        started = _safe_float(active_hunger.get("start_ts"), now)
+        if now - started < 25 * 60:
+            return None
+        minute = datetime.fromtimestamp(now).hour * 60 + datetime.fromtimestamp(now).minute
+        if not (10 * 60 + 30 <= minute <= 21 * 60 + 40):
+            return None
+        intensity = max(0.0, min(1.0, self.humanized_state_intensity / 100))
+        chance = 0.18 + 0.32 * intensity
+        if random.random() > chance:
+            return None
+        delay_minutes = random.randint(4, 12) if now - started >= 55 * 60 else random.randint(12, 32)
+        scheduled = now + delay_minutes * 60
+        phase = _single_line(active_hunger.get("phase"), 24)
+        topic = "吃点什么"
+        if phase == "afternoon":
+            topic = "下午想吃点甜的"
+        elif phase == "late_snack":
+            topic = "夜里要不要吃点东西"
+        elif phase in {"lunch", "dinner"}:
+            topic = "这一顿吃什么"
+        return {
+            "date": _today_key(),
+            "window": self._window_from_delay_minutes(delay_minutes, width_minutes=18),
+            "reason": "state_share",
+            "action": "message",
+            "why": "当前饥饿状态已经持续了一会儿,自然想把吃什么这件小事丢给用户一起决定。",
+            "topic": topic,
+            "motive": self._normalize_internal_motive_text(
+                f"{hunger_text}已经挂了一会儿,不是汇报状态,只是自然想问问用户会选什么吃的"
+            ),
+            "scene": "饭点或嘴馋的小空档",
+            "tone": "自然、轻一点",
+            "impulse": "想问一句吃什么,看用户会不会顺手给个主意",
+            "_scheduled_ts": scheduled,
+            "_state_need": "hunger",
+        }
 
     @staticmethod
     def _is_sticky_greeting_event(event: dict[str, Any]) -> bool:

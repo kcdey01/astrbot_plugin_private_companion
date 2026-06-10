@@ -20,6 +20,9 @@ const state = {
   selectedGroupId: "",
   featureDraft: {},
   selectedFeatureKey: "",
+  providerFilter: "",
+  providerMode: "all",
+  providerDraft: {},
   tokenView: "today",
   tokenDate: "",
 };
@@ -44,7 +47,7 @@ const providerLabels = {
   GROUP_SLANG_PROVIDER_ID: "群内黑话释义",
   GROUP_FOLLOWUP_JUDGE_PROVIDER_ID: "群聊续接判断",
   FORWARD_MESSAGE_PROVIDER_ID: "合并消息转述",
-  PRIVATE_READING_VISION_PROVIDER_ID: "备选识图模型",
+  PLUGIN_VISION_PROVIDER_ID: "插件识图模型",
   NEWS_PROVIDER_ID: "新闻整理",
   WEB_EXPLORATION_PROVIDER_ID: "搜索决策/整理",
 };
@@ -72,30 +75,156 @@ function visibleConfigKey(key) {
   return isPrivateReadingAvailable() || !privateReadingConfigKeys.has(key);
 }
 
-const providerDescriptions = {
-  LLM_PROVIDER_ID: "基础兜底模型。主动消息、未指定模型的任务都会向这里回退。",
-  MAI_STYLE_PROVIDER_ID: "陪伴风格通用模型。建议选择稳定、便宜、会写自然口语的模型。",
-  DAILY_PLAN_PROVIDER_ID: "每天生成粗日程和纠偏重试。适合结构化稳定、能吃人格和世界观的模型。",
-  DETAIL_ENHANCEMENT_PROVIDER_ID: "把当前日程段展开成细节事件、状态变量和主动契机。",
-  DREAM_DIARY_PROVIDER_ID: "生成每日 Bot 日记、生活碎片、梦境碎片、强化梦境内容和梦后余韵。",
-  CREATIVE_PROVIDER_ID: "生成创作项目设定和慢速续写正文，适合文风稳定、能守住人设身份的模型。",
-  VOICE_PROMPT_PROVIDER_ID: "生成主动语音短句，并修复 TTS 标签、日语或双语格式。",
-  PHOTO_PROMPT_PROVIDER_ID: "生成 photo_text 的画面提示词和画面描述，可单独使用视觉描述更强的模型。",
-  NARRATION_PROVIDER_ID: "把识屏等工具结果压成自然上下文；留空则直接使用工具摘要。",
-  HISTORY_SUMMARY_PROVIDER_ID: "把昨日/最近对话整理成日程和梦境可继承的残留摘要。",
-  RESPONSE_REVIEW_PROVIDER_ID: "对生成回复做自检和轻改写，减少生硬、越界、解释提示词等问题。",
-  RELATIONSHIP_ANALYSIS_PROVIDER_ID: "分析关系阶段、亲近度和互动边界，调用频率不高但影响语气判断。",
-  COMPANION_MEMORY_PROVIDER_ID: "整理长期画像和偏好，适合用便宜但结构化能力好的模型。",
-  DIALOGUE_EPISODE_PROVIDER_ID: "把私聊对话压成可复用片段，用于后续自然接话。",
-  GROUP_INTERJECT_PROVIDER_ID: "群聊主动插话专用。建议选择短文本质量好、反应稳的模型。",
-  GROUP_EPISODE_PROVIDER_ID: "整理群聊片段、群氛围和话题线，主要用于群聊观察。",
-  GROUP_SLANG_PROVIDER_ID: "解释群内黑话、梗和成员称呼，适合用小模型。",
-  GROUP_FOLLOWUP_JUDGE_PROVIDER_ID: "判断群里用户后续没 @ 的话是否仍在和 Bot 对话。适合便宜、低延迟、YES/NO 分类稳定的小模型；留空只用规则，填写后只在模糊场景调用。",
-  FORWARD_MESSAGE_PROVIDER_ID: "合并消息适配方式选择“转述”时使用：先把合并转发读成自然记录，再交给主模型回应。适合长上下文整理稳定、成本较低的模型。",
-  PRIVATE_READING_VISION_PROVIDER_ID: "备选识图模型。首选识图模型来自 AstrBot 本体的识图配置；未配置或不可用时，插件会回退到这里处理私聊图片、合并消息图片、识屏和素材页理解等看图任务。",
-  NEWS_PROVIDER_ID: "从新闻候选里挑选适合分享的内容，并整理成 Bot 自己的内部印象。适合便宜、稳定、短 JSON 输出可靠的模型。",
-  WEB_EXPLORATION_PROVIDER_ID: "不负责联网检索；联网仍走 AstrBot 全局网页搜索。这里的模型只负责决定 Bot 想搜什么，并把搜索结果整理成探索笔记。",
+const providerGuides = {
+  LLM_PROVIDER_ID: {
+    purpose: "插件的基础兜底文本模型，主动消息和未单独指定的内部任务都会回退到这里。",
+    fit: "适合选综合能力稳定、上下文理解好、指令遵循可靠的主聊天模型。",
+    fallback: "留空时使用 AstrBot 默认会话模型。",
+  },
+  MAI_STYLE_PROVIDER_ID: {
+    purpose: "陪伴风格通用模型，也是多数分项能力留空后的第一层兜底。",
+    fit: "适合稳定、成本可控、中文口语自然、能守住人格边界的模型。",
+    fallback: "留空时跟随主模型。",
+  },
+  DAILY_PLAN_PROVIDER_ID: {
+    purpose: "每天生成粗日程，并在格式异常时做日程重试纠偏。",
+    fit: "适合结构化 JSON 稳定、能理解人格/世界观、长一点提示词也不容易跑偏的模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  DETAIL_ENHANCEMENT_PROVIDER_ID: {
+    purpose: "把当前日程段展开成细节事件、状态变化和可能主动开口的契机。",
+    fit: "适合便宜、低延迟、JSON 输出稳定的小到中型模型。",
+    fallback: "留空时跟随主模型。",
+  },
+  DREAM_DIARY_PROVIDER_ID: {
+    purpose: "生成每日 Bot 日记、生活碎片、梦境碎片、强化梦境和梦后余韵。",
+    fit: "适合短文本意象好、口语自然、能按要求输出 JSON 的模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  CREATIVE_PROVIDER_ID: {
+    purpose: "生成私下创作项目设定，以及闲暇时的小说、诗、随笔、剧本等正文片段。",
+    fit: "适合文风稳定、有创作能力、能遵守角色身份边界的模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  VOICE_PROMPT_PROVIDER_ID: {
+    purpose: "生成主动语音短句，并修复 TTS 标签、日语或双语格式。",
+    fit: "适合短句口语感强、格式遵循稳、不会写得太长的模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  PHOTO_PROMPT_PROVIDER_ID: {
+    purpose: "只负责生成 photo_text 的画面提示词和画面描述，不影响普通聊天或日程。",
+    fit: "适合视觉描述、审美词汇和画面构图更稳定的模型。",
+    fallback: "留空时跟随主模型。",
+  },
+  NARRATION_PROVIDER_ID: {
+    purpose: "把识屏等工具结果转成可供最终主动消息使用的自然语言上下文。",
+    fit: "适合摘要稳、保留关键事实、不会添油加醋的便宜模型。",
+    fallback: "留空时不单独转述，直接使用工具摘要。",
+  },
+  HISTORY_SUMMARY_PROVIDER_ID: {
+    purpose: "把昨日或最近完整对话压成能延续到日程、梦境和主动理解里的摘要。",
+    fit: "适合长上下文整理稳定、成本较低、能保留人物和时间线的模型。",
+    fallback: "留空时跟随日程生成模型。",
+  },
+  RESPONSE_REVIEW_PROVIDER_ID: {
+    purpose: "只在少数回复不自然时做二次自检和轻改写，减少助手腔、越界和提示词泄露。",
+    fit: "适合便宜、短文本改写自然、边界判断稳的模型。",
+    fallback: "留空时回退到陪伴通用模型，再回退到主模型。",
+  },
+  RELATIONSHIP_ANALYSIS_PROVIDER_ID: {
+    purpose: "分析关系阶段、亲近度、打扰边界和互动站位，影响后续语气判断。",
+    fit: "适合情绪和关系判断细腻、分类稳定、不会过度脑补的模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  COMPANION_MEMORY_PROVIDER_ID: {
+    purpose: "把原始私聊记忆整理成用户画像、兴趣、边界、关系备注和说话习惯。",
+    fit: "适合结构化抽取能力好、便宜、能区分事实和推测的模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  DIALOGUE_EPISODE_PROVIDER_ID: {
+    purpose: "把私聊片段整理成共同经历、情绪余味、可续话头和未完成约定。",
+    fit: "适合对话摘要稳、能保留细节和情绪温度的模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  GROUP_INTERJECT_PROVIDER_ID: {
+    purpose: "群聊主动插话专用，用来生成很短、自然、不突兀的群聊发言。",
+    fit: "适合低延迟、短文本质量好、中文群聊语感稳的模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  GROUP_EPISODE_PROVIDER_ID: {
+    purpose: "整理群聊最近片段、群氛围、话题线、活跃群友和短期避免重复内容。",
+    fit: "适合群聊摘要、多人关系和话题归纳稳定的便宜模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  GROUP_SLANG_PROVIDER_ID: {
+    purpose: "根据群聊样例解释群内黑话、梗、简称和成员称呼。",
+    fit: "适合小模型；重点是分类/释义稳定、别把玩笑当事实。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  GROUP_FOLLOWUP_JUDGE_PROVIDER_ID: {
+    purpose: "判断群里用户后续没 @ 的话是否仍在和 Bot 对话，只在规则不确定时调用。",
+    fit: "适合便宜、低延迟、YES/NO 分类准确、指令遵循稳定的小模型。",
+    fallback: "留空时只使用规则判断。",
+  },
+  FORWARD_MESSAGE_PROVIDER_ID: {
+    purpose: "合并消息选择“转述”模式时，先把合并转发读成自然记录，再交给主模型回应。",
+    fit: "适合长上下文整理稳定、成本较低、能保留人物和时间线的模型。",
+    fallback: "留空时跟随陪伴通用模型。",
+  },
+  PLUGIN_VISION_PROVIDER_ID: {
+    purpose: "插件自己的视觉理解模型，用于私聊图片/表情包、引用图片、合并消息图片、识屏和素材页理解。",
+    fit: "适合确认支持图片输入、视觉描述可靠、能简短转述关键信息的多模态模型。",
+    fallback: "留空时先尝试 AstrBot 本体图片转述模型，再回退到工具结果转述或主模型。",
+  },
+  NEWS_PROVIDER_ID: {
+    purpose: "从新闻标题和摘要候选里挑选适合分享的内容，并整理成 Bot 的内部印象。",
+    fit: "适合便宜、稳定、短 JSON 输出可靠、能做轻量筛选的小模型。",
+    fallback: "留空时跟随主动转述/主模型。",
+  },
+  WEB_EXPLORATION_PROVIDER_ID: {
+    purpose: "不负责联网检索，只决定 Bot 想搜索什么，并把搜索结果整理成探索笔记。",
+    fit: "适合便宜、稳定、短 JSON 输出可靠、能归纳搜索结果的模型。",
+    fallback: "留空时跟随新闻整理/主模型。",
+  },
 };
+
+const providerGroups = [
+  {
+    id: "core",
+    title: "基础与兜底",
+    desc: "主模型、陪伴通用和最终回复前后的基础能力。",
+    keys: ["LLM_PROVIDER_ID", "MAI_STYLE_PROVIDER_ID", "RESPONSE_REVIEW_PROVIDER_ID", "NARRATION_PROVIDER_ID"],
+  },
+  {
+    id: "daily",
+    title: "日程与表达",
+    desc: "决定 Bot 每天做什么、怎么把生活片段和主动表达写出来。",
+    keys: ["DAILY_PLAN_PROVIDER_ID", "DETAIL_ENHANCEMENT_PROVIDER_ID", "DREAM_DIARY_PROVIDER_ID", "CREATIVE_PROVIDER_ID", "VOICE_PROMPT_PROVIDER_ID", "PHOTO_PROMPT_PROVIDER_ID"],
+  },
+  {
+    id: "memory",
+    title: "记忆与关系",
+    desc: "整理长期画像、对话片段和关系站位。",
+    keys: ["HISTORY_SUMMARY_PROVIDER_ID", "RELATIONSHIP_ANALYSIS_PROVIDER_ID", "COMPANION_MEMORY_PROVIDER_ID", "DIALOGUE_EPISODE_PROVIDER_ID"],
+  },
+  {
+    id: "group",
+    title: "群聊能力",
+    desc: "处理群聊插话、片段整理、黑话释义和续接判断。",
+    keys: ["GROUP_INTERJECT_PROVIDER_ID", "GROUP_EPISODE_PROVIDER_ID", "GROUP_SLANG_PROVIDER_ID", "GROUP_FOLLOWUP_JUDGE_PROVIDER_ID", "FORWARD_MESSAGE_PROVIDER_ID"],
+  },
+  {
+    id: "media",
+    title: "视觉与外界信息",
+    desc: "识图、新闻和主动搜索相关模型。",
+    keys: ["PLUGIN_VISION_PROVIDER_ID", "NEWS_PROVIDER_ID", "WEB_EXPLORATION_PROVIDER_ID"],
+  },
+];
+
+const providerGroupByKey = providerGroups.reduce((acc, group) => {
+  group.keys.forEach((key) => { acc[key] = group; });
+  return acc;
+}, {});
 
 const featureMeta = {
   enable_mai_style_integration: ["陪伴风格整合", "把关系站位、记忆和自然对话规则注入回复。"],
@@ -114,7 +243,7 @@ const featureMeta = {
   inject_passive_states: ["被动状态注入", "普通聊天前把当前拟人状态注入提示词，让被动回复也受状态影响。"],
   enable_cycle_state: ["生理周期模拟", "允许符合人格的人类角色出现周期前、周期中和恢复期状态。"],
   enable_skill_growth_simulation: ["技能成长", "技能等级与能力边界。"],
-  enable_private_image_self_recognition: ["图片转述增强", "私聊单图防抖、视觉转述等待和 Bot 自我识别。"],
+  enable_private_image_self_recognition: ["图片转述增强", "私聊单图防抖、视觉转述等待和角色自我识别。"],
   enable_environment_perception: ["环境感知", "注入当前时间、日期语境、平台、群聊/私聊和消息媒介信息。"],
   enable_holiday_perception: ["节假日感知", "识别工作日、周末、节假日和调休，影响生活节奏判断。"],
   enable_platform_perception: ["平台感知", "识别 QQ/平台、私聊/群聊、群号群名以及图片语音视频消息。"],
@@ -291,6 +420,7 @@ const configLabels = {
   private_user_aliases: "私聊身份别名归并",
   schedule_persona_prompt: "角色设定补充",
   schedule_worldview_prompt: "世界观/生活背景",
+  roleplay_user_profile_prompt: "用户与关系补充",
   max_daily_messages: "每日主动上限",
   inbound_message_debounce_seconds: "用户消息防抖秒数",
   enable_semantic_message_debounce: "图片防抖",
@@ -298,7 +428,7 @@ const configLabels = {
   enable_proactive_quote_trigger_message: "群回复/主动引用触发消息",
   private_image_vision_wait_seconds: "单图等待识图秒数",
   enable_private_image_self_recognition: "图片转述增强",
-  private_image_self_recognition_hint: "Bot 自我识别线索",
+  private_image_self_recognition_hint: "角色自我识别线索",
   enable_private_image_vision_cache: "重复图片转述缓存",
   private_image_vision_cache_max_items: "图片转述缓存上限",
   enable_segmented_proactive_reply: "主动分段发送",
@@ -471,6 +601,7 @@ const configDescriptions = {
   private_user_aliases: "把临时会话 ID、异常 sender_id 或机器人侧误报 ID 归并到主 QQ。每行一个映射，例如：688C2CE7...=100012345。",
   schedule_persona_prompt: "给陪伴插件的日程、状态、主动行为、识图和创作提供角色补充；不会覆盖 AstrBot 主人格。",
   schedule_worldview_prompt: "给陪伴插件判断生活背景和世界规则，适合写所在世界、日常规则、居住/学校/城市环境和与用户的生活关系。",
+  roleplay_user_profile_prompt: "描述角色如何称呼用户、用户身份、彼此关系和相处方式；不会作为图片自我识别的外观线索。",
   humanized_state_intensity: "控制失眠、生病、饥饿、周期等状态出现概率和能量影响强度，范围 0-100。",
   enable_humanized_states: "总开关。关闭后不再生成拟人身体/梦境状态，只保留基础平稳状态。",
   inject_passive_states: "开启后普通聊天也会吃到当前拟人状态；关闭后状态主要影响日程和主动行为。",
@@ -494,7 +625,7 @@ const configDescriptions = {
   semantic_message_debounce_seconds: "语义收口窗口。用户唤醒后继续补充时，会把窗口内文本当成一轮完整发言。",
   enable_proactive_quote_trigger_message: "开启后，群聊被 @、引用、唤醒或连续对话保持时，Bot 的普通回复会引用当前触发消息；群聊主动插话会引用触发消息；模型预约的私聊主动若能追溯到同一私聊消息，也会引用。复读跟读/打断不会引用。",
   private_image_vision_wait_seconds: "私聊单图确认没有继续补充后，最多等待视觉转述多久。不是图片防抖时间；视觉提前完成会立刻进入主链。",
-  private_image_self_recognition_hint: "补充 Bot 外观、头像、名字、表情包特征或常见自称，让视觉转述更容易判断图里是不是 Bot 自己。",
+  private_image_self_recognition_hint: "只补充当前角色自己的外观、头像、名字、表情包特征或聊天截图昵称，让视觉转述更容易判断图里是不是当前角色。不要写用户资料。",
   enable_private_image_vision_cache: "开启后，同一张图片或表情包会按内容哈希复用上次视觉摘要，避免重复调用识图模型；不会缓存最终聊天回复。",
   private_image_vision_cache_max_items: "最多保留多少条图片视觉摘要缓存。达到上限后会清理最久未命中的旧缓存，0 表示不限制。",
   segmented_proactive_threshold: "主动文本短于或等于该字数时才考虑分段；太长的内容保持一整条，避免读起来散。",
@@ -712,8 +843,8 @@ const featureSettingSections = {
       keys: ["enable_private_image_vision_cache", "private_image_vision_cache_max_items"],
     },
     {
-      title: "自我识别",
-      note: "把 Bot 名字、人设和自定义线索交给视觉模型，辅助判断图里是不是 Bot 自己。",
+      title: "角色自我识别",
+      note: "把当前角色名字、人设和自定义线索交给视觉模型，辅助判断图里是不是当前角色自己。",
       keys: ["private_image_self_recognition_hint"],
     },
   ],
@@ -807,6 +938,7 @@ const featureSettingTypes = {
   group_wakeup_direct_words: { type: "textarea" },
   group_wakeup_context_words: { type: "textarea" },
   group_wakeup_interest_keywords: { type: "textarea" },
+  roleplay_user_profile_prompt: { type: "textarea" },
   private_image_self_recognition_hint: { type: "textarea" },
   photo_generation_style_custom_prompt: { type: "textarea" },
   segmented_proactive_regex: { type: "textarea" },
@@ -1463,7 +1595,9 @@ function renderUxReviewPanel() {
     .filter((label) => labeledRoleplayValuePresent(personaText, label)).length;
   const personaReady = roleFilled >= 6 || personaText.trim().length >= 220;
   const worldReady = String(settings.schedule_worldview_prompt || "").trim().length >= 40;
-  const userReady = String(settings.private_image_self_recognition_hint || "").trim().length >= 30;
+  const userProfileText = String(settings.roleplay_user_profile_prompt || "").trim()
+    || String(settings.private_image_self_recognition_hint || "").trim();
+  const userReady = userProfileText.length >= 30;
   const imageEnhanceEnabled = Boolean(settings.enable_private_image_self_recognition || features.enable_private_image_self_recognition);
   const items = [
     {
@@ -2944,7 +3078,7 @@ function renderLifeHero(daily, life) {
 
 function normalizeLocationText(value) {
   const text = String(value || "").trim();
-  if (!text || text === "地点感平稳") return "地点无明显变化";
+  if (!text || text === "地点感平稳" || text === "地点无明显变化") return "随当前日程变化";
   return text;
 }
 
@@ -4219,12 +4353,12 @@ function renderExternalAbilities() {
           </div>
           <span class="badge ${item.enabled && item.available ? "" : "off"}">${escapeHtml(item.available ? (item.enabled ? "启用" : "停用") : "未加载")}</span>
         </header>
-        <dl class="external-ability-meta">
-          <div><dt>触发场景</dt><dd>${escapeHtml(item.when || "由外部插件描述")}</dd></div>
-          <div><dt>适合用途</dt><dd>${escapeHtml(item.use_for || "-")}</dd></div>
-          <div><dt>避开事项</dt><dd>${escapeHtml(item.avoid || "-")}</dd></div>
-          <div><dt>最近执行</dt><dd>${escapeHtml(item.last_executed || "从未")} ${item.last_summary ? `· ${escapeHtml(item.last_summary)}` : ""}</dd></div>
-        </dl>
+        <div class="external-ability-meta">
+          <div class="external-ability-meta-row"><span class="external-ability-meta-label">触发场景</span><span class="external-ability-meta-value">${escapeHtml(item.when || "由外部插件描述")}</span></div>
+          <div class="external-ability-meta-row"><span class="external-ability-meta-label">适合用途</span><span class="external-ability-meta-value">${escapeHtml(item.use_for || "-")}</span></div>
+          <div class="external-ability-meta-row"><span class="external-ability-meta-label">避开事项</span><span class="external-ability-meta-value">${escapeHtml(item.avoid || "-")}</span></div>
+          <div class="external-ability-meta-row"><span class="external-ability-meta-label">最近执行</span><span class="external-ability-meta-value">${escapeHtml(item.last_executed || "从未")} ${item.last_summary ? `· ${escapeHtml(item.last_summary)}` : ""}</span></div>
+        </div>
         <form class="external-ability-form" data-external-ability-form="${escapeHtml(item.name)}">
           <label class="toggle-row"><input name="enabled" type="checkbox" ${item.enabled ? "checked" : ""} ${item.available ? "" : "disabled"} /> <span>加入主动候选</span></label>
           <label>触发权重 <input name="share_probability" type="number" min="0" max="1" step="0.05" value="${escapeHtml(item.share_probability ?? 0)}" /></label>
@@ -4551,7 +4685,9 @@ function syncRoleplayCoreFieldsFromPersona() {
 }
 
 function hydrateRoleplayUserFields() {
-  const text = document.querySelector('#roleplayProfileForm [name="private_image_self_recognition_hint"]')?.value || "";
+  const primaryText = document.querySelector('#roleplayProfileForm [name="roleplay_user_profile_prompt"]')?.value || "";
+  const legacyText = document.querySelector('#roleplayProfileForm [name="private_image_self_recognition_hint"]')?.value || "";
+  const text = String(primaryText || "").trim() ? primaryText : legacyText;
   const legacyPersonaText = document.querySelector('#roleplayProfileForm [name="schedule_persona_prompt"]')?.value || "";
   const labels = roleplayVisionParts.map(([, label]) => label);
   roleplayVisionParts.forEach(([key, label]) => {
@@ -4626,7 +4762,7 @@ function syncRoleplayStandardFieldsToFreeform() {
     ["schedule_persona_prompt", composeLabeledParts("data-roleplay-persona-part", roleplayPersonaParts)],
     ["schedule_worldview_prompt", composeLabeledParts("data-roleplay-world-part", roleplayWorldParts)],
     ["worldview_adaptation_prompt", composeTranslationParts()],
-    ["private_image_self_recognition_hint", composeRoleplayUserParts()],
+    ["roleplay_user_profile_prompt", composeRoleplayUserParts()],
   ];
   mappings.forEach(([name, value]) => {
     const target = document.querySelector(`#roleplayProfileForm [name="${name}"]`);
@@ -5570,7 +5706,7 @@ function featureDependencyLines(key) {
   if (["enable_qzone_life_publish"].includes(key)) dependencies.push(["依赖", "QQ 空间动态层"]);
   if (key === "enable_photo_text_action") dependencies.push(["依赖", "ComfyUI 或在线图片 API"]);
   if (key.startsWith("enable_private_reading_")) dependencies.push(["依赖", "素材能力可用"]);
-  if (key === "enable_private_image_self_recognition") dependencies.push(["依赖", "首选/备选识图模型"]);
+  if (key === "enable_private_image_self_recognition") dependencies.push(["依赖", "AstrBot 默认图片转述模型 / 插件识图模型"]);
   if (["enable_group_interjection", "enable_bilibili_boredom_watch", "enable_news_boredom_read", "enable_web_exploration_boredom_search", "enable_private_reading_boredom_read", "enable_private_reading_ask_recommendation", "enable_unanswered_screen_peek_followup"].includes(key)) {
     dependencies.push(["注意", "高主动项"]);
   }
@@ -5675,10 +5811,10 @@ const featureDetailGuides = {
     disabled: "技能页不再增长，日程不受技能等级约束。",
   },
   enable_private_image_self_recognition: {
-    summary: "把私聊单图收口、视觉转述等待和 Bot 自我识别合在一起。用户只发图片或表情包时，先等补充文字，再看图并判断图里是否像 Bot 自己。",
+    summary: "把私聊单图收口、视觉转述等待和角色自我识别合在一起。用户只发图片或表情包时，先等补充文字，再看图并判断图里是否像当前角色自己。",
     trigger: "私聊用户只发图片、截图或表情包，且防抖窗口内没有继续补充文字时。",
-    enabled: "图片转述会带上 Bot 名字、人设和自定义线索，主链更容易识别“这是你/你的表情包/不像你”。",
-    disabled: "不再额外做 Bot 自我识别；图片防抖和等待秒数仍可作为相关参数单独控制。",
+    enabled: "图片转述会带上当前角色名字、人设和自定义线索，主链更容易识别“这是你/你的表情包/不像你”。",
+    disabled: "不再额外做角色自我识别；图片防抖和等待秒数仍可作为相关参数单独控制。",
   },
   enable_semantic_message_debounce: {
     summary: "等待用户把一轮话说完后再回复，尤其适合连续短句、图片后补充说明和群聊无 @ 续接判断。",
@@ -6149,22 +6285,143 @@ function bindFeatureDetailActions() {
 }
 
 function renderProviders() {
-  const providers = state.overview?.providers || {};
+  const providers = providerValuesForRender();
+  renderProviderSummary(providers);
   renderProviderFlow(providers);
-  $("#providerForm").innerHTML = Object.entries(providerLabels)
+  const entries = Object.entries(providerLabels)
     .filter(([key]) => visibleConfigKey(key))
-    .map(([key, label]) => `
-    <label class="provider-card">
-      <span>${escapeHtml(label)}</span>
-      ${providerSelect(key, providers[key] || "")}
-      <span class="provider-row">
+    .filter(([key, label]) => providerMatchesFilter(key, label, providers));
+  const groups = providerGroups
+    .map((group) => {
+      const groupEntries = entries.filter(([key]) => providerGroupByKey[key]?.id === group.id);
+      if (!groupEntries.length) return "";
+      return `
+        <section class="provider-group" data-provider-group="${escapeHtml(group.id)}">
+          <div class="provider-group-head">
+            <div>
+              <h3>${escapeHtml(group.title)}</h3>
+              <p>${escapeHtml(group.desc)}</p>
+            </div>
+            <span>${groupEntries.length} 项</span>
+          </div>
+          <div class="provider-grid">
+            ${groupEntries.map(([key, label]) => providerCardMarkup(key, label, providers)).join("")}
+          </div>
+        </section>
+      `;
+    })
+    .join("");
+  $("#providerForm").innerHTML = groups || `
+    <div class="empty provider-empty">
+      <b>没有匹配的模型配置</b>
+      <span>换个关键词，或切回“全部”查看完整模型分工。</span>
+    </div>
+  `;
+  bindProviderTests();
+}
+
+function providerValuesForRender() {
+  return {
+    ...(state.overview?.providers || {}),
+    ...(state.providerDraft || {}),
+  };
+}
+
+function providerCardMarkup(key, label, providers) {
+  const selected = providers[key] || "";
+  const resolved = resolveProviderId(key, providers);
+  const configured = Boolean(selected);
+  const group = providerGroupByKey[key];
+  const statusLabel = configured ? "已单独配置" : "自动回退";
+  return `
+    <article class="provider-card ${configured ? "configured" : "inherited"}">
+      <div class="provider-card-head">
+        <div>
+          <span class="provider-card-kicker">${escapeHtml(group?.title || "模型配置")}</span>
+          <h3>${escapeHtml(label)}</h3>
+        </div>
+        <span class="provider-badge ${configured ? "configured" : "inherited"}">${escapeHtml(statusLabel)}</span>
+      </div>
+      <label class="provider-field">
+        <span>Provider</span>
+        ${providerSelect(key, selected)}
+      </label>
+      <div class="provider-current">
+        <span>当前使用</span>
+        <b>${escapeHtml(resolved || "AstrBot 默认模型")}</b>
+      </div>
+      ${providerGuideMarkup(key)}
+      <div class="provider-row">
         <span class="hint">${escapeHtml(key)}</span>
         <button type="button" data-provider-test="${escapeHtml(key)}">测试</button>
-      </span>
+      </div>
       <span class="provider-status" data-provider-status="${escapeHtml(key)}"></span>
-    </label>
-  `).join("");
-  bindProviderTests();
+    </article>
+  `;
+}
+
+function providerGuideMarkup(key) {
+  const guide = providerGuides[key];
+  if (!guide) return "";
+  return `
+    <span class="provider-guide">
+      <span><b>用途</b>${escapeHtml(guide.purpose)}</span>
+      <span><b>适合</b>${escapeHtml(guide.fit)}</span>
+      <span><b>回退</b>${escapeHtml(guide.fallback)}</span>
+    </span>
+  `;
+}
+
+function providerMatchesFilter(key, label, providers) {
+  const mode = state.providerMode || "all";
+  const configured = Boolean(providers[key]);
+  const group = providerGroupByKey[key];
+  if (mode === "configured" && !configured) return false;
+  if (mode === "inherited" && configured) return false;
+  if (mode === "vision" && group?.id !== "media") return false;
+  const query = (state.providerFilter || "").trim().toLowerCase();
+  if (!query) return true;
+  const guide = providerGuides[key] || {};
+  const haystack = [
+    key,
+    label,
+    group?.title || "",
+    guide.purpose || "",
+    guide.fit || "",
+    guide.fallback || "",
+    providers[key] || "",
+  ].join(" ").toLowerCase();
+  return haystack.includes(query);
+}
+
+function renderProviderSummary(providers) {
+  const keys = Object.keys(providerLabels).filter((key) => visibleConfigKey(key));
+  const configured = keys.filter((key) => Boolean(providers[key])).length;
+  const inherited = keys.length - configured;
+  const available = state.availableProviders.length;
+  const vision = providers.PLUGIN_VISION_PROVIDER_ID || "跟随 AstrBot 本体/工具转述";
+  $("#providerSummary").innerHTML = `
+    <div class="provider-summary-card strong">
+      <span>单独配置</span>
+      <b>${configured}/${keys.length}</b>
+      <small>已指定专用 Provider</small>
+    </div>
+    <div class="provider-summary-card">
+      <span>自动回退</span>
+      <b>${inherited}</b>
+      <small>留空项会按兜底链路执行</small>
+    </div>
+    <div class="provider-summary-card">
+      <span>可选 Provider</span>
+      <b>${available}</b>
+      <small>${escapeHtml(available ? "来自 AstrBot 当前配置" : "暂无可选项，可手动输入 ID")}</small>
+    </div>
+    <div class="provider-summary-card">
+      <span>视觉通道</span>
+      <b>${escapeHtml(vision)}</b>
+      <small>图片、识屏与素材理解</small>
+    </div>
+  `;
 }
 
 function providerSelect(key, value) {
@@ -6185,7 +6442,10 @@ function providerSelect(key, value) {
 }
 
 function currentProviderValues() {
-  const values = {};
+  const values = {
+    ...(state.overview?.providers || {}),
+    ...(state.providerDraft || {}),
+  };
   document.querySelectorAll("[data-provider-key]").forEach((input) => {
     values[input.dataset.providerKey] = input.value.trim();
   });
@@ -6208,11 +6468,36 @@ function setProviderStatus(key, message, level = "info") {
 function bindProviderTests() {
   document.querySelectorAll("[data-provider-select]").forEach((select) => {
     syncProviderInput(select);
-    select.addEventListener("change", () => syncProviderInput(select));
+    select.addEventListener("change", () => {
+      syncProviderInput(select);
+      rememberProviderDraft(select.dataset.providerSelect);
+    });
+  });
+  document.querySelectorAll("[data-provider-key]").forEach((input) => {
+    input.addEventListener("input", () => rememberProviderDraft(input.dataset.providerKey));
   });
   document.querySelectorAll("[data-provider-test]").forEach((button) => {
     button.addEventListener("click", async () => {
       await testProvider(button.dataset.providerTest);
+    });
+  });
+}
+
+function bindProviderToolbar() {
+  const filter = $("#providerFilter");
+  if (filter) {
+    filter.addEventListener("input", () => {
+      state.providerFilter = filter.value;
+      renderProviders();
+    });
+  }
+  document.querySelectorAll("[data-provider-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.providerMode = button.dataset.providerMode || "all";
+      document.querySelectorAll("[data-provider-mode]").forEach((item) => {
+        item.classList.toggle("active", item === button);
+      });
+      renderProviders();
     });
   });
 }
@@ -6228,6 +6513,12 @@ function syncProviderInput(select) {
     input.hidden = true;
     input.value = select.value;
   }
+}
+
+function rememberProviderDraft(key) {
+  const input = document.querySelector(`[data-provider-key="${key}"]`);
+  if (!input) return;
+  state.providerDraft[key] = input.value.trim();
 }
 
 async function testProvider(key) {
@@ -6249,13 +6540,13 @@ async function testProvider(key) {
 function renderProviderFlow(providers) {
   const main = providers.LLM_PROVIDER_ID || "AstrBot 默认模型";
   const mai = providers.MAI_STYLE_PROVIDER_ID || main;
-  const visionBackup = providers.PRIVATE_READING_VISION_PROVIDER_ID
+  const pluginVision = providers.PLUGIN_VISION_PROVIDER_ID
     || providers.NARRATION_PROVIDER_ID
-    || "跟随工具结果转述 / 默认模型";
+    || "跟随工具结果转述 / 主模型";
   const tasks = Object.entries(providerLabels).filter(([key]) => (
     key !== "LLM_PROVIDER_ID"
     && key !== "MAI_STYLE_PROVIDER_ID"
-    && key !== "PRIVATE_READING_VISION_PROVIDER_ID"
+    && key !== "PLUGIN_VISION_PROVIDER_ID"
     && visibleConfigKey(key)
   ));
   $("#providerFlow").innerHTML = `
@@ -6265,9 +6556,9 @@ function renderProviderFlow(providers) {
       <span class="flow-node">陪伴通用<br><b>${escapeHtml(mai)}</b></span>
     </div>
     <div class="flow-lane">
-      <span class="flow-node primary">首选识图模型<br><b>AstrBot 本体识图配置</b></span>
+      <span class="flow-node primary">默认图片转述<br><b>AstrBot 本体配置</b></span>
       <span class="flow-arrow">→</span>
-      <span class="flow-node ${providers.PRIVATE_READING_VISION_PROVIDER_ID ? "primary" : "inherited"}">备选识图模型<br><b>${escapeHtml(visionBackup)}</b></span>
+      <span class="flow-node ${providers.PLUGIN_VISION_PROVIDER_ID ? "primary" : "inherited"}">插件识图模型<br><b>${escapeHtml(pluginVision)}</b></span>
     </div>
     <div class="flow-tasks">
       ${tasks.map(([key, label]) => {
@@ -7094,6 +7385,7 @@ document.addEventListener("change", (event) => {
 });
 
 bindRoleplayModeSwitch();
+bindProviderToolbar();
 
 ["roleplayProfileForm", "privateAliasForm", "quickModuleForm", "environmentModuleForm", "privateModuleForm", "groupModuleForm", "worldbookModuleForm", "memoryModuleForm", "longTermModuleForm"].forEach((formId) => {
   const form = document.getElementById(formId);
@@ -7230,11 +7522,14 @@ $("#enableSafeFeaturesBtn").addEventListener("click", () => {
 });
 
 $("#saveProvidersBtn").addEventListener("click", async () => {
+  const values = currentProviderValues();
   const providers = {};
-  document.querySelectorAll("[data-provider-key]").forEach((input) => {
-    providers[input.dataset.providerKey] = input.value.trim();
+  Object.keys(providerLabels).forEach((key) => {
+    if (visibleConfigKey(key)) providers[key] = values[key] || "";
   });
   await runAction(() => postJson("/settings/update", { providers }), "已保存模型配置", $("#saveProvidersBtn"));
+  state.providerDraft = { ...state.providerDraft, ...providers };
+  renderProviders();
 });
 
 $("#testAllProvidersBtn").addEventListener("click", async () => {

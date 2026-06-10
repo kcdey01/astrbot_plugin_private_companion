@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -67,15 +68,15 @@ class PrivateImageMixin:
                 candidates.append(nested)
             candidates.append(source)
         attrs = (
-            "path",
-            "file",
             "url",
-            "image_path",
-            "file_path",
-            "local_path",
             "origin_url",
             "source_url",
             "src",
+            "path",
+            "image_path",
+            "file_path",
+            "local_path",
+            "file",
         )
         for attr in attrs:
             for candidate in candidates:
@@ -113,7 +114,7 @@ class PrivateImageMixin:
                 data = value.get("data") if isinstance(value.get("data"), dict) else value
                 if item_type == "image":
                     add(self._extract_image_url_from_segment_data(data))
-                    for key in ("path", "file", "url", "image_path", "file_path", "local_path", "origin_url", "source_url"):
+                    for key in ("url", "origin_url", "source_url", "path", "image_path", "file_path", "local_path", "file"):
                         add(data.get(key))
                 for key in ("message", "messages", "content", "data"):
                     nested = value.get(key)
@@ -129,7 +130,7 @@ class PrivateImageMixin:
                     key, val = part.split("=", 1)
                     fields[key.strip()] = html.unescape(val.strip())
                 add(self._extract_image_url_from_segment_data(fields))
-                for key in ("url", "file", "path"):
+                for key in ("url", "path", "file"):
                     add(fields.get(key))
 
         for raw in raw_values:
@@ -184,13 +185,117 @@ class PrivateImageMixin:
                     continue
                 except Exception as exc:
                     logger.debug("[PrivateCompanion] 私聊图片暂存失败: %s", exc)
-            if re.match(r"^(?:https?|data|file|base64)://", source, flags=re.I):
+            if re.match(r"^https?://", source, flags=re.I):
+                persisted = await self._persist_private_remote_image_source(source, target_dir, f"{now_ms}_{index}")
+                if persisted:
+                    result.append(persisted)
+                    continue
+            if re.match(r"^(?:data|file|base64)://", source, flags=re.I):
                 result.append(source)
         if not result:
             for source in self._raw_private_image_sources(event):
-                if source and source not in result:
+                if not source or source in result:
+                    continue
+                persisted = await self._persist_private_remote_image_source(source, target_dir, f"{now_ms}_raw_{len(result) + 1}")
+                if persisted:
+                    result.append(persisted)
+                    continue
+                if self._private_image_source_to_model_url(source):
                     result.append(source)
         return result
+
+    async def _persist_private_remote_image_source(self, source: str, target_dir: Path, stem: str) -> str:
+        text = str(source or "").strip()
+        if not re.match(r"^https?://", text, flags=re.I):
+            return ""
+
+        def download() -> str:
+            try:
+                request = urllib.request.Request(
+                    text,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 AstrBot PrivateCompanion/3.2.0",
+                        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    content_type = str(response.headers.get("Content-Type") or "").lower()
+                    length = _safe_int(response.headers.get("Content-Length"), 0, 0)
+                    max_bytes = 12 * 1024 * 1024
+                    if length and length > max_bytes:
+                        logger.info("[PrivateCompanion] 私聊远程图片过大,跳过下载: size=%s url=%s", length, _single_line(text, 120))
+                        return ""
+                    chunks: list[bytes] = []
+                    total = 0
+                    while True:
+                        chunk = response.read(1024 * 256)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > max_bytes:
+                            logger.info("[PrivateCompanion] 私聊远程图片下载超过限制,已中止: url=%s", _single_line(text, 120))
+                            return ""
+                        chunks.append(chunk)
+                data = b"".join(chunks)
+                if not data:
+                    return ""
+                prefix = data[:16]
+                suffix = ".jpg"
+                if prefix.startswith(b"\x89PNG\r\n\x1a\n") or "png" in content_type:
+                    suffix = ".png"
+                elif (prefix.startswith(b"RIFF") and b"WEBP" in data[:32]) or "webp" in content_type:
+                    suffix = ".webp"
+                elif prefix.startswith(b"GIF8") or "gif" in content_type:
+                    suffix = ".gif"
+                elif prefix.startswith(b"\xff\xd8\xff") or "jpeg" in content_type or "jpg" in content_type:
+                    suffix = ".jpg"
+                elif "image/" not in content_type:
+                    logger.info("[PrivateCompanion] 私聊远程图片响应不是图片,跳过: content_type=%s url=%s", content_type or "-", _single_line(text, 120))
+                    return ""
+                target = target_dir / f"{re.sub(r'[^0-9A-Za-z_.-]+', '_', stem)}{suffix}"
+                target.write_bytes(data)
+                return str(target)
+            except Exception as exc:
+                logger.info("[PrivateCompanion] 私聊远程图片下载失败: %s url=%s", _single_line(exc, 120), _single_line(text, 120))
+                return ""
+
+        return await asyncio.to_thread(download)
+
+    async def _prepare_private_image_sources_for_model(self, image_sources: list[str], *, namespace: str = "vision") -> list[str]:
+        target_dir = Path(self.data_dir) / "private_inbound_images" / re.sub(r"[^0-9A-Za-z_.-]+", "_", str(namespace or "vision"))
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return []
+        prepared: list[str] = []
+        now_ms = int(_now_ts() * 1000)
+        for index, source in enumerate([str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:12], 1):
+            if re.match(r"^https?://", source, flags=re.I):
+                persisted = await self._persist_private_remote_image_source(source, target_dir, f"{now_ms}_{index}")
+                if persisted and persisted not in prepared:
+                    prepared.append(persisted)
+                continue
+            if self._private_image_source_to_model_url(source) and source not in prepared:
+                prepared.append(source)
+        return prepared
+
+    def _private_image_sources_for_astrbot_request(self, image_sources: list[str]) -> list[str]:
+        refs: list[str] = []
+        for source in [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:4]:
+            text = source
+            if text.startswith("file://"):
+                text = text[len("file://"):]
+            if text.startswith("data:") or text.startswith("base64://"):
+                continue
+            if re.match(r"^https?://", text, flags=re.I):
+                continue
+            path = Path(text)
+            if not path.exists() or not path.is_file():
+                continue
+            ref = str(path.resolve())
+            if ref not in refs:
+                refs.append(ref)
+        return refs
 
     def _private_image_source_to_model_url(self, source: str) -> str:
         text = str(source or "").strip()
@@ -435,6 +540,104 @@ class PrivateImageMixin:
         fallback_provider_id = self._task_provider(self.jm_cosmos_vision_provider_id, self.narration_provider_id)
         return fallback_provider_id, "plugin_vision", prompt
 
+    def _private_image_provider_by_id(self, provider_id: str) -> Any:
+        provider_id = _single_line(provider_id, 160)
+        if not provider_id:
+            return None
+        getter = getattr(self.context, "get_provider_by_id", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(provider_id)
+        except Exception:
+            return None
+
+    def _private_image_visual_provider_candidates(self, umo: str = "") -> list[tuple[str, str, str]]:
+        provider_settings = self._astrbot_provider_settings_for_umo(umo)
+        prompt = str(provider_settings.get("image_caption_prompt") or "").strip()
+        return [
+            (_single_line(provider_settings.get("default_image_caption_provider_id"), 160), "astrbot_image_caption", prompt),
+            (self._task_provider(self.jm_cosmos_vision_provider_id, self.narration_provider_id), "plugin_vision", prompt),
+            (self._task_provider(self.llm_provider_id), "plugin_main", prompt),
+        ]
+
+    def _select_private_image_visual_provider(self, umo: str = "") -> tuple[str, str, str, Any]:
+        seen: set[str] = set()
+        for provider_id, provider_source, prompt in self._private_image_visual_provider_candidates(umo):
+            provider_id = _single_line(provider_id, 160)
+            if not provider_id or provider_id in seen:
+                continue
+            seen.add(provider_id)
+            if self._private_image_provider_in_failure_cooldown(provider_id, provider_source):
+                continue
+            provider = self._private_image_provider_by_id(provider_id)
+            if provider is not None and self._provider_supports_image(provider):
+                return provider_id, provider_source, prompt, provider
+        return "", "", "", None
+
+    def _private_image_provider_failure_cache(self) -> dict[str, Any]:
+        cache = getattr(self, "_private_image_provider_failures", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            try:
+                setattr(self, "_private_image_provider_failures", cache)
+            except Exception:
+                return {}
+        return cache
+
+    def _private_image_provider_failure_key(self, provider_id: str, provider_source: str = "") -> str:
+        return f"{_single_line(provider_source, 80)}:{_single_line(provider_id, 160)}"
+
+    def _private_image_provider_in_failure_cooldown(self, provider_id: str, provider_source: str = "") -> bool:
+        key = self._private_image_provider_failure_key(provider_id, provider_source)
+        item = self._private_image_provider_failure_cache().get(key)
+        if not isinstance(item, dict):
+            return False
+        until = _safe_float(item.get("until"), 0)
+        if until <= _now_ts():
+            self._private_image_provider_failure_cache().pop(key, None)
+            return False
+        return True
+
+    def _mark_private_image_provider_failure(self, provider_id: str, provider_source: str, exc: Exception | str, *, task: str) -> None:
+        key = self._private_image_provider_failure_key(provider_id, provider_source)
+        cooldown = 300.0
+        self._private_image_provider_failure_cache()[key] = {
+            "until": _now_ts() + cooldown,
+            "provider_id": _single_line(provider_id, 160),
+            "source": _single_line(provider_source, 80),
+            "task": _single_line(task, 80),
+            "error": _single_line(exc, 180),
+        }
+        logger.info(
+            "[PrivateCompanion] 图片视觉 provider 临时降权: provider=%s source=%s task=%s cooldown=%ss error=%s",
+            provider_id,
+            provider_source,
+            task,
+            int(cooldown),
+            _single_line(exc, 160),
+        )
+
+    def _clear_private_image_provider_failure(self, provider_id: str, provider_source: str = "") -> None:
+        self._private_image_provider_failure_cache().pop(
+            self._private_image_provider_failure_key(provider_id, provider_source),
+            None,
+        )
+
+    def _private_image_model_image_items(self, image_sources: list[str]) -> list[tuple[str, str]]:
+        image_items: list[tuple[str, str]] = []
+        seen_image_keys: set[str] = set()
+        for source in [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:4]:
+            url = self._private_image_source_to_model_url(source)
+            if not url:
+                continue
+            image_key = self._private_image_source_cache_key(source) or ("model_url:" + hashlib.sha1(url.encode("utf-8", errors="ignore")).hexdigest())
+            if image_key in seen_image_keys:
+                continue
+            seen_image_keys.add(image_key)
+            image_items.append((image_key, url))
+        return image_items
+
     @staticmethod
     def _provider_supports_image(provider: Any) -> bool:
         config = getattr(provider, "provider_config", None) or getattr(provider, "config", None) or {}
@@ -467,35 +670,53 @@ class PrivateImageMixin:
                     provider = None
         return self._provider_supports_image(provider)
 
+    def _private_image_role_self_recognition_hint(self) -> str:
+        raw = str(getattr(self, "private_image_self_recognition_hint", "") or "")
+        if not raw.strip():
+            return ""
+        user_labels = (
+            "对用户的称呼", "用户性别", "用户生日", "用户年龄", "用户职业",
+            "是角色的XX", "与角色的相处方式", "与用户关系", "相处边界",
+        )
+        kept: list[str] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if any(stripped.startswith(f"{label}：") or stripped.startswith(f"{label}:") for label in user_labels):
+                continue
+            kept.append(stripped)
+        return _single_line("\n".join(kept), 900)
+
     def _private_image_self_recognition_prompt(self) -> str:
         if not bool(getattr(self, "enable_private_image_self_recognition", True)):
             return ""
         bot_name = _single_line(getattr(self, "bot_name", ""), 40)
         schedule_persona = str(getattr(self, "schedule_persona_prompt", "") or "")
-        custom_hint = _single_line(getattr(self, "private_image_self_recognition_hint", ""), 900)
+        custom_hint = self._private_image_role_self_recognition_hint()
         visual_profile_parts: list[str] = []
-        for label in ("姓名", "年龄", "性别", "外貌", "发型发色", "瞳色", "服饰风格"):
+        for label in ("姓名", "年龄", "生日", "性别", "识别点", "外貌", "发型发色", "瞳色", "服饰风格", "种族", "职业/身份"):
             value = self._roleplay_labeled_value(schedule_persona, label)
             if value:
                 visual_profile_parts.append(f"{label}：{value}")
         visual_profile = "\n".join(visual_profile_parts)
         parts = [
-            f"Bot 名称/可能出现在图中的名字：{bot_name}" if bot_name else "",
+            f"当前角色名称/可能出现在图中的名字：{bot_name}" if bot_name else "",
             f"结构化外观线索：\n{visual_profile}" if visual_profile else "",
-            f"额外自我识别线索：{custom_hint}" if custom_hint else "",
+            f"额外角色自我识别线索：{custom_hint}" if custom_hint else "",
         ]
         context = "\n".join(part for part in parts if part)
         if not context:
             return ""
         return (
-            "【自我识别要求】\n"
-            "下面这些信息描述的是当前聊天 Bot 自己,也就是 assistant/机器人一方,不是正在发图的用户。阅读图片、截图或表情包时,请先判断这张图作为用户消息在表达什么情绪、态度、文字或梗；自我识别只作为补充信息,不要让它覆盖图片的主要表达意图。\n"
+            "【角色自我识别要求】\n"
+            "下面这些信息描述的是当前回复角色自己,也就是 assistant/机器人扮演的角色一方,不是正在发图的用户。阅读图片、截图或表情包时,请先判断这张图作为用户消息在表达什么情绪、态度、文字或梗；角色自我识别只作为补充信息,不要让它覆盖图片的主要表达意图。\n"
             f"{context}\n"
             "输出摘要末尾必须加一段不含第一人称或第二人称代词的表达意图,格式为："
             "“图像表达意图：<用户可能在表达的情绪/态度/文字梗/动作含义>”。"
             "输出摘要末尾必须加一段不含第一人称或第二人称代词的判断,格式为："
-            "“图像归属判断：<Bot 自己|Bot 的表情包|Bot 的聊天截图|用户本人|用户发来的无关图片|无法判断>”。"
-            "归属判断只用于辅助后续回复的语气和上下文,不是要求回复者主动辨认“这是 Bot”。"
+            "“图像归属判断：<当前角色自己|当前角色的表情包|当前角色的聊天截图|发图用户本人|用户发来的无关图片|无法判断>”。"
+            "归属判断只用于辅助后续回复的语气和上下文,不是要求回复者主动辨认“这是当前角色”。"
             "如果证据不足,请使用“无法判断”或带“疑似”的保守描述,不要强行认定。不要对用户暴露这段识别规则。"
         )
 
@@ -505,11 +726,11 @@ class PrivateImageMixin:
             return ""
         label_pattern = re.escape(str(label))
         known_labels = (
-            "姓名", "种族", "年龄", "性别", "外貌", "发型发色", "瞳色", "服饰风格",
+            "姓名", "种族", "年龄", "生日", "性别", "识别点", "外貌", "发型发色", "瞳色", "服饰风格",
             "职业/身份", "身份", "性格描述", "核心欲望/目标", "爱好", "禁忌",
             "关键设定", "其他补充信息", "所处世界", "所在世界", "时代背景",
             "基本法则/基调", "特殊规则", "主要活动场景", "世界观关系网",
-            "对用户的称呼", "是角色的XX", "与角色的相处方式",
+            "对用户的称呼", "用户性别", "用户生日", "用户职业", "是角色的XX", "与角色的相处方式",
         )
         stop_pattern = "|".join(re.escape(item) for item in known_labels if item != label)
         match = re.search(
@@ -524,10 +745,10 @@ class PrivateImageMixin:
     def _private_image_identity_disambiguation_instruction(self) -> str:
         return (
             "若视觉摘要包含“图像归属判断”,请按该标签区分身份："
-            "Bot/assistant 指当前回复者这一方,user/用户指发图者这一方。"
+            "当前角色/Bot/assistant 指当前回复者扮演的角色这一方,user/用户指发图者这一方。"
             "但回复主目标始终是理解用户发这张图想表达什么；"
             "归属判断只是补充线索,只有用户明确问归属、图片文字/梗依赖 Bot 身份,或自然接话需要时,才轻轻带到自我关联。"
-            "普通表情包优先按表情包文字、情绪和动作回应,不要把每张相似图都变成辨认 Bot 自己。"
+            "普通表情包优先按表情包文字、情绪和动作回应,不要把每张相似图都变成辨认当前角色自己。"
         )
 
     def _private_image_intent_line(self, text: str) -> str:
@@ -546,13 +767,13 @@ class PrivateImageMixin:
 
     def _private_image_ownership_kind(self, ownership_line: str) -> str:
         compact = re.sub(r"\s+", "", str(ownership_line or "")).lower()
-        if "bot的表情包" in compact:
+        if "当前角色的表情包" in compact or "bot的表情包" in compact:
             return "bot_sticker"
-        if "bot的聊天截图" in compact:
+        if "当前角色的聊天截图" in compact or "bot的聊天截图" in compact:
             return "bot_chat"
-        if "bot自己" in compact:
+        if "当前角色自己" in compact or "当前回复角色自己" in compact or "bot自己" in compact:
             return "bot_self"
-        if "用户本人" in compact:
+        if "发图用户本人" in compact or "用户本人" in compact:
             return "user_self"
         if "用户发来的无关图片" in compact:
             return "unrelated"
@@ -569,7 +790,7 @@ class PrivateImageMixin:
                 "请直接回应用户这次调侃、吐槽、撒娇或分享的行为。"
                 "不要使用括号动作、神态旁白或舞台描写,只写真正会发给用户看的短聊天句。"
                 "归属判断指向当前回复者这一方时,只把它作为语气辅助；"
-                "除非用户在问归属或语境明显需要,不要主动把重点放在辨认 Bot 自己。"
+            "除非用户在问归属或语境明显需要,不要主动把重点放在辨认当前角色自己。"
             )
         if kind == "user_self":
             return (
@@ -585,40 +806,18 @@ class PrivateImageMixin:
         )
 
     async def _transcribe_private_inbound_images(self, image_sources: list[str], *, umo: str = "") -> str:
-        sources = [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:4]
+        sources = await self._prepare_private_image_sources_for_model(
+            [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:4],
+            namespace="private_vision",
+        )
         if not sources:
             return ""
-        provider_id, provider_source, configured_prompt = self._private_image_caption_provider_id(umo)
-        if not provider_id:
-            logger.info("[PrivateCompanion] 私聊图片视觉转述跳过: 未配置首选识图模型或备选识图模型")
-            return ""
-        getter = getattr(self.context, "get_provider_by_id", None)
-        provider = getter(provider_id) if callable(getter) else None
-        if provider is None:
-            fallback_provider_id = self._task_provider(self.jm_cosmos_vision_provider_id, self.narration_provider_id)
-            if fallback_provider_id and fallback_provider_id != provider_id and callable(getter):
-                provider_id = fallback_provider_id
-                provider_source = "plugin_vision_fallback"
-                provider = getter(provider_id)
-            if provider is None:
-                logger.info("[PrivateCompanion] 私聊图片视觉转述跳过: provider 不可用 id=%s", provider_id)
-                return ""
-        image_items: list[tuple[str, str]] = []
-        seen_image_keys: set[str] = set()
-        for source in sources:
-            url = self._private_image_source_to_model_url(source)
-            if not url:
-                continue
-            image_key = self._private_image_source_cache_key(source) or ("model_url:" + hashlib.sha1(url.encode("utf-8", errors="ignore")).hexdigest())
-            if image_key in seen_image_keys:
-                continue
-            seen_image_keys.add(image_key)
-            image_items.append((image_key, url))
+        image_items = self._private_image_model_image_items(sources)
         image_keys = [key for key, _ in image_items]
         image_urls = [url for _, url in image_items]
         if not image_urls:
             return ""
-        prompt = configured_prompt or (
+        default_prompt = (
             "请阅读用户刚刚单独发送的图片,输出一段供后续聊天模型使用的视觉摘要。\n"
             "要求：\n"
             "1. 先判断这张图片作为用户消息在表达什么,再描述画面里能看见的内容、文字、主体、情绪和可能需要注意的细节。\n"
@@ -627,58 +826,85 @@ class PrivateImageMixin:
             "4. 如果是表情包,要概括它可能传达的语气,例如吐槽、撒娇、调侃、拒绝、催促、夸赞或骂人梗。\n"
             "5. 保持简洁自然,80-220 字。"
         )
-        self_recognition_prompt = self._private_image_self_recognition_prompt()
-        if self_recognition_prompt and self_recognition_prompt not in prompt:
-            prompt = f"{prompt}\n\n{self_recognition_prompt}"
-        cache_key = self._private_image_vision_cache_key(image_keys, provider_id, prompt, scope="private_image")
-        cached_text = self._get_private_image_vision_cache(cache_key, provider_id=provider_id, image_keys=image_keys, scope="private_image")
-        if cached_text:
-            intent_line = self._private_image_intent_line(cached_text)
-            ownership_line = self._private_image_ownership_line(cached_text)
-            logger.info(
-                "[PrivateCompanion] 私聊图片视觉转述命中缓存: provider=%s images=%s intent=%s ownership=%s preview=%s",
-                provider_id,
-                len(image_urls),
-                intent_line or "无",
-                ownership_line or "无",
-                _single_line(cached_text, 220),
-            )
-            return cached_text
-        if not self._can_run_llm_task(provider_id, task="private_image_vision"):
-            self._record_llm_budget_skip(provider_id=provider_id, task="private_image_vision", prompt=prompt)
-            return ""
-        try:
-            start = time.time()
-            result = await provider.text_chat(prompt=prompt, image_urls=image_urls)
-            text = str(getattr(result, "completion_text", result) or "").strip()
-            cleaned_text = _single_line(_strip_internal_message_blocks(text), 600)
-            intent_line = self._private_image_intent_line(cleaned_text)
-            ownership_line = self._private_image_ownership_line(cleaned_text)
-            self._record_llm_usage(
-                provider_id=provider_id,
-                task="private_image_vision",
-                prompt=prompt,
-                completion=text,
-                resp=result,
-                elapsed_ms=int((time.time() - start) * 1000),
-                success=True,
-                budget_exempt=True,
-            )
-            logger.info(
-                "[PrivateCompanion] 私聊图片视觉转述完成: provider=%s source=%s images=%s chars=%s intent=%s ownership=%s preview=%s",
-                provider_id,
-                provider_source,
-                len(image_urls),
-                len(text),
-                intent_line or "无",
-                ownership_line or "无",
-                _single_line(cleaned_text, 220),
-            )
-            self._set_private_image_vision_cache(cache_key, cleaned_text, provider_id=provider_id, image_keys=image_keys, prompt=prompt, scope="private_image")
-            return cleaned_text
-        except Exception as exc:
-            logger.info("[PrivateCompanion] 私聊图片视觉转述失败: %s", _single_line(exc, 160))
-            return ""
+        attempts = 0
+        seen: set[str] = set()
+        for provider_id, provider_source, configured_prompt in self._private_image_visual_provider_candidates(umo):
+            provider_id = _single_line(provider_id, 160)
+            if not provider_id or provider_id in seen:
+                continue
+            seen.add(provider_id)
+            if self._private_image_provider_in_failure_cooldown(provider_id, provider_source):
+                continue
+            provider = self._private_image_provider_by_id(provider_id)
+            if provider is None or not self._provider_supports_image(provider):
+                continue
+            attempts += 1
+            prompt = configured_prompt or default_prompt
+            self_recognition_prompt = self._private_image_self_recognition_prompt()
+            if self_recognition_prompt and self_recognition_prompt not in prompt:
+                prompt = f"{prompt}\n\n{self_recognition_prompt}"
+            cache_key = self._private_image_vision_cache_key(image_keys, provider_id, prompt, scope="private_image")
+            cached_text = self._get_private_image_vision_cache(cache_key, provider_id=provider_id, image_keys=image_keys, scope="private_image")
+            if cached_text:
+                intent_line = self._private_image_intent_line(cached_text)
+                ownership_line = self._private_image_ownership_line(cached_text)
+                logger.info(
+                    "[PrivateCompanion] 私聊图片视觉转述命中缓存: provider=%s images=%s intent=%s ownership=%s preview=%s",
+                    provider_id,
+                    len(image_urls),
+                    intent_line or "无",
+                    ownership_line or "无",
+                    _single_line(cached_text, 220),
+                )
+                return cached_text
+            if not self._can_run_llm_task(provider_id, task="private_image_vision"):
+                self._record_llm_budget_skip(provider_id=provider_id, task="private_image_vision", prompt=prompt)
+                continue
+            try:
+                start = time.time()
+                result = await provider.text_chat(prompt=prompt, image_urls=image_urls)
+                text = str(getattr(result, "completion_text", result) or "").strip()
+                cleaned_text = _single_line(_strip_internal_message_blocks(text), 600)
+                intent_line = self._private_image_intent_line(cleaned_text)
+                ownership_line = self._private_image_ownership_line(cleaned_text)
+                self._record_llm_usage(
+                    provider_id=provider_id,
+                    task="private_image_vision",
+                    prompt=prompt,
+                    completion=text,
+                    resp=result,
+                    elapsed_ms=int((time.time() - start) * 1000),
+                    success=True,
+                    budget_exempt=True,
+                )
+                self._clear_private_image_provider_failure(provider_id, provider_source)
+                logger.info(
+                    "[PrivateCompanion] 私聊图片视觉转述完成: provider=%s source=%s images=%s chars=%s intent=%s ownership=%s preview=%s",
+                    provider_id,
+                    provider_source,
+                    len(image_urls),
+                    len(text),
+                    intent_line or "无",
+                    ownership_line or "无",
+                    _single_line(cleaned_text, 220),
+                )
+                self._set_private_image_vision_cache(cache_key, cleaned_text, provider_id=provider_id, image_keys=image_keys, prompt=prompt, scope="private_image")
+                return cleaned_text
+            except Exception as exc:
+                self._record_llm_usage(
+                    provider_id=provider_id,
+                    task="private_image_vision",
+                    prompt=prompt,
+                    completion="",
+                    elapsed_ms=int((time.time() - start) * 1000) if "start" in locals() else 0,
+                    success=False,
+                    error=_single_line(exc, 180),
+                    budget_exempt=True,
+                )
+                self._mark_private_image_provider_failure(provider_id, provider_source, exc, task="private_image_vision")
+                continue
+        logger.info("[PrivateCompanion] 私聊图片视觉转述失败: 所有候选 provider 均不可用或失败 attempts=%s", attempts)
+        return ""
 
     async def _consume_semantic_message_buffer_for_event(self, event: AstrMessageEvent, *, private_chat: bool) -> str:
         try:
@@ -820,9 +1046,23 @@ class PrivateImageMixin:
         setattr(event, "private_companion_deferred_private_image_only_ready", True)
         setattr(event, "private_companion_deferred_private_image_only", False)
         setattr(event, "private_companion_delayed_image_vision_text", vision_text)
-        setattr(event, "private_companion_delayed_image_sources", [str(item) for item in images[:4] if str(item or "").strip()])
+        raw_image_sources = [str(item) for item in images[:4] if str(item or "").strip()]
+        image_items = self._private_image_model_image_items(raw_image_sources)
+        model_image_urls = [url for _, url in image_items]
+        request_image_refs = self._private_image_sources_for_astrbot_request(raw_image_sources)
+        setattr(event, "private_companion_delayed_image_sources", list(request_image_refs))
         try:
             umo = str(getattr(event, "unified_msg_origin", "") or "")
+            direct_provider_id, direct_provider_source, _direct_prompt, _direct_provider = self._select_private_image_visual_provider(umo)
+            direct_image_mode = bool(request_image_refs and direct_provider_id)
+            if direct_image_mode:
+                setattr(event, "private_companion_delayed_image_mode", "direct")
+            elif not vision_text and images:
+                vision_text = _single_line(await self._transcribe_private_inbound_images(images, umo=umo), 600)
+                setattr(event, "private_companion_delayed_image_vision_text", vision_text)
+                ownership_line = self._private_image_ownership_line(vision_text)
+                intent_line = self._private_image_intent_line(vision_text)
+                reply_objective = self._private_image_reply_objective(ownership_line)
             conv = None
             if umo:
                 conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
@@ -840,14 +1080,50 @@ class PrivateImageMixin:
                 conversation=conv,
                 session_id=getattr(event, "session_id", None) or umo,
             )
+            previous_selected_provider = ""
+            selected_provider_changed = False
+            if direct_image_mode:
+                try:
+                    previous_selected_provider = str(event.get_extra("selected_provider") or "")
+                except Exception:
+                    previous_selected_provider = ""
+                try:
+                    event.set_extra("selected_provider", direct_provider_id)
+                    selected_provider_changed = True
+                except Exception:
+                    selected_provider_changed = False
+                req.image_urls = list(request_image_refs)
             await self.inject_humanized_state(event, req)
+            if direct_image_mode:
+                existing = getattr(req, "image_urls", None)
+                if not isinstance(existing, list):
+                    existing = []
+                for image_ref in request_image_refs:
+                    if image_ref not in existing:
+                        existing.append(image_ref)
+                req.image_urls = existing
+                logger.info(
+                    "[PrivateCompanion] 私聊单图主链已挂载图片: user=%s provider=%s source=%s images=%s has_vision=%s",
+                    user_id,
+                    direct_provider_id,
+                    direct_provider_source,
+                    len(existing),
+                    bool(vision_text),
+                )
             start = time.time()
-            result = await build_main_agent(
-                event=event,
-                plugin_context=self.context,
-                config=build_cfg,
-                req=req,
-            )
+            try:
+                result = await build_main_agent(
+                    event=event,
+                    plugin_context=self.context,
+                    config=build_cfg,
+                    req=req,
+                )
+            finally:
+                if selected_provider_changed:
+                    try:
+                        event.set_extra("selected_provider", previous_selected_provider)
+                    except Exception:
+                        pass
             runner = getattr(result, "agent_runner", None) if result else None
             llm_resp = runner.get_final_llm_resp() if runner else None
             reply = str(getattr(llm_resp, "completion_text", "") or "").strip()
@@ -861,6 +1137,12 @@ class PrivateImageMixin:
                     _single_line(reply, 180),
                 )
             if not reply:
+                if not vision_text and images:
+                    vision_text = _single_line(await self._transcribe_private_inbound_images(images, umo=umo), 600)
+                    setattr(event, "private_companion_delayed_image_vision_text", vision_text)
+                    ownership_line = self._private_image_ownership_line(vision_text)
+                    intent_line = self._private_image_intent_line(vision_text)
+                    reply_objective = self._private_image_reply_objective(ownership_line)
                 fallback_prompt = (
                     "用户刚刚只发了一张图片,没有补充文字。请用当前私聊人格自然回复一句,像 QQ 私聊短句；不要提模型、插件、视觉转述或路径,不要使用括号动作、神态旁白或舞台描写。\n"
                     f"{self._private_image_identity_disambiguation_instruction()}\n"
@@ -920,7 +1202,7 @@ class PrivateImageMixin:
                     logger.debug("[PrivateCompanion] 私聊图片视觉反馈目标记录失败: %s", exc)
             logger.info("[PrivateCompanion] 私聊单图无补充说明,已延迟交给原生 LLM 链路: user=%s images=%s", user_id, len(images))
         except Exception as exc:
-            logger.warning("[PrivateCompanion] 私聊单图延迟回复失败: user=%s error=%s", user_id, exc, exc_info=True)
+            logger.warning("[PrivateCompanion] 私聊单图延迟回复失败: user=%s error=%s", user_id, _single_line(exc, 180), exc_info=True)
 
     async def _finalize_private_image_buffer_after_wait(self, key: str, user_id: str, first_ts: float) -> None:
         wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))

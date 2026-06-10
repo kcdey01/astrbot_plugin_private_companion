@@ -288,7 +288,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.1.2",
+    "3.2.0",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -375,6 +375,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         self.plugin_specific_persona_id = self._cfg_str(c, "plugin_specific_persona_id", "")
         self.schedule_persona_prompt = self._cfg_str(c, "schedule_persona_prompt", "")
         self.schedule_worldview_prompt = self._cfg_str(c, "schedule_worldview_prompt", "")
+        self.roleplay_user_profile_prompt = self._cfg_str(c, "roleplay_user_profile_prompt", "")
         self.private_image_self_recognition_hint = self._cfg_str(c, "private_image_self_recognition_hint", "")
         self.daily_plan_item_count = self._cfg_int(c, "daily_plan_item_count", 10, 5, 16)
         self.enable_humanized_states = self._cfg_bool(c, "enable_humanized_states", True)
@@ -753,8 +754,12 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         )
         self.jm_cosmos_vision_provider_id = self._cfg_str(
             c,
-            "PRIVATE_READING_VISION_PROVIDER_ID",
-            self._cfg_str(c, "JM_COSMOS_VISION_PROVIDER_ID", ""),
+            "PLUGIN_VISION_PROVIDER_ID",
+            self._cfg_str(
+                c,
+                "PRIVATE_READING_VISION_PROVIDER_ID",
+                self._cfg_str(c, "JM_COSMOS_VISION_PROVIDER_ID", ""),
+            ),
         )
         if isinstance(c, dict):
             legacy_private_reading_keys = {
@@ -772,6 +777,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                     if new_key not in c:
                         c[new_key] = c.get(old_key)
                     c.pop(old_key, None)
+            if "PLUGIN_VISION_PROVIDER_ID" not in c and c.get("PRIVATE_READING_VISION_PROVIDER_ID"):
+                c["PLUGIN_VISION_PROVIDER_ID"] = c.get("PRIVATE_READING_VISION_PROVIDER_ID")
         self.group_episode_refresh_minutes = self._cfg_int(c, "group_episode_refresh_minutes", 180, 30, 1440)
         self.group_slang_summary_minutes = self._cfg_int(c, "group_slang_summary_minutes", 360, 60, 2880)
         self.max_group_topic_threads = self._cfg_int(c, "max_group_topic_threads", 12, 3, 40)
@@ -797,6 +804,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         self._default_persona_prompt_cache_persona_id = ""
         self._framework_captured_send_cache: dict[str, list[Any]] = {}
         self._last_input_status_at: dict[str, float] = {}
+        self._passive_input_status_tasks: dict[str, asyncio.Task] = {}
         self.data = self._load_data_sync()
         if self._merge_private_user_alias_records():
             self._save_data_sync()
@@ -837,10 +845,24 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 await self._task
             except asyncio.CancelledError:
                 pass
+        for task in list(self._passive_input_status_tasks.values()):
+            if isinstance(task, asyncio.Task) and not task.done():
+                task.cancel()
+        self._passive_input_status_tasks.clear()
         async with self._data_lock:
             self._save_data_sync()
         if _private_companion_plugin is self:
             _private_companion_plugin = None
+
+
+    @filter.on_decorating_result()
+    async def stop_passive_input_status_before_private_send(self, event: AstrMessageEvent):
+        """私聊 LLM 回复进入发送前阶段时停止持续输入状态。"""
+        if not self.enabled:
+            return
+        if not bool(getattr(event, "is_private_chat", lambda: False)()):
+            return
+        self._stop_passive_input_status_loop(event)
 
 
     @filter.on_decorating_result()
@@ -1176,13 +1198,14 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             user_id = str(event.get_sender_id())
         except Exception:
             return
-        await self._refresh_default_persona_prompt(getattr(event, "unified_msg_origin", "") or user_id)
         raw_users = self.data.get("users", {})
         current_user = raw_users.get(user_id) if isinstance(raw_users, dict) else None
         if not isinstance(current_user, dict):
             return
         if not self._is_target_private_user(user_id, current_user) or not current_user.get("enabled", True):
             return
+        self._start_passive_input_status_loop(event, user_id)
+        await self._refresh_default_persona_prompt(getattr(event, "unified_msg_origin", "") or user_id)
 
         state = await self._ensure_daily_state()
         injection_parts = []
@@ -1212,6 +1235,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         if not buffered_images and isinstance(delayed_image_sources, list):
             buffered_images = [str(item) for item in delayed_image_sources[:4] if str(item or "").strip()]
         buffered_image_mode = _single_line(buffered_image_context.get("image_mode"), 20) if isinstance(buffered_image_context, dict) else ""
+        delayed_image_mode = _single_line(getattr(event, "private_companion_delayed_image_mode", ""), 20)
+        if not buffered_image_mode and delayed_image_mode:
+            buffered_image_mode = delayed_image_mode
         vision_task = buffered_image_context.get("vision_task") if isinstance(buffered_image_context, dict) else None
         if not buffered_image_vision and isinstance(vision_task, asyncio.Task):
             try:
@@ -1242,22 +1268,42 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             )
             inbound_text = _single_line(combined_text.replace("\n", " "), 260)
         if buffered_images:
+            direct_image_mounted = False
             if buffered_image_mode == "direct" and self._event_main_provider_supports_image(event):
-                existing = getattr(req, "image_urls", None)
-                if not isinstance(existing, list):
-                    existing = []
-                for image_ref in buffered_images:
-                    if image_ref not in existing:
-                        existing.append(image_ref)
-                req.image_urls = existing
-                logger.info("[PrivateCompanion] 私聊延迟图片已挂回视觉主模型: user=%s images=%s", user_id, len(buffered_images))
-                injection_parts.append(
-                    "【本轮延迟图片】\n"
-                    "用户刚刚先单独发了一张图片,随后补充了文字。图片已随本轮请求一起交给当前视觉主模型；"
-                    "请优先理解用户发这张图想表达的情绪、态度、文字或梗,再把图片和用户文字作为同一轮发言理解,不要提插件或处理过程。"
-                    f"{self._private_image_identity_disambiguation_instruction()}"
-                )
-            elif buffered_image_vision:
+                image_refs: list[str] = []
+                for image_ref in buffered_images[:4]:
+                    for request_ref in self._private_image_sources_for_astrbot_request([image_ref]):
+                        if request_ref not in image_refs:
+                            image_refs.append(request_ref)
+                if not image_refs:
+                    logger.info(
+                        "[PrivateCompanion] 私聊延迟图片无模型可读源,跳过直接挂图: user=%s images=%s",
+                        user_id,
+                        len(buffered_images),
+                    )
+                    buffered_image_mode = "caption"
+                else:
+                    existing = getattr(req, "image_urls", None)
+                    if not isinstance(existing, list):
+                        existing = []
+                    for image_ref in image_refs:
+                        if image_ref not in existing:
+                            existing.append(image_ref)
+                    req.image_urls = existing
+                    logger.info(
+                        "[PrivateCompanion] 私聊延迟图片已挂回视觉主模型: user=%s images=%s mounted=%s",
+                        user_id,
+                        len(buffered_images),
+                        len(image_refs),
+                    )
+                    injection_parts.append(
+                        "【本轮延迟图片】\n"
+                        "用户刚刚先单独发了一张图片,随后补充了文字。图片已随本轮请求一起交给当前视觉主模型；"
+                        "请优先理解用户发这张图想表达的情绪、态度、文字或梗,再把图片和用户文字作为同一轮发言理解,不要提插件或处理过程。"
+                        f"{self._private_image_identity_disambiguation_instruction()}"
+                    )
+                    direct_image_mounted = True
+            if not direct_image_mounted and buffered_image_vision:
                 intent_line = self._private_image_intent_line(buffered_image_vision)
                 ownership_line = self._private_image_ownership_line(buffered_image_vision)
                 reply_objective = self._private_image_reply_objective(ownership_line)
@@ -1441,14 +1487,17 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             return
         original_text = str(resp.completion_text or "").strip()
         if not original_text:
+            self._stop_passive_input_status_loop(event)
             return
         try:
             user_id = str(event.get_sender_id())
         except Exception:
+            self._stop_passive_input_status_loop(event)
             return
         raw_users = self.data.get("users", {})
         current_user = raw_users.get(user_id) if isinstance(raw_users, dict) else None
         if not isinstance(current_user, dict):
+            self._stop_passive_input_status_loop(event)
             return
         working_text = original_text
         if self.enable_llm_timer_scheduling and "<timer" in original_text.lower():
@@ -2015,11 +2064,18 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                     logger.info("[PrivateCompanion] 用户已在当前问候时段自然来聊,已取消冲突问候候选: %s", user_id)
                     if not self._simulation_active(user) and _safe_float(user.get("next_proactive_at"), 0) <= 0:
                         self._schedule_next_proactive(user, now=_now_ts())
+            food_feedback = self._detect_food_feedback(text) if text else {"is_food": False}
+            food_feedback_applied = bool(text) and self._apply_food_feedback_to_state(text)
+            if food_feedback.get("is_food"):
+                user["last_food_feedback_at"] = _now_ts()
+                user["last_food_feedback_text"] = _single_line(text, 120)
             care_feedback_applied = bool(text) and self._apply_care_feedback_to_state(text)
             if care_feedback_applied:
                 user["relationship_score"] = _safe_int(user.get("relationship_score"), 0) + 2
             schedule_adjustment_applied = bool(text) and self._record_schedule_adjustment_from_interaction(text)
             if schedule_adjustment_applied:
+                user["relationship_score"] = _safe_int(user.get("relationship_score"), 0) + 1
+            if food_feedback_applied:
                 user["relationship_score"] = _safe_int(user.get("relationship_score"), 0) + 1
 
             response = ""

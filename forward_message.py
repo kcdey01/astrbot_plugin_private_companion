@@ -702,25 +702,13 @@ class ForwardMessageMixin:
         if not self.forward_message_image_vision:
             return ""
         limit = max(0, int(getattr(self, "forward_message_image_limit", 0) or 0))
-        sources = [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:limit]
+        sources = await self._prepare_private_image_sources_for_model(
+            [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:limit],
+            namespace="forward_vision",
+        )
         if not sources:
             return ""
         umo = str(getattr(event, "unified_msg_origin", "") or "")
-        provider_id, provider_source, _configured_prompt = self._private_image_caption_provider_id(umo)
-        if not provider_id:
-            logger.info("[PrivateCompanion] 合并消息图片视觉跳过: 未配置首选识图模型或备选识图模型")
-            return ""
-        getter = getattr(self.context, "get_provider_by_id", None)
-        provider = getter(provider_id) if callable(getter) else None
-        if provider is None:
-            fallback_provider_id = self._task_provider(self.jm_cosmos_vision_provider_id, self.narration_provider_id)
-            if fallback_provider_id and fallback_provider_id != provider_id and callable(getter):
-                provider_id = fallback_provider_id
-                provider_source = "plugin_vision_fallback"
-                provider = getter(provider_id)
-            if provider is None:
-                logger.info("[PrivateCompanion] 合并消息图片视觉跳过: provider 不可用 id=%s", provider_id)
-                return ""
         image_items: list[tuple[str, str]] = []
         seen_image_keys: set[str] = set()
         for source in sources:
@@ -736,7 +724,7 @@ class ForwardMessageMixin:
         image_urls = [url for _, url in image_items]
         if not image_urls:
             return ""
-        prompt = (
+        default_prompt = (
             "请按出现顺序阅读用户转发的合并聊天记录里的图片,输出供后续聊天模型理解消息集的视觉摘要。\n"
             "要求：\n"
             "1. 使用“第1张、第2张...”标明每张图片的大意,不要把图片当成用户当前单独发来的图片。\n"
@@ -745,73 +733,95 @@ class ForwardMessageMixin:
             "4. 不要编造看不见的细节；不确定时直接说明不确定。\n"
             "5. 总体保持简洁自然,每张图片一句到两句。"
         )
-        self_recognition_prompt = self._private_image_self_recognition_prompt()
-        if self_recognition_prompt and self_recognition_prompt not in prompt:
-            prompt = f"{prompt}\n\n{self_recognition_prompt}"
-        cache_key = self._private_image_vision_cache_key(image_keys, provider_id, prompt, scope="forward_image")
-        cached_text = self._get_private_image_vision_cache(cache_key, provider_id=provider_id, image_keys=image_keys, scope="forward_image")
-        if cached_text:
-            logger.info(
-                "[PrivateCompanion] 合并消息图片视觉命中缓存: provider=%s images=%s preview=%s",
-                provider_id,
-                len(image_urls),
-                _single_line(cached_text, 220),
-            )
-            return cached_text
-        if not self._can_run_llm_task(provider_id, task="forward_message_image_vision"):
-            self._record_llm_budget_skip(provider_id=provider_id, task="forward_message_image_vision", prompt=prompt)
-            return ""
-        try:
-            start = time.time()
-            timeout = max(0.0, float(getattr(self, "forward_message_image_vision_timeout_seconds", 6.0) or 0.0))
-            if timeout > 0:
-                result = await asyncio.wait_for(provider.text_chat(prompt=prompt, image_urls=image_urls), timeout=timeout)
-            else:
-                result = await provider.text_chat(prompt=prompt, image_urls=image_urls)
-            text = str(getattr(result, "completion_text", result) or "").strip()
-            cleaned_text = _single_line(_strip_internal_message_blocks(text), 900)
-            self._record_llm_usage(
-                provider_id=provider_id,
-                task="forward_message_image_vision",
-                prompt=prompt,
-                completion=text,
-                resp=result,
-                elapsed_ms=int((time.time() - start) * 1000),
-                success=True,
-                budget_exempt=True,
-            )
-            logger.info(
-                "[PrivateCompanion] 合并消息图片视觉完成: provider=%s source=%s images=%s chars=%s preview=%s",
-                provider_id,
-                provider_source,
-                len(image_urls),
-                len(cleaned_text),
-                _single_line(cleaned_text, 220),
-            )
-            self._set_private_image_vision_cache(cache_key, cleaned_text, provider_id=provider_id, image_keys=image_keys, prompt=prompt, scope="forward_image")
-            return cleaned_text
-        except asyncio.TimeoutError:
-            elapsed_ms = int((time.time() - start) * 1000) if "start" in locals() else 0
-            self._record_llm_usage(
-                provider_id=provider_id,
-                task="forward_message_image_vision",
-                prompt=prompt,
-                completion="",
-                elapsed_ms=elapsed_ms,
-                success=False,
-                error=f"timeout after {timeout:.1f}s",
-                budget_exempt=True,
-            )
-            logger.info(
-                "[PrivateCompanion] 合并消息图片视觉超时跳过: provider=%s images=%s timeout=%.1fs",
-                provider_id,
-                len(image_urls),
-                timeout,
-            )
-            return ""
-        except Exception as exc:
-            logger.info("[PrivateCompanion] 合并消息图片视觉失败: %s", _single_line(exc, 160))
-            return ""
+        attempts = 0
+        seen_providers: set[str] = set()
+        for provider_id, provider_source, configured_prompt in self._private_image_visual_provider_candidates(umo):
+            provider_id = _single_line(provider_id, 160)
+            if not provider_id or provider_id in seen_providers:
+                continue
+            seen_providers.add(provider_id)
+            if self._private_image_provider_in_failure_cooldown(provider_id, provider_source):
+                continue
+            provider = self._private_image_provider_by_id(provider_id)
+            if provider is None or not self._provider_supports_image(provider):
+                continue
+            attempts += 1
+            prompt = configured_prompt or default_prompt
+            self_recognition_prompt = self._private_image_self_recognition_prompt()
+            if self_recognition_prompt and self_recognition_prompt not in prompt:
+                prompt = f"{prompt}\n\n{self_recognition_prompt}"
+            cache_key = self._private_image_vision_cache_key(image_keys, provider_id, prompt, scope="forward_image")
+            cached_text = self._get_private_image_vision_cache(cache_key, provider_id=provider_id, image_keys=image_keys, scope="forward_image")
+            if cached_text:
+                logger.info(
+                    "[PrivateCompanion] 合并消息图片视觉命中缓存: provider=%s images=%s preview=%s",
+                    provider_id,
+                    len(image_urls),
+                    _single_line(cached_text, 220),
+                )
+                return cached_text
+            if not self._can_run_llm_task(provider_id, task="forward_message_image_vision"):
+                self._record_llm_budget_skip(provider_id=provider_id, task="forward_message_image_vision", prompt=prompt)
+                continue
+            try:
+                start = time.time()
+                timeout = max(0.0, float(getattr(self, "forward_message_image_vision_timeout_seconds", 6.0) or 0.0))
+                if timeout > 0:
+                    result = await asyncio.wait_for(provider.text_chat(prompt=prompt, image_urls=image_urls), timeout=timeout)
+                else:
+                    result = await provider.text_chat(prompt=prompt, image_urls=image_urls)
+                text = str(getattr(result, "completion_text", result) or "").strip()
+                cleaned_text = _single_line(_strip_internal_message_blocks(text), 900)
+                self._record_llm_usage(
+                    provider_id=provider_id,
+                    task="forward_message_image_vision",
+                    prompt=prompt,
+                    completion=text,
+                    resp=result,
+                    elapsed_ms=int((time.time() - start) * 1000),
+                    success=True,
+                    budget_exempt=True,
+                )
+                self._clear_private_image_provider_failure(provider_id, provider_source)
+                logger.info(
+                    "[PrivateCompanion] 合并消息图片视觉完成: provider=%s source=%s images=%s chars=%s preview=%s",
+                    provider_id,
+                    provider_source,
+                    len(image_urls),
+                    len(cleaned_text),
+                    _single_line(cleaned_text, 220),
+                )
+                self._set_private_image_vision_cache(cache_key, cleaned_text, provider_id=provider_id, image_keys=image_keys, prompt=prompt, scope="forward_image")
+                return cleaned_text
+            except asyncio.TimeoutError as exc:
+                elapsed_ms = int((time.time() - start) * 1000) if "start" in locals() else 0
+                self._record_llm_usage(
+                    provider_id=provider_id,
+                    task="forward_message_image_vision",
+                    prompt=prompt,
+                    completion="",
+                    elapsed_ms=elapsed_ms,
+                    success=False,
+                    error=f"timeout after {timeout:.1f}s",
+                    budget_exempt=True,
+                )
+                self._mark_private_image_provider_failure(provider_id, provider_source, exc, task="forward_message_image_vision")
+                continue
+            except Exception as exc:
+                self._record_llm_usage(
+                    provider_id=provider_id,
+                    task="forward_message_image_vision",
+                    prompt=prompt,
+                    completion="",
+                    elapsed_ms=int((time.time() - start) * 1000) if "start" in locals() else 0,
+                    success=False,
+                    error=_single_line(exc, 180),
+                    budget_exempt=True,
+                )
+                self._mark_private_image_provider_failure(provider_id, provider_source, exc, task="forward_message_image_vision")
+                continue
+        logger.info("[PrivateCompanion] 合并消息图片视觉失败: 所有候选 provider 均不可用或失败 attempts=%s", attempts)
+        return ""
 
     async def _transcribe_forward_message_rows(
         self,

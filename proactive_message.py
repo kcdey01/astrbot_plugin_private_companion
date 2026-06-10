@@ -749,6 +749,9 @@ class ProactiveMessageMixin:
             "状态只影响语气、用词、句子长短、是否开口和话题选择；不要为了表现状态而写动作小剧场。"
         )
         parts.append(
+            "即使状态是困倦、迷糊、半梦半醒或低能量,也只能让语气更轻更慢；不能降低理解质量、事实判断或正常承接能力。"
+        )
+        parts.append(
             "不要直接宣告“我累了/我吓到了/我在写作业”,也不要用“茶差点打翻/笔帽掉了/喝水呛到”这类动作表演状态。确实要表达时只用最短口语,如“困了”“别说了”。"
         )
         return "；".join(parts) if parts else "只作为语气底色：整体平稳,不要在正文里汇报状态。"
@@ -893,7 +896,7 @@ class ProactiveMessageMixin:
 你正在为 Private Companion 生成一条主动私聊消息。下面这段规则是稳定规则前缀,用于约束所有主动消息：
 1. 主动站位必须清楚：这是 Bot 主动开口,不是用户刚刚来找 Bot,也不是用户刚刚叫醒、问候或催促 Bot。聊天历史里的最后一句只能当背景。
 2. 先看聊天历史,但不要把历史当成当前待办列表。只有确实还有没说完、且不违背当前真实时间的话,才轻轻接上；否则从当下开一个新切口。
-3. 状态、时间、天气、日期和日程都是内部背景,只影响语气、用词、句子长短、是否开口和话题选择；不要主动说“今天是……”“我现在……”“我刚刚……所以……”。
+3. 状态、时间、天气、日期和日程都是内部背景,只影响语气、用词、句子长短、是否开口和话题选择；即使困倦、迷糊、半梦半醒或低能量,也不能降低理解质量、事实判断和正常表达；不要主动说“今天是……”“我现在……”“我刚刚……所以……”。
 4. 不要把“心情变好/状态变差/没发脾气/没烦你/我很乖”当成消息主题。也不要用动作描写来表演状态。
 5. 核心原则：把这条消息放进真实微信聊天记录里,必须像一个人在正常接话,不是像演员在扮演日常生活。
 6. 如果状态确实需要被表达,只用最短的真人口语,例如“困了”“别说了”“有点烦”。更多时候让状态体现在慢一点、短一点、语气淡一点、话题绕开一点。
@@ -954,7 +957,7 @@ class ProactiveMessageMixin:
 1. 先看聊天历史——它只提供关系和话题背景,不是当前待办列表。只有确实还有没说完、且不违背当前真实时间的话,才轻轻接上；否则从当下开一个新切口。
 1.5 主动站位优先：不要写成“你今天起这么早呀”“你来找我啦”“你叫我起床啦”“刚看到你发的……”这类把主动方倒置的句子。除非用户确实刚在当前会话中发了新消息,否则默认是你先说话。
 2. 再看内部能力检索：先判断当前场景是否真的需要图片、语音、窥屏或戳一戳；没有自然媒介契机时就用普通文字。这个判断过程不能出现在消息里。
-3. 状态、时间、天气、日期和日程都是内部背景,只影响语气、用词、句子长短、是否开口和话题选择；不要主动说“今天是……”“我现在……”“我刚刚……所以……”,也不要像念状态栏或日程表。
+3. 状态、时间、天气、日期和日程都是内部背景,只影响语气、用词、句子长短、是否开口和话题选择；即使困倦、迷糊、半梦半醒或低能量,也不能降低理解质量、事实判断和正常表达；不要主动说“今天是……”“我现在……”“我刚刚……所以……”,也不要像念状态栏或日程表。
 4. 不要把“心情变好/状态变差/没发脾气/没烦你/我很乖”当成消息主题。也不要用动作描写来表演状态,例如“差点把茶打翻”“笔帽弹到桌子底下”“喝了一口咳出来”。
 5. 核心原则：把这条消息放进真实微信聊天记录里,必须像一个人在正常接话,不是像演员在扮演日常生活。能直接接话就直接接话,不要先交代自己在哪里、在做什么、刚发生什么。
 6. 如果状态确实需要被表达,只用最短的真人口语,例如“困了”“别说了”“有点烦”。更多时候让状态体现在慢一点、短一点、语气淡一点、话题绕开一点。
@@ -1434,7 +1437,7 @@ class ProactiveMessageMixin:
         if "voice" in action:
             return "像刚发完语音又补一句文字。短一点,带一点刚说完话的余温,别写成说明。"
         if reason == "morning_greeting":
-            return "像早上刚冒头时发来的消息。可以迷糊一点,但不要把闹钟、起床过程或自己正在做什么当成主题；更像直接把早晨第一句话递过来。"
+            return "像早上刚冒头时发来的消息。可以在语气上迷糊一点,但表达要清楚,不要把闹钟、起床过程或自己正在做什么当成主题；更像直接把早晨第一句话递过来。"
         if reason == "noon_greeting":
             return "像中午犯懒时发来的小消息。先从手边的小片段开口,比如刚坐下、刚吃完、午休前那一下发懒,再顺手碰到对方。别每次都问吃没吃。"
         if reason == "evening_greeting":
@@ -2154,37 +2157,114 @@ class ProactiveMessageMixin:
                 return False
         return False
 
-    async def _maybe_send_input_status(self, umo: str, text: str = "") -> None:
+    def _input_status_user_id_from_umo(self, umo: str) -> str:
         if not umo or ":FriendMessage:" not in str(umo):
-            return
+            return ""
         session = self._parse_message_session(umo)
         if not session:
-            return
+            return ""
         user_id = str(getattr(session, "session_id", "") or "").strip()
+        return user_id if user_id.isdigit() else ""
+
+    async def _send_input_status_once(self, user_id: str, *, client: Any | None = None) -> bool:
+        user_id = str(user_id or "").strip()
         if not user_id.isdigit():
-            return
-        now = _now_ts()
-        last_at = _safe_float(self._last_input_status_at.get(user_id), 0)
-        if now - last_at < 45:
-            return
-        client = self._resolve_aiocqhttp_client()
+            return False
         if client is None:
-            return
-        duration = max(1.2, min(4.5, len(str(text or "")) / 18))
+            client = self._resolve_aiocqhttp_client()
+        if client is None:
+            return False
         variants = (
             {"user_id": int(user_id), "event_type": 1},
             {"user_id": int(user_id), "status": 1},
             {"user_id": int(user_id), "typing": True},
         )
-        ok = False
         for params in variants:
-            ok = await self._call_onebot_action(client, "set_input_status", **params)
-            if ok:
-                break
-        if not ok:
+            if await self._call_onebot_action(client, "set_input_status", **params):
+                self._last_input_status_at[user_id] = _now_ts()
+                return True
+        return False
+
+    async def _maybe_send_input_status(self, umo: str, text: str = "") -> None:
+        user_id = self._input_status_user_id_from_umo(umo)
+        if not user_id:
+            return
+        now = _now_ts()
+        last_at = _safe_float(self._last_input_status_at.get(user_id), 0)
+        if now - last_at < 45:
+            return
+        duration = max(1.2, min(4.5, len(str(text or "")) / 18))
+        if not await self._send_input_status_once(user_id):
             return
         self._last_input_status_at[user_id] = now
         await asyncio.sleep(random.uniform(duration * 0.55, duration))
+
+    async def _passive_input_status_loop(self, user_id: str, *, max_seconds: float = 90.0) -> None:
+        user_id = str(user_id or "").strip()
+        if not user_id.isdigit():
+            return
+        client = self._resolve_aiocqhttp_client()
+        if client is None:
+            return
+        started_at = _now_ts()
+        while not bool(getattr(self, "_stop_event", asyncio.Event()).is_set()):
+            if _now_ts() - started_at > max_seconds:
+                return
+            try:
+                await self._send_input_status_once(user_id, client=client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 私聊输入状态刷新失败: %s", _single_line(exc, 120))
+                return
+            await asyncio.sleep(random.uniform(3.2, 4.8))
+
+    def _start_passive_input_status_loop(self, event: AstrMessageEvent, user_id: str = "") -> None:
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        parsed_user_id = self._input_status_user_id_from_umo(umo)
+        user_id = str(user_id or parsed_user_id or "").strip()
+        if not parsed_user_id or parsed_user_id != user_id or not user_id.isdigit():
+            return
+        tasks = getattr(self, "_passive_input_status_tasks", None)
+        if not isinstance(tasks, dict):
+            tasks = {}
+            self._passive_input_status_tasks = tasks
+        old_task = tasks.get(user_id)
+        if isinstance(old_task, asyncio.Task) and not old_task.done():
+            old_task.cancel()
+        task = asyncio.create_task(self._passive_input_status_loop(user_id))
+        tasks[user_id] = task
+        try:
+            setattr(event, "private_companion_input_status_user_id", user_id)
+        except Exception:
+            pass
+
+        def _cleanup(done_task: asyncio.Task) -> None:
+            current = tasks.get(user_id)
+            if current is done_task:
+                tasks.pop(user_id, None)
+
+        task.add_done_callback(_cleanup)
+
+    def _stop_passive_input_status_loop(self, event_or_user: Any) -> None:
+        user_id = ""
+        if isinstance(event_or_user, str):
+            user_id = event_or_user.strip()
+        else:
+            user_id = str(getattr(event_or_user, "private_companion_input_status_user_id", "") or "").strip()
+            if not user_id:
+                try:
+                    user_id = str(event_or_user.get_sender_id()).strip()
+                except Exception:
+                    user_id = ""
+        if not user_id:
+            return
+        tasks = getattr(self, "_passive_input_status_tasks", None)
+        if not isinstance(tasks, dict):
+            return
+        task = tasks.pop(user_id, None)
+        if isinstance(task, asyncio.Task) and not task.done():
+            task.cancel()
 
     def _qq_presence_codes(self, mode: str) -> tuple[int, int, str]:
         normalized = str(mode or "").strip().lower()

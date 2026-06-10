@@ -1367,9 +1367,9 @@ class EventDispatchMixin:
             runtime = self._mark_sleep_woken_by_group_wakeup(text, wakeup_type=wakeup_type)
             prior = _safe_int(runtime.get("woken_count"), 1, 1)
             state_note = (
-                "当前处在睡眠/休息段,群聊唤醒把她从睡意里轻轻拽起来；回复应短、慢半拍,带一点刚醒的迷糊。"
+                "当前处在睡眠/休息段,群聊唤醒把她从睡意里轻轻拽起来；回复应短、慢半拍,带一点刚醒的迷糊语气,但必须看清上下文再回应。"
                 if prior <= 1
-                else "当前处在睡眠/休息段且已被多次叫醒；回复更应短、慢、半梦半醒,不要突然精神饱满。"
+                else "当前处在睡眠/休息段且已被多次叫醒；回复更应短、慢,语气像半梦半醒,不要突然精神饱满,但不要答非所问或乱接。"
             ) + fatigue_suffix
             updates = [
                 "清醒程度：睡眠/休息中被群聊唤醒",
@@ -1383,7 +1383,7 @@ class EventDispatchMixin:
                 state_note=state_note,
                 updates=updates,
                 intensity="中",
-                carry_rule="群聊回复必须承接睡眠中被叫醒的感觉；如果后续没有继续对她说话,后续细化应让她继续休息或睡回去。",
+                carry_rule="群聊回复必须承接睡眠中被叫醒的语气感觉,但不得降低上下文理解和回答质量；如果后续没有继续对她说话,后续细化应让她继续休息或睡回去。",
             )
             return {"note": state_note, "updates": updates, "sleep_phase": runtime.get("label"), "intensity": "中", "strength": strength, "strength_label": strength_label, "fatigue": fatigue}
         if "interest" in trigger:

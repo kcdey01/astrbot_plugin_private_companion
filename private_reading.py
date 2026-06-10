@@ -615,14 +615,15 @@ class PrivateReadingMixin:
                 if part
             )
             prompt = (
-                "请根据封面和抽样正文页,用 Bot 自己的口吻留下一段内部读后感,并给看过的对应页写短批注,最后按自己的喜好给这本打分。\n"
+                "请根据封面和抽样正文页,用 Bot 自己的第一人称口吻留下一段内部读后感,并给看过的对应页写短批注,最后按自己的喜好给这本打分。\n"
                 "封面只用于确认标题、画风和整体气质；内容理解主要参考后续正文页。抽样页已尽量避开开头的封面、书脊、目录,以及结尾的汉化组、致谢、后记页。\n"
                 "如果某张图明显是版权页、目录、汉化组说明、鸣谢或空白页,请忽略它,不要当作剧情或人物关系来解读。\n"
-                "可以写画风、氛围、人物关系、叙事节奏和读完后的感觉；不要写成客观数据库摘要,也不要提插件、视觉模型、抽样、页码或数据来源。\n"
-                "表达风格应顺着当前bot人格与状态,不要固定成害羞、含蓄或直白。\n"
-                "批注是 Bot 私下读漫画时留在书页旁边的小吐槽/感想,语气、尺度、害羞或坦然都必须服从下面的人格,不要写成通用解说。\n"
-                "rating 是 Bot 自己读完后的主观分数,1 到 10 的整数；不是用户评分。rating_reason 用一句话说明为什么喜欢或不喜欢。preference_tags 写出这次影响喜好的关键词,用于以后慢慢找到阅读偏好。\n"
-                "只输出 JSON,不要使用 Markdown。格式：{\"impression\":\"160字以内总读后感\",\"rating\":8,\"rating_reason\":\"60字以内评分理由\",\"preference_tags\":[\"画风\",\"节奏\"],\"page_comments\":[{\"page\":12,\"comment\":\"35字以内吐槽或评论\"}]}。\n"
+                "impression 必须像 Bot 刚合上书后私下记在书柜里的短句,用“我”的感受、口癖和当下状态来写；可以写画风、氛围、人物关系、叙事节奏和读完后的感觉。\n"
+                "禁止第三人称或书评腔：不要写“她觉得/这个 Bot 认为/读者会感到/作品讲述了/本作通过/整体来看”这类旁观表达。不要写成客观数据库摘要,也不要提插件、视觉模型、抽样、页码或数据来源。\n"
+                "表达风格应顺着当前bot人格与状态：如果人格冷淡就冷淡,如果嘴硬就嘴硬,如果黏人就黏人；不要固定成害羞、含蓄或直白。\n"
+                "page_comments 是 Bot 私下读漫画时写在书页旁边的小吐槽/感想,要像即时反应,不要概括剧情,不要写成通用解说。每条都要服从下面的人格语气。\n"
+                "rating 是 Bot 自己读完后的主观分数,1 到 10 的整数；不是用户评分。rating_reason 用一句第一人称短句说明为什么喜欢或不喜欢。preference_tags 写出这次影响喜好的关键词,用于以后慢慢找到阅读偏好。\n"
+                "只输出 JSON,不要使用 Markdown。格式：{\"impression\":\"160字以内第一人称内部读后感\",\"rating\":8,\"rating_reason\":\"60字以内第一人称评分理由\",\"preference_tags\":[\"画风\",\"节奏\"],\"page_comments\":[{\"page\":12,\"comment\":\"35字以内页边吐槽或感想\"}]}。\n"
                 "page_comments 只为正文参考页里真正看懂的页生成；page 必须填写实际页码,不要填写第几张参考图的序号。\n"
                 f"\n【AstrBot 默认人格】\n{persona or '未读取到默认人格。'}\n"
                 f"\n【生活/日程人设补充】\n{schedule_persona or '（无）'}\n"
@@ -685,14 +686,14 @@ class PrivateReadingMixin:
         for comment_index, item in enumerate(data.get("page_comments", [])):
             if not isinstance(item, dict):
                 continue
-            raw_page = _safe_int(item.get("page"), 0, 1)
+            raw_page = _safe_int(item.get("page"), 0, 0)
             sample_order = _safe_int(
                 item.get("sample_order")
                 or item.get("sample_index")
                 or item.get("reference_index")
                 or item.get("image_index"),
                 0,
-                1,
+                0,
             )
             page = raw_page
             if sampled_list:
@@ -737,7 +738,7 @@ class PrivateReadingMixin:
             parts.append(f"作者 {author}")
         if tag_text:
             parts.append(f"关键词有 {tag_text}")
-        parts.append("我只记下这些外层信息,正文还没来得及认真读出完整感觉")
+        parts.append("我这次只摸到这些外层信息,正文还没来得及认真读出自己的感觉")
         return "；".join(parts)
 
     def _jm_cosmos_sample_page_indexes(self, page_count: int) -> list[int]:
@@ -964,12 +965,55 @@ class PrivateReadingMixin:
         replaced = False
         for idx, item in enumerate(items):
             if isinstance(item, dict) and str(item.get("key") or "") == key:
+                record["page_comments"] = self._merge_jm_page_comments(
+                    item.get("page_comments"),
+                    item.get("page_comments_previous"),
+                    record.get("page_comments"),
+                    limit=24,
+                )
                 items[idx] = {**item, **record}
                 replaced = True
                 break
         if not replaced:
             items.append(record)
         del items[:-80]
+
+    @staticmethod
+    def _merge_jm_page_comments(*sources: Any, limit: int = 24) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[int, str]] = set()
+        for source in sources:
+            if not isinstance(source, list):
+                continue
+            for item in source:
+                if not isinstance(item, dict):
+                    continue
+                page_no = _safe_int(item.get("page"), 0, 0)
+                comment_text = _single_line(item.get("comment"), 100)
+                if page_no <= 0 or not comment_text:
+                    continue
+                key = (page_no, comment_text)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(
+                    {
+                        "page": page_no,
+                        "comment": comment_text,
+                        "raw_page": _safe_int(item.get("raw_page"), 0, 0),
+                        "sample_order": _safe_int(
+                            item.get("sample_order")
+                            or item.get("sample_index")
+                            or item.get("reference_index")
+                            or item.get("image_index"),
+                            0,
+                            0,
+                        ),
+                    }
+                )
+                if len(merged) >= limit:
+                    return merged
+        return merged
 
     def _format_jm_cosmos_action_context(self, user: dict[str, Any]) -> str:
         item = user.get("jm_cosmos_reading_context")
