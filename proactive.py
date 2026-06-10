@@ -637,6 +637,7 @@ class ProactiveMixin:
                 await self._ensure_current_detail_presence_status()
                 await self._ensure_daily_diary()
                 await self._maybe_advance_creative_projects()
+                await self._refresh_passive_injection_cache()
                 await self._tick()
             except asyncio.CancelledError:
                 raise
@@ -651,6 +652,7 @@ class ProactiveMixin:
             await self._ensure_current_detail_presence_status()
             await self._ensure_daily_diary()
             await self._maybe_advance_creative_projects()
+            await self._refresh_passive_injection_cache()
             await self._tick()
         except Exception as e:
             logger.warning(f"[PrivateCompanion] 主动链即时唤醒失败: {e}", exc_info=True)

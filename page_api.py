@@ -1871,6 +1871,7 @@ class PrivateCompanionPageApi:
             "inject_passive_states",
             "enable_cycle_state",
             "enable_skill_growth_simulation",
+            "enable_message_debounce",
             "enable_environment_perception",
             "enable_holiday_perception",
             "enable_platform_perception",
@@ -2085,6 +2086,10 @@ class PrivateCompanionPageApi:
             "min_interval_minutes",
             "max_daily_messages",
             "inbound_message_debounce_seconds",
+            "enable_message_debounce",
+            "text_message_debounce_seconds",
+            "image_message_debounce_seconds",
+            "forward_message_debounce_seconds",
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
             "enable_proactive_quote_trigger_message",
@@ -2689,6 +2694,7 @@ class PrivateCompanionPageApi:
             "inject_passive_states",
             "enable_cycle_state",
             "enable_skill_growth_simulation",
+            "enable_message_debounce",
             "enable_environment_perception",
             "enable_holiday_perception",
             "enable_platform_perception",
@@ -2806,6 +2812,10 @@ class PrivateCompanionPageApi:
             "min_interval_minutes",
             "max_daily_messages",
             "inbound_message_debounce_seconds",
+            "enable_message_debounce",
+            "text_message_debounce_seconds",
+            "image_message_debounce_seconds",
+            "forward_message_debounce_seconds",
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
             "enable_proactive_quote_trigger_message",
@@ -3164,6 +3174,11 @@ class PrivateCompanionPageApi:
                 return max(0.0, min(15.0, float(value)))
             except (TypeError, ValueError):
                 return 8.0
+        if key in {"text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds"}:
+            try:
+                return max(0.0, min(15.0, float(value)))
+            except (TypeError, ValueError):
+                return 0.0 if key != "image_message_debounce_seconds" else 8.0
         if key == "private_image_vision_wait_seconds":
             try:
                 return max(0.0, min(90.0, float(value)))
@@ -3254,6 +3269,7 @@ class PrivateCompanionPageApi:
             "enable_skill_growth_schedule_influence",
             "forward_message_parse_nested",
             "forward_message_image_vision",
+            "enable_message_debounce",
             "enable_semantic_message_debounce",
             "enable_proactive_quote_trigger_message",
             "enable_local_photo_load_guard",

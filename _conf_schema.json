@@ -346,23 +346,61 @@
     },
     "default": 3
   },
-  "enable_semantic_message_debounce": {
-    "description": "启用语义收口等待",
+  "enable_message_debounce": {
+    "description": "启用消息收口防抖",
     "type": "bool",
-    "hint": "开启后，Bot 被唤醒后的短时间内会等待用户补完，把连续几句当作同一轮完整发言理解，减少抢答和多次调用模型。",
+    "hint": "独立的消息收口总开关。开启后可分别设置文本、图片、转发消息的等待补充时间；关闭后不再等待用户补话。",
     "default": true
   },
-  "semantic_message_debounce_seconds": {
-    "description": "语义收口等待秒数",
+  "text_message_debounce_seconds": {
+    "description": "文本消息收口秒数",
     "type": "float",
-    "hint": "从用户第一条消息到达插件时开始计算的收口窗口。默认 8 秒，更适合先发图片再补充说明；视觉转述和平台处理耗时会自然抵扣，不会额外完整等待 8 秒。",
+    "hint": "用户发普通文本后等待补充的秒数。设为 0 可让普通短句立即进入主链，不等待语义收口。",
     "slider": {
       "min": 0,
       "max": 8,
       "step": 0.1
     },
+    "default": 0,
+    "condition": "enable_message_debounce"
+  },
+  "image_message_debounce_seconds": {
+    "description": "图片消息收口秒数",
+    "type": "float",
+    "hint": "用户只发图片、截图或表情包后等待补充说明的秒数。适合保留几秒，方便先图后文合并为同一轮。",
+    "slider": {
+      "min": 0,
+      "max": 12,
+      "step": 0.1
+    },
     "default": 8,
-    "condition": "enable_semantic_message_debounce"
+    "condition": "enable_message_debounce"
+  },
+  "forward_message_debounce_seconds": {
+    "description": "转发消息收口秒数",
+    "type": "float",
+    "hint": "用户只发合并转发/聊天记录后等待补充说明的秒数。设为 0 表示转发消息不额外等待。",
+    "slider": {
+      "min": 0,
+      "max": 12,
+      "step": 0.1
+    },
+    "default": 0,
+    "condition": "enable_message_debounce"
+  },
+  "enable_semantic_message_debounce": {
+    "description": "旧版语义收口开关",
+    "type": "bool",
+    "hint": "兼容旧配置。新配置请使用“启用消息收口防抖”。",
+    "default": true,
+    "invisible": true
+  },
+  "semantic_message_debounce_seconds": {
+    "description": "旧版语义收口等待秒数",
+    "type": "float",
+    "hint": "兼容旧配置。新配置请分别使用文本、图片、转发消息收口秒数。",
+    "default": 8,
+    "invisible": true
   },
   "private_image_vision_wait_seconds": {
     "description": "单图延迟等待识图秒数",
@@ -379,7 +417,7 @@
   "enable_private_image_self_recognition": {
     "description": "启用图片转述增强",
     "type": "bool",
-    "hint": "总开关。开启后，私聊单图会先进入语义收口窗口，确认用户没有补充文字后再等待视觉转述，并额外判断图片、表情包、聊天截图里是否疑似出现当前角色自己、头像、名字或二创形象。关闭后不拦截私聊单图。",
+    "hint": "开启后，私聊图片转述会额外判断图片、表情包、聊天截图里是否疑似出现当前角色自己、头像、名字或二创形象。图片是否等待用户补充说明由“消息收口防抖”的图片收口秒数控制。",
     "default": true
   },
   "private_image_self_recognition_hint": {

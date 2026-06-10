@@ -288,7 +288,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.2.1",
+    "3.3.0",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -322,8 +322,17 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         self.min_interval_minutes = self._cfg_int(c, "min_interval_minutes", 120, 10)
         self.max_daily_messages = self._cfg_int(c, "max_daily_messages", 8, 0, 12)
         self.inbound_message_debounce_seconds = self._cfg_float(c, "inbound_message_debounce_seconds", 3.0, 0.0)
-        self.enable_semantic_message_debounce = self._cfg_bool(c, "enable_semantic_message_debounce", True)
-        self.semantic_message_debounce_seconds = self._cfg_float(c, "semantic_message_debounce_seconds", 8.0, 0.0)
+        self.enable_message_debounce = self._cfg_bool(
+            c,
+            "enable_message_debounce",
+            self._cfg_bool(c, "enable_semantic_message_debounce", True),
+        )
+        self.enable_semantic_message_debounce = self.enable_message_debounce
+        legacy_semantic_debounce_seconds = self._cfg_float(c, "semantic_message_debounce_seconds", 8.0, 0.0)
+        self.text_message_debounce_seconds = self._cfg_float(c, "text_message_debounce_seconds", 0.0, 0.0)
+        self.image_message_debounce_seconds = self._cfg_float(c, "image_message_debounce_seconds", legacy_semantic_debounce_seconds, 0.0)
+        self.forward_message_debounce_seconds = self._cfg_float(c, "forward_message_debounce_seconds", 0.0, 0.0)
+        self.semantic_message_debounce_seconds = legacy_semantic_debounce_seconds
         self.private_image_vision_wait_seconds = self._cfg_float(c, "private_image_vision_wait_seconds", 30.0, 0.0)
         self.enable_private_image_self_recognition = self._cfg_bool(c, "enable_private_image_self_recognition", True)
         self.enable_private_image_vision_cache = self._cfg_bool(c, "enable_private_image_vision_cache", True)
@@ -802,6 +811,10 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         self._default_persona_prompt_cache_at = 0.0
         self._default_persona_prompt_cache_umo = ""
         self._default_persona_prompt_cache_persona_id = ""
+        self._default_persona_prompt_refresh_task: asyncio.Task | None = None
+        self._passive_light_injection_cache: dict[str, Any] = {}
+        self._data_save_task: asyncio.Task | None = None
+        self._data_save_dirty = False
         self._framework_captured_send_cache: dict[str, list[Any]] = {}
         self._last_input_status_at: dict[str, float] = {}
         self._passive_input_status_tasks: dict[str, asyncio.Task] = {}
@@ -826,7 +839,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         if not self.enabled:
             logger.info("[PrivateCompanion] 插件总开关已关闭,不启动主动消息循环")
             return
-        await self._refresh_default_persona_prompt()
+        self._schedule_default_persona_prompt_refresh()
         async with self._data_lock:
             if self._prime_enabled_user_schedules():
                 self._save_data_sync()
@@ -835,6 +848,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             logger.info("[PrivateCompanion] 主动消息循环已启动")
         asyncio.create_task(self._reset_stale_qq_presence_if_needed())
         asyncio.create_task(self._startup_prepare_today())
+        asyncio.create_task(self._refresh_passive_injection_cache())
 
     async def terminate(self):
         global _private_companion_plugin
@@ -849,6 +863,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             if isinstance(task, asyncio.Task) and not task.done():
                 task.cancel()
         self._passive_input_status_tasks.clear()
+        save_task = getattr(self, "_data_save_task", None)
+        if isinstance(save_task, asyncio.Task) and not save_task.done():
+            save_task.cancel()
+            try:
+                await save_task
+            except asyncio.CancelledError:
+                pass
         async with self._data_lock:
             self._save_data_sync()
         if _private_companion_plugin is self:
@@ -920,14 +941,49 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             return
         logger.debug("[PrivateCompanion] 按插件规则分段 LLM 回复: %s -> %s 段", len(text), len(segments))
         quote_message_id = self._group_current_reply_quote_message_id(event)
-        for index, segment in enumerate(segments):
-            chain = self._with_optional_reply([Plain(segment)], quote_message_id) if index == 0 else [Plain(segment)]
-            await event.send(event.chain_result(chain))
-            quote_message_id = ""
-            if index < len(segments) - 1:
-                await asyncio.sleep(await self._calc_segmented_proactive_interval(segment))
-        event.clear_result()
-        event.stop_event()
+        first_chain = self._with_optional_reply([Plain(segments[0])], quote_message_id)
+        event.set_result(self._build_result_from_chain(first_chain))
+        if len(segments) > 1:
+            asyncio.create_task(
+                self._send_segmented_llm_reply_remainder(
+                    event,
+                    segments[1:],
+                    previous_segment=segments[0],
+                    source="decorating_result",
+                )
+            )
+
+    async def _send_segmented_llm_reply_remainder(
+        self,
+        event: AstrMessageEvent,
+        segments: list[str],
+        *,
+        previous_segment: str = "",
+        source: str = "",
+    ) -> None:
+        """后台补发被动分段的剩余片段，避免阻塞主链首包。"""
+        prev = previous_segment
+        for segment in segments:
+            segment = str(segment or "").strip()
+            if not segment:
+                continue
+            try:
+                wait_for = prev or segment
+                delay = await self._calc_segmented_proactive_interval(wait_for)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                await event.send(event.plain_result(segment))
+                prev = segment
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "[PrivateCompanion] 分段 LLM 剩余片段发送失败: source=%s error=%s",
+                    source or "unknown",
+                    _single_line(exc, 160),
+                    exc_info=True,
+                )
+                return
 
     @filter.on_decorating_result()
     async def attach_group_reply_quote(self, event: AstrMessageEvent):
@@ -1114,6 +1170,20 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 current_prompt = f"{current_prompt}\n\n<!-- private_companion_qzone_tools_v1 -->\n{qzone_instruction}".strip()
                 req.system_prompt = current_prompt
 
+    def _is_lightweight_private_passive_inbound(self, text: str) -> bool:
+        cleaned = _single_line(text, 80)
+        if not cleaned:
+            return False
+        if len(cleaned) > 18:
+            return False
+        heavy_tokens = (
+            "图片", "看图", "照片", "语音", "引用", "转发", "聊天记录",
+            "帮我", "怎么", "为什么", "是什么", "怎么办", "分析", "解释", "总结",
+            "日程", "状态", "近况", "在干嘛", "做什么", "忙什么",
+            "书柜", "夹层", "本子", "新闻", "说说", "空间", "发给", "转告", "@",
+        )
+        return not any(token in cleaned for token in heavy_tokens)
+
     @filter.on_llm_request()
     async def inject_humanized_state(self, event: AstrMessageEvent, req: ProviderRequest):
         """LLM 请求前注入陪伴状态、群聊上下文、工具边界和合并消息阅读上下文。"""
@@ -1205,18 +1275,18 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         if not self._is_target_private_user(user_id, current_user) or not current_user.get("enabled", True):
             return
         self._start_passive_input_status_loop(event, user_id)
-        await self._refresh_default_persona_prompt(getattr(event, "unified_msg_origin", "") or user_id)
 
-        state = await self._ensure_daily_state()
-        injection_parts = []
-        persona_injection = self._format_plugin_persona_request_injection()
-        if persona_injection:
-            injection_parts.append(persona_injection)
-        injection_parts.append(self._format_state_injection(state))
-        worldview_context = self._format_worldview_adaptation_prompt()
-        if worldview_context:
-            injection_parts.append(worldview_context)
+        state = await self._ensure_daily_state(skip_conversation_summary=True, passive_fast=True)
         inbound_text = _single_line(getattr(event, "message_str", "") or current_user.get("last_user_message"), 260)
+        lightweight_passive = self._is_lightweight_private_passive_inbound(inbound_text)
+        injection_parts = []
+        if lightweight_passive:
+            injection_parts.append(self._prepared_lightweight_state_injection(state))
+        else:
+            injection_parts.append(self._format_state_injection(state))
+            worldview_context = self._format_worldview_adaptation_prompt()
+            if worldview_context:
+                injection_parts.append(worldview_context)
         buffered_image_context = self._take_buffered_private_image_context_for_event(event)
         buffered_images = (
             [str(item) for item in buffered_image_context.get("images", []) if str(item or "").strip()]
@@ -1259,7 +1329,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 ),
                 600,
             )
-        combined_text = await self._consume_semantic_message_buffer_for_event(event, private_chat=True)
+        combined_text = ""
+        if not lightweight_passive or buffered_images:
+            combined_text = await self._consume_semantic_message_buffer_for_event(event, private_chat=True)
         if combined_text:
             injection_parts.append(
                 "【本轮用户连续补充】\n"
@@ -1324,6 +1396,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 injection_parts.append(
                     "【本轮延迟图片】\n"
                     f"{image_context_intro}下面是视觉模型对刚才那张图的内部摘要；"
+                    "这是当前这张图片的可靠内容摘要；即使当前主模型不能直接识图,也请按此摘要理解,不要回答“没看到图”或要求重发。"
                     "请优先理解用户发这张图想表达的情绪、态度、文字或梗,再结合画面内容和用户本轮文字回复；不要提模型、插件或路径。"
                     f"{self._private_image_identity_disambiguation_instruction()}\n"
                     f"{reply_objective}\n"
@@ -1346,6 +1419,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 injection_parts.append(
                     "【本轮延迟图片】\n"
                     "用户刚刚只发了一张图片,没有继续补充文字。下面是视觉模型对那张图的内部摘要；"
+                    "这是当前这张图片的可靠内容摘要；即使当前主模型不能直接识图,也请按此摘要理解,不要回答“没看到图”或要求重发。"
                     "请自然回应图片内容,不要提模型、插件或处理过程。\n"
                     f"{buffered_image_vision}"
                 )
@@ -1411,57 +1485,60 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                         f"用户这轮引用/回复了一张图片,并发送文字：{inbound_text or '（空）'}。"
                         "当前未能拿到可用视觉摘要；如果用户问的是引用图片内容,请自然说明这边暂时没看清,不要编造。"
                     )
-        hidden_creative_context = self._format_hidden_creative_context_for_reply(inbound_text)
-        if hidden_creative_context:
-            injection_parts.append(hidden_creative_context)
-        bookshelf_secret_context = await self._format_bookshelf_secret_for_prompt(inbound_text)
-        if bookshelf_secret_context:
-            injection_parts.append(bookshelf_secret_context)
-        bookshelf_reading_context = self._format_bookshelf_reading_context_for_reply(inbound_text)
-        if bookshelf_reading_context:
-            injection_parts.append(bookshelf_reading_context)
-        private_preference_context = self._format_private_reading_preference_influence_for_reply(inbound_text)
-        if private_preference_context:
-            injection_parts.append(private_preference_context)
-        news_context = self._format_recent_news_context_for_reply(inbound_text)
-        if news_context:
-            injection_parts.append(news_context)
-        skill_context = self._format_skill_growth_for_prompt()
-        if skill_context:
-            injection_parts.append(skill_context)
-        companion_injection = self._format_companion_planner_injection(current_user)
-        if companion_injection:
-            injection_parts.append(companion_injection)
-        is_wake_event = bool(getattr(event, "is_wake", False)) or bool(
-            getattr(event, "is_at_or_wake_command", False)
-        )
-        if is_private_chat and not is_wake_event:
-            proactive_context = await self._format_proactive_reply_context(event)
-            if proactive_context:
-                injection_parts.append(proactive_context)
-        detail_injection = self._format_detail_injection()
-        if detail_injection:
-            injection_parts.append(detail_injection)
-        if self.enable_llm_timer_scheduling and is_private_chat:
-            try:
-                user_id = str(event.get_sender_id())
-            except Exception:
-                user_id = ""
-            if user_id:
-                async with self._data_lock:
-                    enabled = bool(self._get_user(user_id).get("enabled"))
-                if enabled:
-                    injection_parts.append(self._format_timer_scheduling_instruction())
+        if not lightweight_passive:
+            hidden_creative_context = self._format_hidden_creative_context_for_reply(inbound_text)
+            if hidden_creative_context:
+                injection_parts.append(hidden_creative_context)
+            bookshelf_secret_context = await self._format_bookshelf_secret_for_prompt(inbound_text)
+            if bookshelf_secret_context:
+                injection_parts.append(bookshelf_secret_context)
+            bookshelf_reading_context = self._format_bookshelf_reading_context_for_reply(inbound_text)
+            if bookshelf_reading_context:
+                injection_parts.append(bookshelf_reading_context)
+            private_preference_context = self._format_private_reading_preference_influence_for_reply(inbound_text)
+            if private_preference_context:
+                injection_parts.append(private_preference_context)
+            news_context = self._format_recent_news_context_for_reply(inbound_text)
+            if news_context:
+                injection_parts.append(news_context)
+            skill_context = self._format_skill_growth_for_prompt()
+            if skill_context:
+                injection_parts.append(skill_context)
+            companion_injection = self._format_companion_planner_injection(current_user)
+            if companion_injection:
+                injection_parts.append(companion_injection)
+            is_wake_event = bool(getattr(event, "is_wake", False)) or bool(
+                getattr(event, "is_at_or_wake_command", False)
+            )
+            if is_private_chat and not is_wake_event:
+                proactive_context = await self._format_proactive_reply_context(event)
+                if proactive_context:
+                    injection_parts.append(proactive_context)
+            detail_injection = self._format_detail_injection()
+            if detail_injection:
+                injection_parts.append(detail_injection)
+            if self.enable_llm_timer_scheduling and is_private_chat:
+                try:
+                    user_id = str(event.get_sender_id())
+                except Exception:
+                    user_id = ""
+                if user_id:
+                    async with self._data_lock:
+                        enabled = bool(self._get_user(user_id).get("enabled"))
+                    if enabled:
+                        injection_parts.append(self._format_timer_scheduling_instruction())
         injection = "\n\n".join(injection_parts)
         marker = "<!-- private_companion_state_v1 -->"
         current_prompt = req.system_prompt or ""
         if marker in current_prompt:
             await self._append_conditional_tool_instructions_to_request(event, req)
-            await self._append_environment_perception_to_request(event, req)
+            if not lightweight_passive:
+                await self._append_environment_perception_to_request(event, req)
             return
         req.system_prompt = f"{current_prompt}\n\n{marker}\n{injection}".strip()
         await self._append_conditional_tool_instructions_to_request(event, req)
-        await self._append_environment_perception_to_request(event, req)
+        if not lightweight_passive:
+            await self._append_environment_perception_to_request(event, req)
         state_log_parts = [
             f"心理能量={state.get('energy', 70)}/100",
             f"情绪底色={state.get('mood_bias', '平稳')}",
@@ -1472,8 +1549,10 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
         current_schedule = self._format_plan_item_for_prompt(current_item) or "无当前日程"
         logger.info(
-            "[PrivateCompanion] 已注入被动状态提示词到 %s: 状态=%s；当前日程=%s",
+            "[PrivateCompanion] 已注入被动状态提示词到 %s: mode=%s chars=%s 状态=%s；当前日程=%s",
             _single_line(getattr(event, "unified_msg_origin", ""), 80) or "unknown_session",
+            "light" if lightweight_passive else "full",
+            len(injection),
             "｜".join(state_log_parts),
             current_schedule,
         )
@@ -1921,6 +2000,30 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                     bool(forward_payload),
                 )
 
+        raw_users = self.data.get("users", {})
+        fast_user = raw_users.get(user_id) if isinstance(raw_users, dict) else None
+        fast_target_user = isinstance(fast_user, dict) and self._is_target_private_user(user_id, fast_user) and bool(fast_user.get("enabled", True))
+        if (
+            fast_target_user
+            and text
+            and not forward_only_prompt
+            and self._is_lightweight_private_passive_inbound(text)
+            and not self._is_private_image_only_message(event, text)
+        ):
+            if self._is_recent_poke_echo(fast_user, text):
+                logger.info("[PrivateCompanion] 忽略 poke 回流事件,不计入用户新消息: %s", user_id)
+                return
+            if self._is_duplicate_inbound_message(event, scope=f"private:{user_id}", sender_id=user_id, text=text):
+                return
+            fast_user["umo"] = event.unified_msg_origin
+            fast_user["last_seen"] = received_ts
+            fast_user["last_user_message"] = text
+            fast_user["inbound_count"] = _safe_int(fast_user.get("inbound_count"), 0) + 1
+            fast_user["relationship_score"] = _safe_int(fast_user.get("relationship_score"), 0) + 1
+            fast_user["ignored_streak"] = 0
+            self._schedule_data_save()
+            return
+
         async with self._data_lock:
             user = self._get_user(user_id)
             is_target_user = self._is_target_private_user(user_id, user) and bool(user.get("enabled", True))
@@ -1928,12 +2031,22 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 logger.info("[PrivateCompanion] 忽略 poke 回流事件,不计入用户新消息: %s", user_id)
                 return
             if self._is_duplicate_inbound_message(event, scope=f"private:{user_id}", sender_id=user_id, text=text):
-                self._save_data_sync()
+                self._schedule_data_save()
                 return
+            if is_target_user and forward_only_prompt:
+                key = self._semantic_buffer_key(f"private:{user_id}", user_id)
+                if self._note_semantic_message_buffer(
+                    key,
+                    text,
+                    now=received_ts,
+                    wait_seconds=self._message_debounce_seconds("forward"),
+                ):
+                    self._schedule_data_save()
+                    event.stop_event()
+                    return
             private_image_enhancement_enabled = (
-                bool(getattr(self, "enable_private_image_self_recognition", True))
-                and bool(getattr(self, "enable_semantic_message_debounce", True))
-                and max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0)) > 0
+                bool(getattr(self, "enable_message_debounce", getattr(self, "enable_semantic_message_debounce", True)))
+                and self._message_debounce_seconds("image") > 0
             )
             private_image_only = (
                 is_target_user
@@ -1947,6 +2060,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                     key,
                     "用户刚刚先单独发送了一张图片,可能马上会补充说明。",
                     now=received_ts,
+                    wait_seconds=self._message_debounce_seconds("image"),
                 )
                 buffers = getattr(self, "_semantic_message_buffers", None)
                 if isinstance(buffers, dict) and isinstance(buffers.get(key), dict):
@@ -1960,7 +2074,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                             user_id,
                             len(persisted_images),
                         )
-                        self._save_data_sync()
+                        self._schedule_data_save()
                         return
                     buffers[key]["images"] = persisted_images
                     buffers[key]["original_event"] = event
@@ -1981,7 +2095,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                         bool(persisted_images) and not direct_image_mode,
                     )
                     asyncio.create_task(self._finalize_private_image_buffer_after_wait(key, user_id, received_ts))
-                self._save_data_sync()
+                self._schedule_data_save()
                 event.stop_event()
                 return
             elif is_target_user and not forward_only_prompt:
@@ -1994,7 +2108,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                     and bool(existing_buffer.get("images"))
                     and _now_ts() - _safe_float(existing_buffer.get("first_ts"), 0) <= max(
                         45.0,
-                        float(getattr(self, "semantic_message_debounce_seconds", 8.0) or 8.0) + 30.0,
+                        self._message_debounce_seconds("image") + 30.0,
                     )
                 )
                 if buffered_images:
@@ -2006,8 +2120,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                     if cleaned_text and cleaned_text not in [_single_line(item.get("text"), 260) for item in messages if isinstance(item, dict)]:
                         messages.append({"ts": _now_ts(), "text": cleaned_text, "sender_name": ""})
                     existing_buffer["updated_ts"] = _now_ts()
-                elif self._note_semantic_message_buffer(key, text):
-                    self._save_data_sync()
+                elif self._note_semantic_message_buffer(key, text, wait_seconds=self._message_debounce_seconds("text")):
+                    self._schedule_data_save()
                     event.stop_event()
                     return
             user["umo"] = event.unified_msg_origin
@@ -2079,7 +2193,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 user["relationship_score"] = _safe_int(user.get("relationship_score"), 0) + 1
 
             response = ""
-            self._save_data_sync()
+            self._schedule_data_save()
             user_snapshot = dict(user)
 
         if is_target_user and schedule_adjustment_applied:

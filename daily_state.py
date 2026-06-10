@@ -1379,10 +1379,34 @@ class DailyStateMixin:
     def _format_plan_for_diary(self, plan: dict[str, Any]) -> str:
         return format_plan_for_diary(self, plan)
 
-    async def _ensure_daily_state(self, force: bool = False) -> dict[str, Any]:
+    async def _ensure_daily_state(
+        self,
+        force: bool = False,
+        *,
+        skip_conversation_summary: bool = False,
+        passive_fast: bool = False,
+    ) -> dict[str, Any]:
         today = _today_key()
+        if passive_fast and not force:
+            cached_state = self.data.get("daily_state", {})
+            if isinstance(cached_state, dict) and cached_state.get("date") == today:
+                return cached_state
+            cached_weather = self.data.get("daily_weather", {})
+            weather = cached_weather if isinstance(cached_weather, dict) and cached_weather.get("date") == today else {
+                "date": today,
+                "prompt": "暂无天气信息",
+                "source": "passive_fast",
+            }
+            if not self.enable_humanized_states:
+                state = dict(DEFAULT_HUMANIZED_STATE)
+                state.update(self._base_state_values())
+                state["date"] = today
+                state["weather"] = self._weather_summary_text(weather)
+                return state
+            return self._compose_state_from_conditions(weather)
         weather = await self._ensure_weather_context(force=force)
-        await self._ensure_yesterday_conversation_summary(force=force)
+        if not skip_conversation_summary:
+            await self._ensure_yesterday_conversation_summary(force=force)
         async with self._data_lock:
             if not self.enable_humanized_states and not force:
                 state = dict(DEFAULT_HUMANIZED_STATE)
@@ -3515,15 +3539,25 @@ class DailyStateMixin:
 
     async def _refresh_default_persona_prompt(self, umo: str = "") -> str:
         try:
-            manager = getattr(getattr(self, "context", None), "persona_manager", None)
             specific_id = str(getattr(self, "plugin_specific_persona_id", "") or "").strip()
+            cached = str(getattr(self, "_default_persona_prompt_cache", "") or "").strip()
+            cached_at = _safe_float(getattr(self, "_default_persona_prompt_cache_at", 0.0), 0.0)
+            cached_umo = str(getattr(self, "_default_persona_prompt_cache_umo", "") or "")
+            cached_persona_id = str(getattr(self, "_default_persona_prompt_cache_persona_id", "") or "")
+            cache_fresh = cached and (_now_ts() - cached_at < 300.0)
+            cache_matches_specific = specific_id and cached_persona_id == specific_id
+            cache_matches_default = not specific_id and not cached_persona_id and (not umo or cached_umo == umo)
+            if cache_fresh and (cache_matches_specific or cache_matches_default):
+                return cached
+
+            manager = getattr(getattr(self, "context", None), "persona_manager", None)
             if manager and specific_id:
                 try:
                     specific_getter = getattr(manager, "get_persona", None)
                     if callable(specific_getter):
                         result = specific_getter(specific_id)
                         if inspect.isawaitable(result):
-                            result = await result
+                            result = await asyncio.wait_for(result, timeout=2.0)
                         prompt = self._extract_default_persona_prompt(result)
                         if prompt:
                             self._default_persona_prompt_cache = prompt
@@ -3531,6 +3565,9 @@ class DailyStateMixin:
                             self._default_persona_prompt_cache_umo = umo
                             self._default_persona_prompt_cache_persona_id = specific_id
                             return prompt
+                except asyncio.TimeoutError:
+                    logger.warning("[PrivateCompanion] 读取插件指定人格超时(ID: %s),本轮使用缓存人格", specific_id)
+                    return self._get_default_persona_prompt()
                 except Exception as e:
                     logger.warning(f"[PrivateCompanion] 读取插件指定人格失败(ID: {specific_id}): {e}")
             getter = getattr(manager, "get_default_persona_v3", None) if manager else None
@@ -3544,16 +3581,41 @@ class DailyStateMixin:
                 except TypeError:
                     result = getter()
             if inspect.isawaitable(result):
-                result = await result
+                result = await asyncio.wait_for(result, timeout=2.0)
             prompt = self._extract_default_persona_prompt(result)
             if prompt:
                 self._default_persona_prompt_cache = prompt
                 self._default_persona_prompt_cache_at = _now_ts()
                 self._default_persona_prompt_cache_umo = umo
                 return prompt
+        except asyncio.TimeoutError:
+            logger.warning("[PrivateCompanion] 读取 AstrBot 默认人格超时,本轮使用缓存人格")
         except Exception as e:
             logger.warning(f"[PrivateCompanion] 读取 AstrBot 默认人格失败: {e}")
         return self._get_default_persona_prompt()
+
+    def _schedule_default_persona_prompt_refresh(self, umo: str = "") -> None:
+        specific_id = str(getattr(self, "plugin_specific_persona_id", "") or "").strip()
+        cached = str(getattr(self, "_default_persona_prompt_cache", "") or "").strip()
+        cached_at = _safe_float(getattr(self, "_default_persona_prompt_cache_at", 0.0), 0.0)
+        cached_umo = str(getattr(self, "_default_persona_prompt_cache_umo", "") or "")
+        cached_persona_id = str(getattr(self, "_default_persona_prompt_cache_persona_id", "") or "")
+        cache_fresh = cached and (_now_ts() - cached_at < 300.0)
+        cache_matches_specific = specific_id and cached_persona_id == specific_id
+        cache_matches_default = not specific_id and not cached_persona_id and (not umo or cached_umo == umo)
+        if cache_fresh and (cache_matches_specific or cache_matches_default):
+            return
+        task = getattr(self, "_default_persona_prompt_refresh_task", None)
+        if isinstance(task, asyncio.Task) and not task.done():
+            return
+
+        async def _runner() -> None:
+            await self._refresh_default_persona_prompt(umo)
+
+        try:
+            self._default_persona_prompt_refresh_task = asyncio.create_task(_runner())
+        except RuntimeError:
+            pass
 
     def _format_plugin_persona_request_injection(self) -> str:
         specific_id = str(getattr(self, "plugin_specific_persona_id", "") or "").strip()
@@ -4524,6 +4586,40 @@ class DailyStateMixin:
                 "如果用户提到相关日期、纪念、生日、约定或计划,请自然承接；不要无故强行展开。"
             )
         return "\n\n".join(parts)
+
+    def _format_lightweight_state_injection(self, state: dict[str, Any]) -> str:
+        lines = [
+            "【轻量陪伴状态】",
+            "这只作为当前私聊语气参考；不要复述字段、数值、日程或原因。用户只是短句互动时,优先直接接住那句话,回复短一点、自然一点。",
+            f"语气参考：{self._format_passive_state_style_hint(state)}",
+        ]
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        current_schedule = _single_line(self._format_plan_item_for_prompt(current_item), 160)
+        if current_schedule:
+            lines.append(f"当前生活感：{current_schedule}。没被问到就不要主动汇报。")
+        return "\n".join(lines)
+
+    def _prepared_lightweight_state_injection(self, state: dict[str, Any], *, force: bool = False) -> str:
+        now = _now_ts()
+        cache = getattr(self, "_passive_light_injection_cache", None)
+        if isinstance(cache, dict) and not force:
+            text = str(cache.get("text") or "").strip()
+            if text and cache.get("date") == _today_key() and now - _safe_float(cache.get("ts"), 0) < 60:
+                return text
+        text = self._format_lightweight_state_injection(state)
+        self._passive_light_injection_cache = {
+            "date": _today_key(),
+            "ts": now,
+            "text": text,
+        }
+        return text
+
+    async def _refresh_passive_injection_cache(self) -> None:
+        try:
+            state = await self._ensure_daily_state(skip_conversation_summary=True, passive_fast=True)
+            self._prepared_lightweight_state_injection(state, force=True)
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 预热轻量被动注入失败: %s", _single_line(exc, 120))
 
     def _user_asks_recent_bot_activity(self, text: str) -> bool:
         normalized = _single_line(text, 180)

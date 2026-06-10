@@ -900,6 +900,11 @@ class UserMemoryMixin:
         flags = self._response_review_flags(response_text, user)
         if not flags:
             return response_text
+        lightweight_checker = getattr(self, "_is_lightweight_private_passive_inbound", None)
+        if callable(lightweight_checker) and lightweight_checker(inbound_text):
+            critical_flags = {"too_long", "meta_or_assistant", "over_structured", "leaks_internal"}
+            if not any(flag in critical_flags for flag in flags):
+                return response_text
         intent = user.get("intent_profile") if isinstance(user.get("intent_profile"), dict) else {}
         last_message = _single_line(user.get("last_companion_message"), 300)
         prompt = f"""

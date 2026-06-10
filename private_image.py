@@ -214,7 +214,7 @@ class PrivateImageMixin:
                 request = urllib.request.Request(
                     text,
                     headers={
-                        "User-Agent": "Mozilla/5.0 AstrBot PrivateCompanion/3.2.1",
+                        "User-Agent": "Mozilla/5.0 AstrBot PrivateCompanion/3.3.0",
                         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
                     },
                 )
@@ -953,6 +953,18 @@ class PrivateImageMixin:
         logger.info("[PrivateCompanion] 私聊图片视觉转述失败: 所有候选 provider 均不可用或失败 attempts=%s", attempts)
         return ""
 
+    def _message_debounce_seconds(self, kind: str = "text") -> float:
+        if not bool(getattr(self, "enable_message_debounce", getattr(self, "enable_semantic_message_debounce", True))):
+            return 0.0
+        legacy = _safe_float(getattr(self, "semantic_message_debounce_seconds", 0.0), 0.0, 0.0)
+        if kind == "image":
+            return max(0.0, _safe_float(getattr(self, "image_message_debounce_seconds", legacy), legacy, 0.0))
+        if kind == "forward":
+            return max(0.0, _safe_float(getattr(self, "forward_message_debounce_seconds", 0.0), 0.0, 0.0))
+        if kind == "group":
+            return max(0.0, legacy)
+        return max(0.0, _safe_float(getattr(self, "text_message_debounce_seconds", 0.0), 0.0, 0.0))
+
     async def _consume_semantic_message_buffer_for_event(self, event: AstrMessageEvent, *, private_chat: bool) -> str:
         try:
             sender_id = str(event.get_sender_id())
@@ -962,10 +974,7 @@ class PrivateImageMixin:
             return ""
         force_consume = False
         if private_chat:
-            if not self.enable_semantic_message_debounce:
-                return ""
-            wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
-            if wait <= 0:
+            if not bool(getattr(self, "enable_message_debounce", getattr(self, "enable_semantic_message_debounce", True))):
                 return ""
             scope = f"private:{sender_id}"
             key = self._semantic_buffer_key(scope, sender_id)
@@ -981,9 +990,7 @@ class PrivateImageMixin:
                 key = high_key
                 force_consume = True
             else:
-                if not self.enable_semantic_message_debounce:
-                    return ""
-                wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
+                wait = self._message_debounce_seconds("group")
                 if wait <= 0:
                     return ""
                 key = self._semantic_buffer_key(scope, sender_id)
@@ -1052,6 +1059,19 @@ class PrivateImageMixin:
             cleaned = re.sub(r"(?<=[\u4e00-\u9fff…！？?！~～])\s+(?=[\u4e00-\u9fff])", "\n", cleaned)
         return cleaned.strip()
 
+    def _private_image_reply_ignores_vision_summary(self, text: str) -> bool:
+        compact = re.sub(r"\s+", "", str(text or ""))
+        if not compact:
+            return False
+        markers = (
+            "没看到图", "没看到图片", "没看见图", "没看见图片",
+            "看不到图", "看不到图片", "看不见图", "看不见图片",
+            "无法看到图", "无法看到图片", "不能看到图", "不能看到图片",
+            "看不了图", "看不了图片", "图片没显示", "图没显示",
+            "再发一次", "重新发一次", "重发一次",
+        )
+        return any(marker in compact for marker in markers)
+
     async def _send_private_image_reply_text(self, event: AstrMessageEvent, reply: str) -> None:
         text = self._normalize_private_image_reply_text(reply)
         if not text:
@@ -1068,10 +1088,15 @@ class PrivateImageMixin:
             await event.send(event.plain_result(segments[0]))
             return
         logger.info("[PrivateCompanion] 私聊单图回复按手动链路分段发送: segments=%s", len(segments))
-        for index, segment in enumerate(segments):
-            await event.send(event.plain_result(segment))
-            if index < len(segments) - 1:
-                await asyncio.sleep(await self._calc_segmented_proactive_interval(segment))
+        await event.send(event.plain_result(segments[0]))
+        asyncio.create_task(
+            self._send_segmented_llm_reply_remainder(
+                event,
+                segments[1:],
+                previous_segment=segments[0],
+                source="private_image",
+            )
+        )
 
     def _take_buffered_private_image_context_for_event(self, event: AstrMessageEvent) -> dict[str, Any]:
         try:
@@ -1087,7 +1112,7 @@ class PrivateImageMixin:
         buffer = buffers.get(key)
         if not isinstance(buffer, dict):
             return {}
-        if _now_ts() - _safe_float(buffer.get("updated_ts"), buffer.get("first_ts"), 0) > max(30.0, float(getattr(self, "semantic_message_debounce_seconds", 8.0) or 8.0) + 30.0):
+        if _now_ts() - _safe_float(buffer.get("updated_ts"), buffer.get("first_ts"), 0) > max(30.0, self._message_debounce_seconds("image") + 30.0):
             return {}
         images = buffer.pop("images", [])
         return {
@@ -1118,8 +1143,15 @@ class PrivateImageMixin:
                 logger.info("[PrivateCompanion] 私聊单图延迟视觉转述失败: user=%s error=%s", user_id, _single_line(exc, 120))
         ownership_line = self._private_image_ownership_line(vision_text)
         intent_line = self._private_image_intent_line(vision_text)
-        prompt = _single_line(getattr(event, "message_str", ""), 120) or "[图片]"
         reply_objective = self._private_image_reply_objective(ownership_line)
+        prompt = _single_line(getattr(event, "message_str", ""), 120)
+        if not prompt or prompt == "[图片]":
+            prompt = (
+                "用户刚刚只发了一张图片,没有补充文字。"
+                "图片内容已在系统提示的【本轮延迟图片】视觉摘要中给出；请直接回应那张图,不要说没看到图片。"
+                if vision_text
+                else "用户刚刚只发了一张图片,没有补充文字。"
+            )
         logger.info(
             "[PrivateCompanion] 私聊单图准备进入主链: user=%s images=%s has_vision=%s intent=%s ownership=%s objective=%s vision_preview=%s",
             user_id,
@@ -1293,6 +1325,13 @@ class PrivateImageMixin:
                         len(reply),
                         _single_line(reply, 180),
                     )
+            if reply and vision_text and self._private_image_reply_ignores_vision_summary(reply):
+                logger.info(
+                    "[PrivateCompanion] 私聊单图主链疑似忽略视觉摘要,转入兜底回复: user=%s reply_preview=%s",
+                    user_id,
+                    _single_line(reply, 180),
+                )
+                reply = ""
             if reply:
                 logger.info(
                     "[PrivateCompanion] 私聊单图主链回复生成: user=%s chars=%s intent=%s ownership=%s reply_preview=%s",
@@ -1389,7 +1428,7 @@ class PrivateImageMixin:
             logger.warning("[PrivateCompanion] 私聊单图延迟回复失败: user=%s error=%s", user_id, _single_line(exc, 180), exc_info=True)
 
     async def _finalize_private_image_buffer_after_wait(self, key: str, user_id: str, first_ts: float) -> None:
-        wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
+        wait = self._message_debounce_seconds("image")
         remaining = max(0.0, first_ts + wait - _now_ts())
         if remaining > 0:
             await asyncio.sleep(remaining)

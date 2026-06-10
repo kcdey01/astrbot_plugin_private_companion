@@ -437,6 +437,37 @@ class CoreStoreMixin:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
         os.replace(tmp_file, self.data_file)
 
+    def _write_data_snapshot_sync(self, data: dict[str, Any]) -> None:
+        tmp_file = self.data_file + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_file, self.data_file)
+
+    def _schedule_data_save(self, delay: float = 1.5) -> None:
+        self._data_save_dirty = True
+        task = getattr(self, "_data_save_task", None)
+        if isinstance(task, asyncio.Task) and not task.done():
+            return
+
+        async def _runner() -> None:
+            try:
+                while bool(getattr(self, "_data_save_dirty", False)):
+                    self._data_save_dirty = False
+                    await asyncio.sleep(max(0.0, float(delay)))
+                    snapshot = deepcopy(self.data)
+                    await asyncio.to_thread(self._write_data_snapshot_sync, snapshot)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("[PrivateCompanion] 延迟保存数据失败: %s", exc)
+            finally:
+                self._data_save_task = None
+
+        try:
+            self._data_save_task = asyncio.create_task(_runner())
+        except RuntimeError:
+            self._save_data_sync()
+
     async def _reset_plugin_store(self) -> None:
         async with self._data_lock:
             self.data = self._new_store()
