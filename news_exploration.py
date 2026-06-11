@@ -1880,13 +1880,38 @@ class NewsExplorationMixin:
             "boundary": "不要说成系统通知；不要要求用户一定做什么；只表达自己的反应和一点想法。",
         }
 
+    def _external_event_life_opportunity_wish(self, payload: dict[str, Any], *, source_type: str) -> dict[str, Any]:
+        title = _single_line(payload.get("headline") or payload.get("topic") or payload.get("source_title"), 120)
+        note = _single_line(payload.get("impression") or payload.get("note") or payload.get("summary"), 260)
+        haystack = f"{title} {note}".lower()
+        tokens = (
+            "免单", "免费", "送", "抽奖", "福利", "优惠", "券", "红包", "周年庆",
+            "奶茶", "茶百道", "咖啡", "甜品", "饮品", "碰碰运气", "试试", "薅",
+        )
+        if not any(token in haystack for token in tokens):
+            return {}
+        return {
+            "relevance": 8,
+            "desire": 8,
+            "should_share": True,
+            "share_probability": 0.86,
+            "self_link": "这像是能和用户一起碰碰运气的小福利，和日常吃喝、撒娇分享都很贴近。",
+            "motive": "刚看到一个挺实在的生活小活动，有点想醒来后轻轻提醒用户一句，像分享小便宜一样自然。",
+            "tone": "轻快,有点心动,不要像广告",
+            "boundary": "不要保证一定抢到；不要催促用户；如果正在休息，就当作醒来后顺口提起。",
+            "created_ts": _now_ts(),
+            "source_type": source_type,
+            "boost_reason": "life_opportunity",
+        }
+
     async def _build_external_event_wish(self, payload: dict[str, Any], *, source_type: str) -> dict[str, Any]:
         if not self.enable_external_event_self_link or not isinstance(payload, dict):
             return {}
         provider_id = self._external_event_self_link_provider_id()
         fallback = self._external_event_fallback_wish(payload, source_type=source_type)
+        life_wish = self._external_event_life_opportunity_wish(payload, source_type=source_type)
         if not provider_id:
-            return fallback
+            return life_wish or fallback
         title = _single_line(payload.get("headline") or payload.get("topic") or payload.get("source_title"), 120)
         impression = _single_line(payload.get("impression") or payload.get("note") or payload.get("summary"), 360)
         source = _single_line(payload.get("selected_source") or payload.get("source_title") or payload.get("source"), 80)
@@ -1929,11 +1954,11 @@ class NewsExplorationMixin:
         raw = await self._llm_call(prompt, max_tokens=360, provider_id=provider_id, task="external_event_self_link")
         parsed = self._parse_json_object(raw)
         if not isinstance(parsed, dict):
-            return fallback
+            return life_wish or fallback
         relevance = _safe_int(parsed.get("relevance"), fallback["relevance"], 0, 10)
         desire = _safe_int(parsed.get("desire"), fallback["desire"], 0, 10)
         probability = _safe_float(parsed.get("share_probability"), fallback["share_probability"])
-        return {
+        result = {
             "relevance": relevance,
             "desire": desire,
             "should_share": bool(parsed.get("should_share", relevance >= 5 and desire >= 5)),
@@ -1945,6 +1970,21 @@ class NewsExplorationMixin:
             "created_ts": _now_ts(),
             "source_type": source_type,
         }
+        if life_wish:
+            if not result["should_share"] or result["share_probability"] < life_wish["share_probability"]:
+                result = {
+                    **result,
+                    "relevance": max(result["relevance"], life_wish["relevance"]),
+                    "desire": max(result["desire"], life_wish["desire"]),
+                    "should_share": True,
+                    "share_probability": max(result["share_probability"], life_wish["share_probability"]),
+                    "self_link": result["self_link"] if result["relevance"] >= 5 else life_wish["self_link"],
+                    "motive": life_wish["motive"],
+                    "tone": life_wish["tone"],
+                    "boundary": life_wish["boundary"],
+                    "boost_reason": life_wish["boost_reason"],
+                }
+        return result
 
     def _bot_currently_bored_enough_for_news(self) -> bool:
         now_dt = datetime.now()
@@ -2005,34 +2045,90 @@ class NewsExplorationMixin:
         wish = await self._build_external_event_wish(digest, source_type="news")
         if wish:
             digest["self_link"] = wish
+        share_attempts: list[dict[str, Any]] = []
+        digest["share_attempts"] = share_attempts
+        digest["share_status"] = "not_attempted"
+
+        def _note_news_share(user_id_value: Any, status: str, reason_text: str, **extra: Any) -> None:
+            item = {
+                "user_id": str(user_id_value or ""),
+                "status": _single_line(status, 32),
+                "reason": _single_line(reason_text, 120),
+                "ts": _now_ts(),
+            }
+            for key, value in extra.items():
+                if isinstance(value, (int, float, bool)):
+                    item[key] = value
+                else:
+                    item[key] = _single_line(value, 160)
+            share_attempts.append(item)
+
         digests.append({**digest, "reason": reason})
+
+        def _sync_digest_share_status() -> None:
+            if not digests or not isinstance(digests[-1], dict):
+                return
+            if selected_key and _single_line(digests[-1].get("selected_key"), 32) != selected_key:
+                return
+            digests[-1].update({
+                "share_status": digest.get("share_status", ""),
+                "share_skip_reason": digest.get("share_skip_reason", ""),
+                "share_attempts": share_attempts,
+            })
+
         state["latest_items"] = items[:12]
         self_link_allows_share = bool(wish.get("should_share")) if isinstance(wish, dict) else False
         if not allow_share and not self_link_allows_share:
+            digest["share_status"] = "blocked"
+            digest["share_skip_reason"] = "本次新闻阅读不允许主动分享，且自我关联未通过"
+            _sync_digest_share_status()
             self._save_data_sync()
             logger.info("[PrivateCompanion] 已完成一次新闻阅读: %s", reason)
             return
         users = self.data.get("users")
+        accepted_any = False
         if isinstance(users, dict):
             for user_id, user in users.items():
                 if not isinstance(user, dict) or not self._is_target_private_user(str(user_id), user) or not user.get("enabled", True) or not user.get("umo"):
                     continue
-                if now - _safe_float(user.get("last_seen"), 0) < max(self.idle_minutes, 90) * 60:
+                strong_self_link = (
+                    isinstance(wish, dict)
+                    and bool(wish)
+                    and (
+                        _safe_int(wish.get("relevance"), 0, 0, 10) >= 8
+                        or _safe_int(wish.get("desire"), 0, 0, 10) >= 8
+                        or _safe_float(wish.get("share_probability"), 0.0) >= 0.8
+                        or bool(wish.get("boost_reason"))
+                    )
+                )
+                idle_required = max(self.idle_minutes, 90) * 60
+                if strong_self_link:
+                    idle_required = min(idle_required, max(20, self.idle_minutes) * 60)
+                idle_elapsed = now - _safe_float(user.get("last_seen"), 0)
+                if idle_elapsed < idle_required:
+                    _note_news_share(user_id, "skipped", "用户近期仍活跃，暂不主动打扰", idle_elapsed_seconds=round(idle_elapsed, 1), idle_required_seconds=round(idle_required, 1))
                     continue
                 if str(user.get("last_news_share_key") or "") == selected_key:
+                    _note_news_share(user_id, "skipped", "这条新闻已经给该用户排过主动")
                     continue
                 if now - _safe_float(user.get("last_news_share_at"), 0) < 8 * 3600:
+                    _note_news_share(user_id, "skipped", "新闻分享 8 小时冷却中")
                     continue
                 if isinstance(wish, dict) and wish:
                     if now - _safe_float(user.get("last_external_event_self_link_at"), 0) < self.external_event_self_link_cooldown_hours * 3600:
+                        _note_news_share(user_id, "skipped", "外界信息自我关联冷却中")
                         continue
                     if not wish.get("should_share"):
+                        _note_news_share(user_id, "skipped", "自我关联判断认为不适合主动分享", relevance=_safe_int(wish.get("relevance"), 0), desire=_safe_int(wish.get("desire"), 0))
                         continue
                     share_probability = max(self.news_share_probability, _safe_float(wish.get("share_probability"), 0.0))
                     share_probability *= self.external_event_self_link_probability
+                    if strong_self_link:
+                        share_probability = max(share_probability, min(0.95, _safe_float(wish.get("share_probability"), share_probability)))
                 else:
                     share_probability = self.news_share_probability
                 if random.random() > max(0.0, min(1.0, share_probability)):
+                    _note_news_share(user_id, "skipped", "分享概率未命中", probability=round(max(0.0, min(1.0, share_probability)), 3))
                     continue
                 self_link_motive = _single_line(wish.get("motive") if isinstance(wish, dict) else "", 180)
                 self_link_tone = _single_line(wish.get("tone") if isinstance(wish, dict) else "", 60)
@@ -2058,6 +2154,8 @@ class NewsExplorationMixin:
                     },
                 )
                 if accepted:
+                    accepted_any = True
+                    _note_news_share(user_id, "accepted", "已进入主动候选", probability=round(max(0.0, min(1.0, share_probability)), 3))
                     user["news_context"] = {
                         **digest,
                         "share_tone": self_link_tone,
@@ -2067,6 +2165,17 @@ class NewsExplorationMixin:
                     user["last_news_share_at"] = now
                     if isinstance(wish, dict) and wish:
                         user["last_external_event_self_link_at"] = now
+                else:
+                    _note_news_share(user_id, "blocked", "主动候选被计划队列拒绝，可能已有更早主动或主题重复")
+        if accepted_any:
+            digest["share_status"] = "accepted"
+        elif share_attempts:
+            digest["share_status"] = "skipped"
+            digest["share_skip_reason"] = share_attempts[-1].get("reason", "")
+        else:
+            digest["share_status"] = "no_target"
+            digest["share_skip_reason"] = "没有可用的目标私聊用户"
+        _sync_digest_share_status()
         self._save_data_sync()
         logger.info("[PrivateCompanion] 已完成一次新闻阅读: %s", reason)
 

@@ -1296,6 +1296,7 @@ function renderDashboardPulse() {
   const cards = [
     {
       tone: "life",
+      layout: "wide tall",
       label: "此刻状态",
       value: current.activity || "暂无当前日程",
       note: [current.time, current.mood, current.message_seed].filter(Boolean).join(" · ") || daily.note || "暂无细化",
@@ -1303,6 +1304,7 @@ function renderDashboardPulse() {
     },
     {
       tone: "proactive",
+      layout: "wide compact",
       label: "下一次主动",
       value: nextUser ? (nextUser.nickname || nextUser.user_id) : "暂无计划",
       note: nextUser ? `${nextUser.next_proactive} · ${nextUser.planned_action || "message"}` : `${proactiveCounts.accepted || 0} 个候选已进入计划`,
@@ -1310,6 +1312,7 @@ function renderDashboardPulse() {
     },
     {
       tone: "news",
+      layout: "wide tall",
       label: "今日见闻",
       value: newsTitle || explorationTitle || "暂无记录",
       note: newsTitle && explorationTitle ? `搜索：${explorationTitle}` : (news.last_read_at || exploration.last_explore_at || "新闻阅读和主动搜索会在这里留下痕迹"),
@@ -1317,6 +1320,7 @@ function renderDashboardPulse() {
     },
     {
       tone: "bookcase",
+      layout: "wide compact",
       label: "书柜与长线",
       value: creative.latest_title || "暂无新书",
       note: bookshelfNote || `${creative.active_projects || 0} 个创作进行中`,
@@ -1324,7 +1328,7 @@ function renderDashboardPulse() {
     },
   ];
   $("#dashboardPulse").innerHTML = cards.map((card) => `
-    <button type="button" class="pulse-card ${escapeHtml(card.tone)}" data-jump-tab="${escapeHtml(card.jump)}">
+    <button type="button" class="pulse-card ${escapeHtml(card.tone)} ${escapeHtml(card.layout || "")}" data-pulse-kind="${escapeHtml(card.tone)}" data-jump-tab="${escapeHtml(card.jump)}">
       <span>${escapeHtml(card.label)}</span>
       <b>${escapeHtml(card.value)}</b>
       <small>${escapeHtml(card.note)}</small>
@@ -1602,7 +1606,7 @@ function renderUxReviewPanel() {
   const aiDaily = news.ai_daily || {};
   const cache = overview.cache || {};
   const imageCache = cache.private_image_vision || {};
-  const featureKeys = Object.keys(features).filter((key) => key.startsWith("enable_"));
+  const featureKeys = Object.keys(features).filter(visibleConfigKey);
   const enabledFeatureCount = featureKeys.filter((key) => features[key]).length;
   const targetUsers = Array.isArray(settings.target_user_ids)
     ? settings.target_user_ids.filter(Boolean)
@@ -1848,7 +1852,9 @@ function renderFeatureMatrix() {
   $("#featureMatrix").innerHTML = groups.map(([label, keys]) => `
     <section>
       <h3>${escapeHtml(label)}</h3>
-      ${keys.filter(visibleConfigKey).map((key) => `<span class="feature-dot ${state.overview?.features?.[key] ? "on" : "off"}" title="${escapeHtml(key)}">${escapeHtml(key.replace(/^enable_/, ""))}</span>`).join("")}
+      <div class="feature-dot-list">
+        ${keys.filter(visibleConfigKey).map((key) => `<span class="feature-dot ${state.overview?.features?.[key] ? "on" : "off"}" title="${escapeHtml(`${featureLabel(key)}：${featureDescription(key)} (${key})`)}">${escapeHtml(featureLabel(key))}</span>`).join("")}
+      </div>
     </section>
   `).join("");
 }
@@ -2462,7 +2468,6 @@ async function renderGroupDetail(forceFetch = false) {
       return;
     }
   }
-  const episodes = (detail.group_episodes || []).map((item, index) => [`#${index + 1}`, item.summary || item.title || JSON.stringify(item)]);
   const groupName = detail.name || detail.group_name || `群 ${detail.group_id}`;
   box.innerHTML = `
     <div class="group-detail-hero">
@@ -2490,17 +2495,149 @@ async function renderGroupDetail(forceFetch = false) {
       ${miniStat("话题", detail.topic_count || (detail.topic_threads || []).length)}
     </div>
     <div class="detail-grid group-detail-grid">
-      ${detailBlock("群状态", detail.formatted?.status || "", [["常用词", formatSlangTerms(detail.slang_terms || [])]])}
-      ${detailBlock("插话反馈", detail.formatted?.feedback || "", [])}
-      <section class="detail-block wide"><h2>唤醒记录</h2>${groupWakeupPanel(detail)}</section>
-      <section class="detail-block wide"><h2>话题线</h2>${groupTopicThreadsView(detail.topic_threads || [])}</section>
-      <section class="detail-block wide"><h2>关系网</h2>${relationshipGraphView(detail.relationship_edges || {}, detail.members || {})}</section>
-      <section class="detail-block"><h2>消息活跃</h2>${messageTimelineSvg(detail.recent_messages || [])}</section>
-      ${detailBlock("群聊片段", "", episodes)}
-      ${detailBlock("关系网摘要", detail.formatted?.relationship_graph || "", [])}
+      ${groupDetailPanel("群状态", groupStateOverview(detail), { wide: true, className: "group-state-panel" })}
+      ${groupDetailPanel("常用词", groupSlangTermsView(detail.slang_terms || []), { className: "group-compact-panel" })}
+      ${groupDetailPanel("活跃群友", groupActiveMembersView(detail.members || {}), { className: "group-compact-panel" })}
+      ${groupDetailPanel("插话反馈", groupInterjectionFeedbackView(detail), { className: "group-compact-panel" })}
+      ${groupDetailPanel("消息活跃", groupMessageActivityView(detail.recent_messages || []), { wide: true, className: "group-message-panel" })}
+      ${groupDetailPanel("群聊片段", groupEpisodesView(detail.group_episodes || []), { wide: true, collapsed: true, meta: `${(detail.group_episodes || []).length || 0} 条` })}
+      ${groupDetailPanel("唤醒记录", groupWakeupPanel(detail), { wide: true, collapsed: true, meta: `${detail.wakeup_log_count || (detail.group_wakeup_logs || []).length || 0} 条` })}
+      ${groupDetailPanel("话题线", groupTopicThreadsView(detail.topic_threads || []), { wide: true, collapsed: true, meta: `${(detail.topic_threads || []).length || 0} 条` })}
+      ${groupDetailPanel("关系网", relationshipGraphView(detail.relationship_edges || {}, detail.members || {}), { wide: true, collapsed: true, meta: `${Object.keys(detail.relationship_edges || {}).length} 条关系` })}
     </div>
   `;
   bindGroupActions(detail);
+}
+
+function groupDetailPanel(title, content, options = {}) {
+  const className = ["detail-block", options.wide ? "wide" : "", options.className || "", options.collapsed ? "group-collapsible" : ""]
+    .filter(Boolean)
+    .join(" ");
+  if (options.collapsed) {
+    return `
+      <details class="${escapeHtml(className)}">
+        <summary><h2>${escapeHtml(title)}</h2>${options.meta ? `<span>${escapeHtml(options.meta)}</span>` : ""}</summary>
+        <div class="detail-block-body">${content}</div>
+      </details>
+    `;
+  }
+  return `<section class="${escapeHtml(className)}"><h2>${escapeHtml(title)}</h2>${content}</section>`;
+}
+
+function groupStateOverview(detail) {
+  const atmosphere = detail.atmosphere || {};
+  const chips = [
+    ["群陪伴", detail.enabled ? "开启" : "停用", detail.enabled ? "ok" : "warn"],
+    ["名单", detail.allowed_by_mode ? "允许" : "拦截", detail.allowed_by_mode ? "ok" : "warn"],
+    ["气氛", atmosphere.mood || "暂无", ""],
+    ["节奏", atmosphere.heat || atmosphere.pace || "暂无", ""],
+    ["最近", detail.last_seen || "暂无", ""],
+  ];
+  const summary = atmosphere.last_summary || "这个群还没有形成稳定的氛围摘要。";
+  return `
+    <div class="group-state-overview">
+      <div class="group-state-chips">
+        ${chips.map(([label, value, tone]) => `<span class="${escapeHtml(tone || "")}"><small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b></span>`).join("")}
+      </div>
+      <p>${escapeHtml(summary)}</p>
+      <div class="group-state-metrics">
+        ${groupMetricTile("累计消息", detail.message_count || 0)}
+        ${groupMetricTile("群友", detail.member_count || Object.keys(detail.members || {}).length)}
+        ${groupMetricTile("已识别", detail.recognized_member_count || 0)}
+        ${groupMetricTile("话题线", detail.topic_count || (detail.topic_threads || []).length)}
+        ${groupMetricTile("黑话", detail.slang_count || (detail.slang_terms || []).length)}
+      </div>
+    </div>
+  `;
+}
+
+function groupMetricTile(label, value) {
+  return `<article><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></article>`;
+}
+
+function groupSlangTermsView(items) {
+  const terms = (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      text: slangTermText(item),
+      count: Number(item?.count || 0),
+    }))
+    .filter((item) => item.text)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 18);
+  if (!terms.length) return `<div class="empty small">暂无常用词</div>`;
+  const max = Math.max(1, ...terms.map((item) => item.count));
+  return `
+    <div class="group-chip-cloud">
+      ${terms.map((item) => `<span style="--weight:${Math.max(0.72, Math.min(1.12, 0.72 + item.count / max * 0.4)).toFixed(2)}">${escapeHtml(item.text)}${item.count ? `<small>${escapeHtml(item.count)}</small>` : ""}</span>`).join("")}
+    </div>
+  `;
+}
+
+function groupActiveMembersView(members) {
+  const items = Object.entries(members || {})
+    .map(([id, raw]) => {
+      const item = raw && typeof raw === "object" ? raw : {};
+      return {
+        id,
+        name: item.identity_name || item.display_name || item.nickname || item.name || item.card || id,
+        count: Number(item.count || item.message_count || 0),
+        known: Boolean(item.identity_known),
+        phrase: Array.isArray(item.recent_phrases) ? item.recent_phrases[0] : "",
+      };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+  if (!items.length) return `<div class="empty small">暂无活跃群友</div>`;
+  return `
+    <div class="group-member-list">
+      ${items.map((item) => `
+        <article>
+          <div class="relation-avatar">${escapeHtml(shortName(item.name, 2))}</div>
+          <div>
+            <b>${escapeHtml(item.name)}</b>
+            <small>${escapeHtml(item.known ? "已识别" : item.id)}${item.phrase ? ` · ${escapeHtml(item.phrase)}` : ""}</small>
+          </div>
+          <span>${escapeHtml(item.count)}</span>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function groupInterjectionFeedbackView(detail) {
+  const feedback = detail.interjection_feedback || {};
+  const last = detail.last_bot_interjection || {};
+  const replies = Number(feedback.replies_after || 0);
+  const positive = Number(feedback.positive || 0);
+  const negative = Number(feedback.negative || 0);
+  const total = Math.max(1, positive + negative);
+  return `
+    <div class="group-feedback-panel">
+      <div class="group-feedback-score">
+        <article><span>后续回复</span><b>${escapeHtml(replies)}</b></article>
+        <article><span>正向</span><b>${escapeHtml(positive)}</b></article>
+        <article><span>负向</span><b>${escapeHtml(negative)}</b></article>
+      </div>
+      <div class="group-feedback-meter" title="正向 / 负向">
+        <i style="width:${Math.round((positive / total) * 100)}%"></i>
+      </div>
+      ${last.text ? `<p><span>上次插话</span>${escapeHtml(last.text)}</p>` : `<p class="muted">暂无最近插话内容</p>`}
+    </div>
+  `;
+}
+
+function groupEpisodesView(episodes) {
+  const items = (Array.isArray(episodes) ? episodes : []).slice(0, 5);
+  if (!items.length) return `<div class="empty small">暂无群聊片段</div>`;
+  return `
+    <div class="group-episode-list">
+      ${items.map((item, index) => {
+        const title = item.title || `片段 ${index + 1}`;
+        const summary = item.summary || item.content || JSON.stringify(item);
+        return `<article><b>${escapeHtml(title)}</b><p>${escapeHtml(summary)}</p></article>`;
+      }).join("")}
+    </div>
+  `;
 }
 
 function groupWakeupPanel(detail) {
@@ -4575,13 +4712,14 @@ const roleplayLabelAliases = {
 function roleplayMode() {
   if (roleplayModeState === "standard" || roleplayModeState === "freeform") return roleplayModeState;
   const studioMode = document.querySelector(".roleplay-studio")?.dataset.roleplayMode;
-  let stored = studioMode === "standard" ? "standard" : "";
+  if (studioMode === "standard" || studioMode === "freeform") return studioMode;
+  let stored = "";
   try {
-    stored = window.localStorage?.getItem(ROLEPLAY_MODE_STORAGE_KEY) || stored || "freeform";
+    stored = window.localStorage?.getItem(ROLEPLAY_MODE_STORAGE_KEY) || "";
   } catch (error) {
-    stored = stored || "freeform";
+    stored = "";
   }
-  return stored === "standard" ? "standard" : "freeform";
+  return stored === "freeform" ? "freeform" : "standard";
 }
 
 function setRoleplayMode(mode) {
@@ -6752,6 +6890,96 @@ function relationEdgeRow(edge, memberMap, maxWeight) {
       ${edge.summary ? `<p>${escapeHtml(edge.summary)}</p>` : ""}
     </article>
   `;
+}
+
+function groupMessageActivityView(messages) {
+  const recent = (Array.isArray(messages) ? messages : [])
+    .map(normalizeGroupMessage)
+    .filter((item) => item.text || item.sender || item.timestamp)
+    .slice(-24);
+  if (!recent.length) return `<div class="empty small">暂无最近消息</div>`;
+  const now = Math.floor(Date.now() / 1000);
+  const buckets = Array.from({ length: 6 }, (_, index) => ({
+    label: index === 5 ? "现在" : `-${(5 - index) * 2}h`,
+    count: 0,
+  }));
+  recent.forEach((item) => {
+    if (!item.timestamp) {
+      buckets[5].count += 1;
+      return;
+    }
+    const diffHours = Math.max(0, Math.floor((now - item.timestamp) / 3600));
+    const index = Math.max(0, Math.min(5, 5 - Math.floor(diffHours / 2)));
+    buckets[index].count += 1;
+  });
+  const max = Math.max(1, ...buckets.map((item) => item.count));
+  const uniqueSpeakers = new Set(recent.map((item) => item.sender || item.senderId).filter(Boolean)).size;
+  const latest = recent[recent.length - 1] || {};
+  const displayRows = recent.slice(-8).reverse();
+  return `
+    <div class="group-message-activity">
+      <div class="group-message-summary">
+        <article><span>最近消息</span><b>${escapeHtml(recent.length)}</b></article>
+        <article><span>说话人数</span><b>${escapeHtml(uniqueSpeakers || "-")}</b></article>
+        <article><span>最后活跃</span><b>${escapeHtml(latest.displayTime || "刚刚")}</b></article>
+      </div>
+      <div class="group-activity-bars">
+        ${buckets.map((item) => `
+          <span title="${escapeHtml(`${item.label}：${item.count} 条`)}">
+            <i style="height:${Math.max(8, Math.round((item.count / max) * 100))}%"></i>
+            <small>${escapeHtml(item.label)}</small>
+          </span>
+        `).join("")}
+      </div>
+      <div class="group-message-list">
+        ${displayRows.map((item) => `
+          <article>
+            <div>
+              <b>${escapeHtml(item.sender || "群友")}</b>
+              <time>${escapeHtml(item.displayTime || "")}</time>
+            </div>
+            <p>${escapeHtml(item.text || "[非文本消息]")}</p>
+          </article>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function normalizeGroupMessage(item) {
+  const raw = item && typeof item === "object" ? item : {};
+  const sender = raw.sender_name || raw.nickname || raw.card || raw.name || raw.user_name || raw.sender_id || raw.user_id || "";
+  const senderId = raw.sender_id || raw.user_id || raw.qq || "";
+  const text = raw.text || raw.message || raw.content || raw.raw_message || raw.summary || "";
+  const timestamp = parseMessageTimestamp(raw.ts ?? raw.timestamp ?? raw.time ?? raw.datetime ?? raw.created_at);
+  return {
+    sender: String(sender || "").trim(),
+    senderId: String(senderId || "").trim(),
+    text: String(text || "").trim(),
+    timestamp,
+    displayTime: formatMessageTime(timestamp, raw.time || raw.created_at || raw.datetime || ""),
+  };
+}
+
+function parseMessageTimestamp(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number" && Number.isFinite(value)) return value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
+  const text = String(value).trim();
+  if (/^\d+$/.test(text)) {
+    const num = Number(text);
+    return num > 1e12 ? Math.floor(num / 1000) : Math.floor(num);
+  }
+  const parsed = Date.parse(text);
+  if (Number.isFinite(parsed)) return Math.floor(parsed / 1000);
+  const fallback = Date.parse(text.replace(/-/g, "/"));
+  return Number.isFinite(fallback) ? Math.floor(fallback / 1000) : 0;
+}
+
+function formatMessageTime(timestamp, fallback = "") {
+  if (!timestamp) return String(fallback || "").trim();
+  const date = new Date(timestamp * 1000);
+  if (Number.isNaN(date.getTime())) return String(fallback || "").trim();
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
 function messageTimelineSvg(messages) {

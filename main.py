@@ -99,7 +99,16 @@ from .dreaming import (
     recent_diary_tags,
     weighted_unique_fragment_sample,
 )
-from .helpers import _date_key, _now_ts, _safe_float, _safe_int, _single_line, _strip_internal_message_blocks, _today_key
+from .helpers import (
+    _date_key,
+    _now_ts,
+    _safe_float,
+    _safe_int,
+    _single_line,
+    _strip_internal_message_blocks,
+    _strip_outbound_control_blocks,
+    _today_key,
+)
 from .forward_message import ForwardMessageMixin
 from .private_image import PrivateImageMixin
 from .qzone_integration import QzoneMixin
@@ -288,7 +297,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.3.0",
+    "3.3.1",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -885,6 +894,32 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             return
         self._stop_passive_input_status_loop(event)
 
+    @filter.on_decorating_result()
+    async def strip_outbound_control_blocks_before_send(self, event: AstrMessageEvent):
+        """发送前兜底清理内部控制块，避免 timer/TTSBLOCK 泄漏到聊天。"""
+        if not self.enabled:
+            return
+        result = event.get_result()
+        chain = list(getattr(result, "chain", []) or []) if result is not None else []
+        if not chain:
+            return
+        changed = False
+        for comp in chain:
+            if not isinstance(comp, Plain):
+                continue
+            original = str(getattr(comp, "text", "") or "")
+            cleaned = _strip_outbound_control_blocks(original)
+            if cleaned != original:
+                changed = True
+                try:
+                    comp.text = cleaned
+                except Exception:
+                    pass
+        if changed:
+            logger.warning(
+                "[PrivateCompanion] 发送前已清理内部控制标签: session=%s",
+                _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
+            )
 
     @filter.on_decorating_result()
     async def strip_group_internal_identity_anchors(self, event: AstrMessageEvent):
@@ -1581,9 +1616,10 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         working_text = original_text
         if self.enable_llm_timer_scheduling and "<timer" in original_text.lower():
             cleaned_text, payloads = self._extract_timer_directives(original_text)
-            if payloads:
-                working_text = cleaned_text or original_text
+            if cleaned_text != original_text:
+                working_text = cleaned_text
                 resp.completion_text = working_text
+            if payloads:
                 await self._schedule_llm_timer(
                     user_id,
                     payloads[-1],

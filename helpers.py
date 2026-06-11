@@ -47,6 +47,15 @@ def _single_line(text: Any, limit: int = 80) -> str:
 def _strip_internal_message_blocks(text: Any) -> str:
     normalized = str(text or "")
     normalized = re.sub(r"\[\[TTSBLOCK:[^\]]*\]\]", "", normalized)
+    normalized = re.sub(r"<timer\b[^>]*>.*?</timer>", "", normalized, flags=re.IGNORECASE | re.DOTALL)
     normalized = re.sub(r"<tts\b[^>]*>.*?</tts>", "", normalized, flags=re.IGNORECASE | re.DOTALL)
     normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _strip_outbound_control_blocks(text: Any) -> str:
+    normalized = str(text or "")
+    normalized = re.sub(r"\[\[TTSBLOCK:[^\]]*\]\]", "", normalized)
+    normalized = re.sub(r"<timer\b[^>]*>.*?</timer>", "", normalized, flags=re.IGNORECASE | re.DOTALL)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
     return normalized

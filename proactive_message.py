@@ -1250,7 +1250,7 @@ class ProactiveMessageMixin:
                     umo,
                     len(captured_tool_sends),
                 )
-            return cleaned_text or raw_text
+            return cleaned_text
         except Exception as exc:
             logger.warning("[PrivateCompanion] 框架式主动生成失败: %s", exc)
             return ""
