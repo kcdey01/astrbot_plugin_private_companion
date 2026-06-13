@@ -320,6 +320,7 @@ class CoreStoreMixin:
             "worldbook_member_profiles": {},
             "worldbook_group_profiles": {},
             "worldbook_import_state": {},
+            "runtime_settings": {},
             "inbound_debounce_stats": {},
             "cache_metrics": {},
         }
@@ -365,6 +366,7 @@ class CoreStoreMixin:
         data.setdefault("worldbook_deleted_member_ids", [])
         data.setdefault("worldbook_deleted_group_ids", [])
         data.setdefault("worldbook_import_state", {})
+        data.setdefault("runtime_settings", {})
         data.setdefault("atrelay_send_log", [])
         data.setdefault("inbound_debounce_stats", {})
         data.setdefault("cache_metrics", {})

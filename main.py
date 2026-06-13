@@ -299,7 +299,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.5.0",
+    "3.5.1",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -340,6 +340,22 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.min_interval_minutes = self._cfg_int(c, "min_interval_minutes", 120, 10)
         self.max_daily_messages = self._cfg_int(c, "max_daily_messages", 8, 0, 12)
         self.inbound_message_debounce_seconds = self._cfg_float(c, "inbound_message_debounce_seconds", 3.0, 0.0)
+        self.enable_recall_enhancement = self._cfg_bool(c, "enable_recall_enhancement", True)
+        self.enable_recall_cancel_reply = self._cfg_bool(c, "enable_recall_cancel_reply", self.enable_recall_enhancement)
+        self.enable_recall_message_cache = self._cfg_bool(c, "enable_recall_message_cache", True)
+        self.enable_recall_transcribe_command = self._cfg_bool(c, "enable_recall_transcribe_command", True)
+        self.recall_message_cache_ttl_seconds = self._cfg_float(c, "recall_message_cache_ttl_seconds", 600.0, 60.0)
+        self.recall_message_cache_max_items = self._cfg_int(c, "recall_message_cache_max_items", 300, 0, 3000)
+        self.recall_message_cache_text_chars = self._cfg_int(c, "recall_message_cache_text_chars", 500, 80, 2000)
+        self.recall_cancel_reply_ttl_seconds = self.recall_message_cache_ttl_seconds
+        self.enable_forbidden_word_recall = self._cfg_bool(c, "enable_forbidden_word_recall", False)
+        self.recall_forbidden_words = self._parse_text_list_config(c.get("recall_forbidden_words", []), limit=300)
+        self.recall_forbidden_word_case_sensitive = self._cfg_bool(c, "recall_forbidden_word_case_sensitive", False)
+        self.recall_forbidden_scope = self._cfg_str(c, "recall_forbidden_scope", "bot_and_group", "bot_and_group").lower()
+        if self.recall_forbidden_scope not in {"bot_only", "group_only", "bot_and_group"}:
+            self.recall_forbidden_scope = "bot_and_group"
+        self._recalled_message_ids: dict[str, dict[str, Any]] = {}
+        self._recall_message_cache: dict[str, dict[str, Any]] = {}
         self.enable_message_debounce = self._cfg_bool(
             c,
             "enable_message_debounce",
@@ -840,7 +856,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self._framework_captured_send_cache: dict[str, list[Any]] = {}
         self._last_input_status_at: dict[str, float] = {}
         self._passive_input_status_tasks: dict[str, asyncio.Task] = {}
+        self._recent_inbound_activity_by_scope: dict[str, dict[str, Any]] = {}
         self.data = self._load_data_sync()
+        self._apply_tts_runtime_overrides()
         if self._merge_private_user_alias_records():
             self._save_data_sync()
         if self._cleanup_all_group_slang_terms():
@@ -897,6 +915,75 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         if _private_companion_plugin is self:
             _private_companion_plugin = None
 
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=10000)
+    async def observe_recall_enhancement_events(self, event: AstrMessageEvent):
+        """记录普通消息和 QQ/OneBot 撤回事件，用于撤回增强。"""
+        if not self.enabled:
+            return
+        self._note_inbound_activity_for_scope(event)
+        if not self.enable_recall_enhancement:
+            return
+        raw = self._event_raw_payload(event)
+        if raw.get("post_type") == "notice":
+            notice_type = str(raw.get("notice_type") or "").strip()
+            if notice_type not in {"friend_recall", "group_recall"}:
+                return
+            message_id = _single_line(raw.get("message_id") or raw.get("msg_id"), 120)
+            if not message_id:
+                return
+            scope = _single_line(
+                (f"group:{raw.get('group_id')}" if raw.get("group_id") else "")
+                or (f"private:{raw.get('user_id')}" if raw.get("user_id") else "")
+                or getattr(event, "unified_msg_origin", ""),
+                160,
+            )
+            self._record_recalled_message_id(message_id, scope=scope, notice_type=notice_type)
+            if notice_type == "friend_recall":
+                recall_user_id = _single_line(raw.get("user_id"), 80)
+                if recall_user_id:
+                    self._stop_passive_input_status_loop(recall_user_id)
+                    logger.info(
+                        "[PrivateCompanion] 用户撤回消息，已停止私聊输入状态: user=%s message_id=%s",
+                        recall_user_id,
+                        message_id,
+                    )
+            logger.info(
+                "[PrivateCompanion] 已记录消息撤回: notice=%s scope=%s message_id=%s",
+                notice_type,
+                scope or "-",
+                message_id,
+            )
+            return
+
+        self._cache_message_for_recall(event)
+        if not self.enable_forbidden_word_recall or not self._forbidden_recall_words():
+            return
+        message_id = self._event_message_id(event)
+        if not message_id:
+            return
+        is_group = bool(self._extract_group_id_from_event(event))
+        is_self = self._event_sender_id(event) and self._event_sender_id(event) == self._event_self_id(event)
+        scope = self.recall_forbidden_scope
+        if scope == "bot_only" and not is_self:
+            return
+        if scope == "group_only" and not is_group:
+            return
+        if scope == "bot_and_group" and not (is_self or is_group):
+            return
+        text = self._event_text_for_recall_cache(event, limit=2000)
+        hit = self._forbidden_recall_hit(text)
+        if not hit:
+            return
+        ok = await self._try_delete_message(event, message_id, reason=f"forbidden:{hit}")
+        logger.info(
+            "[PrivateCompanion] 违禁词撤回检查命中: scope=%s self=%s group=%s ok=%s word=%s message_id=%s",
+            scope,
+            is_self,
+            is_group,
+            ok,
+            _single_line(hit, 40),
+            message_id,
+        )
 
     @filter.on_decorating_result()
     async def stop_passive_input_status_before_private_send(self, event: AstrMessageEvent):
@@ -933,6 +1020,89 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 "[PrivateCompanion] 发送前已清理内部控制标签: session=%s",
                 _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
             )
+
+    @filter.on_decorating_result()
+    async def cancel_reply_if_trigger_recalled_before_send(self, event: AstrMessageEvent):
+        """若触发/唤醒消息在回复发出前被撤回，则静默取消本次回复。"""
+        if not self.enabled:
+            return
+        recalled_message_id = await self._should_cancel_reply_for_missing_or_recalled_trigger(event)
+        if not recalled_message_id:
+            return
+        logger.info(
+            "[PrivateCompanion] 触发消息已撤回或发送前不可见，取消本次发送: session=%s message_id=%s",
+            _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
+            recalled_message_id,
+        )
+        empty_result = self._build_result_from_chain([])
+        try:
+            empty_result.stop_event()
+        except Exception:
+            pass
+        event.set_result(empty_result)
+        event.stop_event()
+
+    @filter.on_decorating_result()
+    async def suppress_forbidden_outbound_before_send(self, event: AstrMessageEvent):
+        """自己的待发送消息命中违禁词时，优先在发送前拦截。"""
+        if not self.enabled:
+            return
+        if not self.enable_recall_enhancement or not self.enable_forbidden_word_recall:
+            return
+        if not self._forbidden_recall_words():
+            return
+        result = event.get_result()
+        chain = list(getattr(result, "chain", []) or []) if result is not None else []
+        if not chain:
+            return
+        text = self._chain_text_for_forbidden_recall(chain)
+        hit = self._forbidden_recall_hit(text)
+        if not hit:
+            return
+        logger.warning(
+            "[PrivateCompanion] 待发送消息命中违禁词，已拦截发送: word=%s session=%s",
+            _single_line(hit, 40),
+            _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
+        )
+        empty_result = self._build_result_from_chain([])
+        try:
+            empty_result.stop_event()
+        except Exception:
+            pass
+        event.set_result(empty_result)
+        event.stop_event()
+
+    @filter.on_decorating_result()
+    async def suppress_framework_error_leak_before_send(self, event: AstrMessageEvent):
+        """避免 AstrBot/Core 的技术错误兜底文本直接发进聊天。"""
+        if not self.enabled:
+            return
+        result = event.get_result()
+        chain = list(getattr(result, "chain", []) or []) if result is not None else []
+        if not chain or any(not isinstance(comp, Plain) for comp in chain):
+            return
+        text = "\n".join(str(getattr(comp, "text", "") or "") for comp in chain).strip()
+        compact = text.lower()
+        error_markers = (
+            "error occurred while processing agent request",
+            "sqlite3.operationalerror",
+            "database is locked",
+            "sqlalche.me/e/20/e3q8",
+        )
+        if not any(marker in compact for marker in error_markers):
+            return
+        logger.warning(
+            "[PrivateCompanion] 已拦截框架错误文本外发: session=%s preview=%s",
+            _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
+            _single_line(text, 180),
+        )
+        empty_result = self._build_result_from_chain([])
+        try:
+            empty_result.stop_event()
+        except Exception:
+            pass
+        event.set_result(empty_result)
+        event.stop_event()
 
     @filter.on_decorating_result()
     async def apply_tts_enhancement_before_send_hook(self, event: AstrMessageEvent):
@@ -1049,6 +1219,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         prev = previous_segment
         total = len([item for item in segments if str(item or "").strip()])
         sent_index = 0
+        scope = self._event_scope_key(event)
+        started_at = _now_ts()
         for segment in segments:
             segment = str(segment or "").strip()
             if not segment:
@@ -1059,6 +1231,25 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 delay = await self._calc_segmented_proactive_interval(wait_for)
                 if delay > 0:
                     await asyncio.sleep(delay)
+                if self._scope_has_new_inbound_activity(scope, started_at, ignore_self=True):
+                    logger.info(
+                        "[PrivateCompanion] 会话已有新消息，停止发送分段剩余片段: source=%s scope=%s sent=%s/%s",
+                        source or "unknown",
+                        scope or "unknown",
+                        max(0, sent_index - 1),
+                        total,
+                    )
+                    return
+                recalled_message_id = await self._should_cancel_reply_for_missing_or_recalled_trigger(event)
+                if recalled_message_id:
+                    logger.info(
+                        "[PrivateCompanion] 触发消息已撤回或发送前不可见，停止发送分段剩余片段: source=%s message_id=%s sent=%s/%s",
+                        source or "unknown",
+                        recalled_message_id,
+                        max(0, sent_index - 1),
+                        total,
+                    )
+                    return
                 sent_tts_chain = False
                 normalized_segment = segment
                 normalizer = getattr(self, "_normalize_tts_tags", None)
@@ -1071,18 +1262,27 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     bool(getattr(self, "enable_tts_enhancement", False))
                     and re.search(r"<tts\b[^>]*>.*?</tts>", normalized_segment, flags=re.IGNORECASE | re.DOTALL)
                 ):
-                    processor = getattr(self, "_process_tts_tags", None)
-                    if callable(processor):
-                        fallback_plain = re.sub(r"</?t{2,}s\b[^>]*>", "", normalized_segment, flags=re.IGNORECASE).strip()
-                        chain = await processor(normalized_segment, event, fallback_plain=fallback_plain)
-                        if chain:
-                            try:
-                                await event.send(event.chain_result(chain))
-                            except Exception:
-                                await event.send(self._build_result_from_chain(chain))
-                            sent_tts_chain = True
+                        processor = getattr(self, "_process_tts_tags", None)
+                        if callable(processor):
+                            fallback_plain = re.sub(r"</?t{2,}s\b[^>]*>", "", normalized_segment, flags=re.IGNORECASE).strip()
+                            chain = await processor(normalized_segment, event, fallback_plain=fallback_plain)
+                            if chain:
+                                hit = self._forbidden_recall_hit(self._chain_text_for_forbidden_recall(chain))
+                                if hit:
+                                    logger.warning("[PrivateCompanion] 分段 TTS 剩余片段命中违禁词，停止发送: word=%s", _single_line(hit, 40))
+                                    return
+                                try:
+                                    await event.send(event.chain_result(chain))
+                                except Exception:
+                                    await event.send(self._build_result_from_chain(chain))
+                                sent_tts_chain = True
                 if not sent_tts_chain:
-                    await event.send(event.plain_result(re.sub(r"</?t{2,}s\b[^>]*>", "", normalized_segment, flags=re.IGNORECASE).strip() or segment))
+                    outbound = re.sub(r"</?t{2,}s\b[^>]*>", "", normalized_segment, flags=re.IGNORECASE).strip() or segment
+                    hit = self._forbidden_recall_hit(outbound)
+                    if hit:
+                        logger.warning("[PrivateCompanion] 分段剩余片段命中违禁词，停止发送: word=%s", _single_line(hit, 40))
+                        return
+                    await event.send(event.plain_result(outbound))
                 logger.info(
                     "[PrivateCompanion] 分段 LLM 剩余片段已发送: source=%s index=%s/%s preview=%s",
                     source or "unknown",
@@ -1376,9 +1576,22 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                             except Exception:
                                 state = self.data.get("daily_state", {})
                             wakeup_state_text = "\n\n" + self._format_group_wakeup_humanized_prompt(wakeup_effect, state)
+                        if self._user_asks_recalled_messages(text_for_mark):
+                            recall_context = self._format_recalled_messages_for_natural_query(event, limit=5)
+                            if recall_context:
+                                extra = f"{extra}\n\n{recall_context}" if extra else f"\n\n{recall_context}"
                         req.system_prompt = (
                             f"{current_prompt}\n\n{marker}\n{self._format_group_context_for_prompt(group, sender_id, str(event.message_str or ''))}{wakeup_state_text}{extra}"
                         ).strip()
+            group_recall_text = _single_line(
+                getattr(event, "private_companion_group_text", "") or getattr(event, "message_str", ""),
+                260,
+            )
+            recall_marker = "<!-- private_companion_recall_query_v1 -->"
+            if self._user_asks_recalled_messages(group_recall_text) and recall_marker not in (req.system_prompt or ""):
+                recall_context = self._format_recalled_messages_for_natural_query(event, limit=5)
+                if recall_context:
+                    req.system_prompt = f"{req.system_prompt or ''}\n\n{recall_marker}\n{recall_context}".strip()
             await self._append_conditional_tool_instructions_to_request(event, req)
             await self._append_environment_perception_to_request(event, req)
             return
@@ -1468,6 +1681,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 f"{combined_text}"
             )
             inbound_text = _single_line(combined_text.replace("\n", " "), 260)
+        if self._user_asks_recalled_messages(inbound_text):
+            injection_parts.append(self._format_recalled_messages_for_natural_query(event, limit=5))
         if buffered_images:
             direct_image_mounted = False
             if buffered_image_mode == "direct" and self._event_main_provider_supports_image(event) and not buffered_images_include_gif:
@@ -1890,6 +2105,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
             "测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布",
             "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
+            "TTS语种", "tts语种", "语音语种", "TTS", "tts",
         }
 
         is_private = bool(getattr(event, "is_private_chat", lambda: False)())
@@ -1909,6 +2125,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
             "测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布",
             "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
+            "TTS语种", "tts语种", "语音语种", "TTS", "tts",
+            "撤回消息", "防撤回", "转述撤回", "撤回转述",
             "日期添加", "添加日期", "重要日期添加",
             "日期删除", "删除日期", "重要日期删除",
             "清空记忆", "忘记我",
@@ -1954,6 +2172,18 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         f"关系：{self._format_relationship_summary(user)}",
                     ]
                 )
+            elif action in {"撤回消息", "防撤回", "转述撤回", "撤回转述"}:
+                if not self.enable_recall_enhancement or not self.enable_recall_transcribe_command:
+                    response = "撤回消息转述没有开启。"
+                else:
+                    response = self._format_recalled_messages_for_event(event, limit=5)
+            elif action in {"TTS语种", "tts语种", "语音语种", "TTS", "tts"}:
+                tts_value = value
+                if action in {"TTS", "tts"}:
+                    tts_parts = value.split(maxsplit=1)
+                    if tts_parts and tts_parts[0].strip().lower() in {"语种", "语言", "language", "lang"}:
+                        tts_value = tts_parts[1].strip() if len(tts_parts) >= 2 else ""
+                response = self._set_tts_voice_language_from_command(tts_value)
             elif action in {"查看主动判定", "主动判定", "判定"}:
                 response = self._explain_proactive_decision(user)
             elif action in {"能力列表", "主动能力", "工具列表"}:

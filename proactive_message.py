@@ -3379,8 +3379,24 @@ class ProactiveMessageMixin:
         return cleaned
 
     async def _send_chain_components(self, umo: str, chain: list[Any]) -> None:
+        hit = self._forbidden_recall_hit(self._chain_text_for_forbidden_recall(chain))
+        if hit:
+            logger.warning(
+                "[PrivateCompanion] 主动待发送消息命中违禁词，已拦截发送: umo=%s word=%s",
+                umo,
+                _single_line(hit, 40),
+            )
+            return
         processed_chain = await self._trigger_proactive_decorating_hooks(umo, chain)
         if not processed_chain:
+            return
+        hit = self._forbidden_recall_hit(self._chain_text_for_forbidden_recall(processed_chain))
+        if hit:
+            logger.warning(
+                "[PrivateCompanion] 主动装饰后消息命中违禁词，已拦截发送: umo=%s word=%s",
+                umo,
+                _single_line(hit, 40),
+            )
             return
         session = self._parse_message_session(umo)
         platform = self._get_platform_for_session(session) if session else None
@@ -3410,6 +3426,7 @@ class ProactiveMessageMixin:
         extra_components: list[Any] | None = None,
         quote_message_id: str = "",
     ) -> None:
+        trigger_message_id = _single_line(quote_message_id, 120)
         if self._contains_inline_image_tag(text):
             image_path = ""
             extra_components = []
@@ -3423,10 +3440,18 @@ class ProactiveMessageMixin:
         if len(segments) <= 1:
             outbound_text = segments[0] if segments else ""
             if outbound_text:
+                recalled_message_id = self._should_cancel_reply_for_recalled_message_ids(trigger_message_id)
+                if recalled_message_id:
+                    logger.info("[PrivateCompanion] 触发消息已撤回，取消主动文本发送: umo=%s message_id=%s", umo, recalled_message_id)
+                    return
                 await self._send_chain_components(umo, self._with_optional_reply([Plain(outbound_text)], quote_message_id))
                 quote_message_id = ""
         else:
             for index, segment in enumerate(segments):
+                recalled_message_id = self._should_cancel_reply_for_recalled_message_ids(trigger_message_id)
+                if recalled_message_id:
+                    logger.info("[PrivateCompanion] 触发消息已撤回，停止主动分段发送: umo=%s message_id=%s index=%s", umo, recalled_message_id, index + 1)
+                    return
                 chain = self._with_optional_reply([Plain(segment)], quote_message_id) if index == 0 else [Plain(segment)]
                 await self._send_chain_components(umo, chain)
                 quote_message_id = ""
@@ -3434,6 +3459,10 @@ class ProactiveMessageMixin:
                     await asyncio.sleep(await self._calc_segmented_proactive_interval(segment))
         has_media = bool((extra_components or []) or (image_path and os.path.exists(image_path)))
         if has_media:
+            recalled_message_id = self._should_cancel_reply_for_recalled_message_ids(trigger_message_id)
+            if recalled_message_id:
+                logger.info("[PrivateCompanion] 触发消息已撤回，取消主动媒体发送: umo=%s message_id=%s", umo, recalled_message_id)
+                return
             media_chain = self._build_outbound_chain("", image_path, extra_components=extra_components)
             media_chain = self._with_optional_reply(media_chain, quote_message_id)
             await self._send_chain_components(umo, media_chain)
@@ -3447,6 +3476,7 @@ class ProactiveMessageMixin:
         extra_components: list[Any] | None = None,
         quote_message_id: str = "",
     ) -> None:
+        trigger_message_id = _single_line(quote_message_id, 120)
         if image_path or extra_components:
             await self._send_media_proactive_chain(
                 umo,
@@ -3465,6 +3495,10 @@ class ProactiveMessageMixin:
         )
         if len(segments) <= 1:
             outbound_text = segments[0] if segments else text
+            recalled_message_id = self._should_cancel_reply_for_recalled_message_ids(trigger_message_id)
+            if recalled_message_id:
+                logger.info("[PrivateCompanion] 触发消息已撤回，取消主动消息发送: umo=%s message_id=%s", umo, recalled_message_id)
+                return
             await self._send_chain_components(
                 umo,
                 self._with_optional_reply(
@@ -3474,6 +3508,10 @@ class ProactiveMessageMixin:
             )
             return
         for index, segment in enumerate(segments):
+            recalled_message_id = self._should_cancel_reply_for_recalled_message_ids(trigger_message_id)
+            if recalled_message_id:
+                logger.info("[PrivateCompanion] 触发消息已撤回，停止主动消息分段发送: umo=%s message_id=%s index=%s", umo, recalled_message_id, index + 1)
+                return
             chain = self._with_optional_reply([Plain(segment)], quote_message_id) if index == 0 else [Plain(segment)]
             await self._send_chain_components(umo, chain)
             quote_message_id = ""

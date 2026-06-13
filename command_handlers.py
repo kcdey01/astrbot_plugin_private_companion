@@ -27,7 +27,7 @@ class CommandHandlersMixin:
         parts = message.split(maxsplit=2)
         if len(parts) >= 2:
             action = parts[1].strip()
-        if action in {"开启", "启用", "打开", "关闭", "停用", "关掉"} and not self._can_manage_group_companion(event):
+        if action in {"开启", "启用", "打开", "关闭", "停用", "关掉", "撤回消息", "防撤回", "转述撤回", "撤回转述"} and not self._can_manage_group_companion(event):
             yield event.plain_result(self._management_denied_text())
             return
         async with self._data_lock:
@@ -86,6 +86,11 @@ class CommandHandlersMixin:
                 response = "群聊插话反馈：" + self._format_group_interjection_feedback(group)
             elif action in {"关系网", "关系网络", "互动关系"}:
                 response = "群友互动关系：\n" + (self._format_group_relationship_graph_for_prompt(group) or "暂无。")
+            elif action in {"撤回消息", "防撤回", "转述撤回", "撤回转述"}:
+                if not self.enable_recall_enhancement or not self.enable_recall_transcribe_command:
+                    response = "撤回消息转述没有开启。"
+                else:
+                    response = self._format_recalled_messages_for_event(event, limit=5)
             elif action in {"状态", "气氛", ""}:
                 response = self._format_group_status(group)
             else:
@@ -98,6 +103,7 @@ class CommandHandlersMixin:
                     "陪伴群 片段\n"
                     "陪伴群 插话反馈\n"
                     "陪伴群 关系网\n"
+                    "陪伴群 撤回消息\n"
                     "陪伴群 开启\n"
                     "陪伴群 关闭"
                 )

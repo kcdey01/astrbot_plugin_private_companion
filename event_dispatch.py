@@ -239,13 +239,487 @@ _PLATFORM_DISPLAY_NAMES = {
 class EventDispatchMixin:
     """事件分发"""
 
+    def _event_raw_payload(self, event: AstrMessageEvent) -> dict[str, Any]:
+        message_obj = getattr(event, "message_obj", None)
+        raw = getattr(message_obj, "raw_message", None) if message_obj is not None else None
+        return raw if isinstance(raw, dict) else {}
+
     def _event_message_id(self, event: AstrMessageEvent) -> str:
         message_obj = getattr(event, "message_obj", None)
         for attr in ("message_id", "id", "seq", "message_seq", "real_id"):
             value = getattr(message_obj, attr, None) if message_obj is not None else None
             if value is not None and str(value).strip():
                 return _single_line(value, 120)
+        raw = self._event_raw_payload(event)
+        for key in ("message_id", "id", "msg_id", "seq", "message_seq", "real_id"):
+            value = raw.get(key)
+            if value is not None and str(value).strip():
+                return _single_line(value, 120)
         return ""
+
+    def _event_message_id_candidates(self, event: AstrMessageEvent) -> list[str]:
+        ids: list[str] = []
+        raw = self._event_raw_payload(event)
+        for key in ("message_id", "msg_id", "id", "seq", "message_seq", "real_id"):
+            value = raw.get(key)
+            if value is not None and str(value).strip():
+                ids.append(_single_line(value, 120))
+        message_obj = getattr(event, "message_obj", None)
+        for attr in ("message_id", "id", "seq", "message_seq", "real_id"):
+            value = getattr(message_obj, attr, None) if message_obj is not None else None
+            if value is not None and str(value).strip():
+                ids.append(_single_line(value, 120))
+        seen: set[str] = set()
+        unique: list[str] = []
+        for message_id in ids:
+            if not message_id or message_id in seen:
+                continue
+            seen.add(message_id)
+            unique.append(message_id)
+        return unique
+
+    def _event_scope_key(self, event: AstrMessageEvent) -> str:
+        raw = self._event_raw_payload(event)
+        group_id = _single_line(raw.get("group_id"), 80)
+        user_id = _single_line(raw.get("user_id"), 80)
+        if group_id:
+            return f"group:{group_id}"
+        if user_id:
+            return f"private:{user_id}"
+        group_id = self._extract_group_id_from_event(event)
+        if group_id:
+            return f"group:{group_id}"
+        try:
+            if bool(getattr(event, "is_private_chat", lambda: False)()):
+                sender_id = _single_line(event.get_sender_id(), 80)
+                if sender_id:
+                    return f"private:{sender_id}"
+        except Exception:
+            pass
+        return _single_line(getattr(event, "unified_msg_origin", ""), 160) or "unknown"
+
+    def _event_sender_id(self, event: AstrMessageEvent) -> str:
+        raw = self._event_raw_payload(event)
+        sender_id = _single_line(raw.get("user_id"), 80)
+        if sender_id:
+            return sender_id
+        try:
+            return _single_line(event.get_sender_id(), 80)
+        except Exception:
+            return ""
+
+    def _event_self_id(self, event: AstrMessageEvent) -> str:
+        raw = self._event_raw_payload(event)
+        self_id = _single_line(raw.get("self_id"), 80)
+        if self_id:
+            return self_id
+        try:
+            return _single_line(event.get_self_id(), 80)
+        except Exception:
+            message_obj = getattr(event, "message_obj", None)
+            return _single_line(getattr(message_obj, "self_id", ""), 80)
+
+    def _note_inbound_activity_for_scope(self, event: AstrMessageEvent) -> None:
+        raw = self._event_raw_payload(event)
+        if raw.get("post_type") == "notice":
+            return
+        scope = self._event_scope_key(event)
+        if not scope or scope == "unknown":
+            return
+        sender_id = self._event_sender_id(event)
+        self_id = self._event_self_id(event)
+        activity = getattr(self, "_recent_inbound_activity_by_scope", None)
+        if not isinstance(activity, dict):
+            activity = {}
+            self._recent_inbound_activity_by_scope = activity
+        activity[scope] = {
+            "ts": _now_ts(),
+            "message_id": self._event_message_id(event),
+            "sender_id": sender_id,
+            "from_self": bool(sender_id and self_id and sender_id == self_id),
+        }
+        if len(activity) > 500:
+            stale = sorted(
+                activity.items(),
+                key=lambda kv: _safe_float(kv[1].get("ts") if isinstance(kv[1], dict) else 0, 0),
+            )
+            for key, _ in stale[: len(activity) - 500]:
+                activity.pop(key, None)
+
+    def _scope_has_new_inbound_activity(self, scope: str, since_ts: float, *, ignore_self: bool = True) -> bool:
+        activity = getattr(self, "_recent_inbound_activity_by_scope", None)
+        if not isinstance(activity, dict):
+            return False
+        item = activity.get(_single_line(scope, 160))
+        if not isinstance(item, dict):
+            return False
+        if _safe_float(item.get("ts"), 0.0, 0.0) <= since_ts:
+            return False
+        if ignore_self and bool(item.get("from_self")):
+            return False
+        return True
+
+    def _recall_component_text(self, component: Any) -> str:
+        for attr in ("text", "content", "message"):
+            value = getattr(component, attr, None)
+            if isinstance(value, str):
+                return value
+        if isinstance(component, dict):
+            data = component.get("data") if isinstance(component.get("data"), dict) else component
+            text = data.get("text") or data.get("content") or data.get("message")
+            if text is not None:
+                return str(text)
+        return ""
+
+    def _event_text_for_recall_cache(self, event: AstrMessageEvent, *, limit: int = 500) -> str:
+        parts: list[str] = []
+        try:
+            chain = list(event.get_messages() or [])
+        except Exception:
+            chain = []
+        for comp in chain:
+            text = self._recall_component_text(comp)
+            if text:
+                parts.append(text)
+                continue
+            name = comp.__class__.__name__.lower()
+            if "image" in name:
+                parts.append("[图片]")
+            elif "record" in name or "voice" in name:
+                parts.append("[语音]")
+            elif "video" in name:
+                parts.append("[视频]")
+            elif "at" == name or name.endswith(".at"):
+                parts.append("[@]")
+            elif "reply" in name:
+                parts.append("[引用]")
+        text = " ".join(item.strip() for item in parts if str(item or "").strip()).strip()
+        if not text:
+            raw = self._event_raw_payload(event)
+            raw_msg = raw.get("raw_message") or raw.get("message")
+            if isinstance(raw_msg, str):
+                text = raw_msg
+            else:
+                text = str(getattr(event, "message_str", "") or "")
+        return _single_line(text, limit)
+
+    def _cleanup_recall_message_cache(self) -> None:
+        cache = getattr(self, "_recall_message_cache", None)
+        if not isinstance(cache, dict):
+            self._recall_message_cache = {}
+            return
+        now = _now_ts()
+        ttl = max(60.0, _safe_float(getattr(self, "recall_message_cache_ttl_seconds", 600), 600))
+        stale = [key for key, item in cache.items() if now - _safe_float(item.get("ts") if isinstance(item, dict) else 0, 0) > ttl]
+        for key in stale:
+            cache.pop(key, None)
+        max_items = max(0, _safe_int(getattr(self, "recall_message_cache_max_items", 300), 300, 0))
+        if max_items and len(cache) > max_items:
+            ordered = sorted(cache.items(), key=lambda kv: _safe_float(kv[1].get("ts") if isinstance(kv[1], dict) else 0, 0))
+            for key, _ in ordered[: len(cache) - max_items]:
+                cache.pop(key, None)
+
+    def _cache_message_for_recall(self, event: AstrMessageEvent) -> None:
+        if not getattr(self, "enable_recall_enhancement", True):
+            return
+        if not getattr(self, "enable_recall_message_cache", True):
+            return
+        raw = self._event_raw_payload(event)
+        if raw.get("post_type") == "notice":
+            return
+        message_ids = self._event_message_id_candidates(event)
+        if not message_ids:
+            return
+        text = self._event_text_for_recall_cache(event, limit=max(80, _safe_int(getattr(self, "recall_message_cache_text_chars", 500), 500, 80)))
+        if not text:
+            return
+        cache = getattr(self, "_recall_message_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._recall_message_cache = cache
+        self._cleanup_recall_message_cache()
+        message_id = message_ids[0]
+        snapshot = {
+            "message_id": message_id,
+            "message_id_aliases": message_ids,
+            "ts": _now_ts(),
+            "scope": self._event_scope_key(event),
+            "sender_id": self._event_sender_id(event),
+            "sender_name": _single_line(self._sender_display_name(event), 60),
+            "text": text,
+        }
+        for candidate in message_ids:
+            cache[candidate] = snapshot
+
+    def _cleanup_recalled_message_ids(self) -> None:
+        recalled = getattr(self, "_recalled_message_ids", None)
+        if not isinstance(recalled, dict):
+            self._recalled_message_ids = {}
+            return
+        now = _now_ts()
+        ttl = max(60.0, _safe_float(getattr(self, "recall_cancel_reply_ttl_seconds", 600), 600))
+        stale = [key for key, item in recalled.items() if now - _safe_float(item.get("ts") if isinstance(item, dict) else 0, 0) > ttl]
+        for key in stale:
+            recalled.pop(key, None)
+
+    def _record_recalled_message_id(self, message_id: str, *, scope: str = "", notice_type: str = "") -> None:
+        message_id = _single_line(message_id, 120)
+        if not message_id:
+            return
+        recalled = getattr(self, "_recalled_message_ids", None)
+        if not isinstance(recalled, dict):
+            recalled = {}
+            self._recalled_message_ids = recalled
+        self._cleanup_recalled_message_ids()
+        cache = getattr(self, "_recall_message_cache", None)
+        snapshot = dict(cache.get(message_id) or {}) if isinstance(cache, dict) and isinstance(cache.get(message_id), dict) else {}
+        aliases = [message_id]
+        if isinstance(snapshot.get("message_id_aliases"), list):
+            aliases.extend(_single_line(item, 120) for item in snapshot.get("message_id_aliases") or [])
+        record = {
+            "ts": _now_ts(),
+            "scope": _single_line(scope, 160) or _single_line(snapshot.get("scope"), 160),
+            "notice_type": _single_line(notice_type, 40),
+            "message": snapshot,
+        }
+        seen: set[str] = set()
+        for candidate in aliases:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            recalled[candidate] = record
+
+    def _is_message_id_recalled(self, message_id: str) -> bool:
+        message_id = _single_line(message_id, 120)
+        if not message_id:
+            return False
+        self._cleanup_recalled_message_ids()
+        recalled = getattr(self, "_recalled_message_ids", None)
+        return isinstance(recalled, dict) and message_id in recalled
+
+    def _reply_cancel_trigger_message_ids(self, event: AstrMessageEvent, *extra_message_ids: str) -> list[str]:
+        ids: list[str] = []
+        current_id = self._event_message_id(event)
+        if current_id:
+            ids.append(current_id)
+        quote_id = self._group_current_reply_quote_message_id(event)
+        if quote_id:
+            ids.append(quote_id)
+        for message_id in extra_message_ids:
+            message_id = _single_line(message_id, 120)
+            if message_id:
+                ids.append(message_id)
+        seen: set[str] = set()
+        unique: list[str] = []
+        for message_id in ids:
+            if message_id in seen:
+                continue
+            seen.add(message_id)
+            unique.append(message_id)
+        return unique
+
+    def _should_cancel_reply_for_recalled_trigger(self, event: AstrMessageEvent, *extra_message_ids: str) -> str:
+        if not getattr(self, "enable_recall_enhancement", True):
+            return ""
+        if not getattr(self, "enable_recall_cancel_reply", True):
+            return ""
+        for message_id in self._reply_cancel_trigger_message_ids(event, *extra_message_ids):
+            if self._is_message_id_recalled(message_id):
+                return message_id
+        return ""
+
+    async def _platform_message_exists_for_cancel_check(self, event: AstrMessageEvent, message_id: str) -> bool | None:
+        message_id = _single_line(message_id, 120)
+        if not message_id:
+            return None
+        bot = getattr(event, "bot", None)
+        api = getattr(bot, "api", None)
+        call_action = getattr(api, "call_action", None)
+        if not callable(call_action):
+            return None
+        attempts: list[Any] = [message_id]
+        try:
+            attempts.insert(0, int(message_id))
+        except (TypeError, ValueError):
+            pass
+        missing_error = False
+        for value in attempts:
+            try:
+                raw = await call_action("get_msg", message_id=value)
+            except Exception as exc:
+                error_text = str(exc or "").lower()
+                if any(marker in error_text for marker in ("not found", "message not", "消息不存在", "找不到", "不存在", "已撤回", "recalled")):
+                    missing_error = True
+                logger.debug(
+                    "[PrivateCompanion] 触发消息存在性检查失败: message_id=%s error=%s",
+                    message_id,
+                    _single_line(exc, 120),
+                )
+                continue
+            if raw:
+                return True
+        return False if missing_error else None
+
+    async def _should_cancel_reply_for_missing_or_recalled_trigger(self, event: AstrMessageEvent, *extra_message_ids: str) -> str:
+        recalled_message_id = self._should_cancel_reply_for_recalled_trigger(event, *extra_message_ids)
+        if recalled_message_id:
+            return recalled_message_id
+        if not getattr(self, "enable_recall_enhancement", True):
+            return ""
+        if not getattr(self, "enable_recall_cancel_reply", True):
+            return ""
+        for message_id in self._reply_cancel_trigger_message_ids(event, *extra_message_ids):
+            exists = await self._platform_message_exists_for_cancel_check(event, message_id)
+            if exists is False:
+                self._record_recalled_message_id(message_id, scope=self._event_scope_key(event), notice_type="missing_before_send")
+                return message_id
+        return ""
+
+    def _should_cancel_reply_for_recalled_message_ids(self, *message_ids: str) -> str:
+        if not getattr(self, "enable_recall_enhancement", True):
+            return ""
+        if not getattr(self, "enable_recall_cancel_reply", True):
+            return ""
+        for message_id in message_ids:
+            message_id = _single_line(message_id, 120)
+            if message_id and self._is_message_id_recalled(message_id):
+                return message_id
+        return ""
+
+    def _recent_recalled_messages_for_scope(self, scope: str, *, limit: int = 5) -> list[dict[str, Any]]:
+        if not getattr(self, "enable_recall_enhancement", True):
+            return []
+        if not getattr(self, "enable_recall_message_cache", True):
+            return []
+        self._cleanup_recalled_message_ids()
+        recalled = getattr(self, "_recalled_message_ids", None)
+        if not isinstance(recalled, dict):
+            return []
+        scope = _single_line(scope, 160)
+        rows: list[dict[str, Any]] = []
+        seen_messages: set[str] = set()
+        for message_id, item in recalled.items():
+            if not isinstance(item, dict):
+                continue
+            message = item.get("message") if isinstance(item.get("message"), dict) else {}
+            if not message:
+                continue
+            item_scope = _single_line(item.get("scope") or message.get("scope"), 160)
+            if scope and item_scope and item_scope != scope:
+                continue
+            unique_id = _single_line(message.get("message_id"), 120) or message_id
+            if unique_id in seen_messages:
+                continue
+            seen_messages.add(unique_id)
+            rows.append({**message, "message_id": message_id, "recalled_ts": _safe_float(item.get("ts"), 0)})
+        rows.sort(key=lambda row: _safe_float(row.get("recalled_ts"), 0), reverse=True)
+        return rows[: max(1, limit)]
+
+    def _format_recalled_messages_for_event(self, event: AstrMessageEvent, *, limit: int = 5) -> str:
+        rows = self._recent_recalled_messages_for_scope(self._event_scope_key(event), limit=limit)
+        if not rows:
+            return "当前会话没有可转述的撤回消息，或缓存已经过期。"
+        lines = ["最近撤回消息："]
+        for index, row in enumerate(rows, 1):
+            sender = _single_line(row.get("sender_name"), 40) or _single_line(row.get("sender_id"), 40) or "未知"
+            text = _single_line(row.get("text"), 360)
+            elapsed = self._format_timestamp_elapsed(row.get("recalled_ts", 0))
+            lines.append(f"{index}. {sender}｜{elapsed}撤回：{text}")
+        return "\n".join(lines)
+
+    def _user_asks_recalled_messages(self, text: str) -> bool:
+        compact = re.sub(r"\s+", "", str(text or "")).lower()
+        if not compact:
+            return False
+        if not any(token in compact for token in ("撤回", "撤了", "撤掉", "收回", "防撤回")):
+            return False
+        ask_tokens = (
+            "什么", "啥", "哪条", "哪句", "内容", "刚才", "刚刚", "最近", "上一条",
+            "谁", "看", "看看", "说了什么", "发了什么", "发的啥", "撤的啥",
+        )
+        if any(token in compact for token in ask_tokens):
+            return True
+        return bool(re.search(r"撤[回了掉]?.*(说|发|讲|聊)", compact))
+
+    def _format_recalled_messages_for_natural_query(self, event: AstrMessageEvent, *, limit: int = 5) -> str:
+        if not getattr(self, "enable_recall_enhancement", True) or not getattr(self, "enable_recall_transcribe_command", True):
+            return (
+                "【撤回消息查询】\n"
+                "用户正在问当前会话刚才撤回了什么,但撤回消息转述功能没有开启。请自然说明这边看不到可转述的撤回内容。"
+            )
+        try:
+            is_private = bool(getattr(event, "is_private_chat", lambda: False)())
+        except Exception:
+            is_private = False
+        allowed = self._can_manage_private_companion(event) if is_private else self._can_manage_group_companion(event)
+        if not allowed:
+            return (
+                "【撤回消息查询】\n"
+                "用户正在问当前会话刚才撤回了什么,但这类内容只能由 Bot 管理员、配置目标用户或群管理员查看。"
+                "请自然说明权限边界,不要猜测或编造撤回内容。"
+            )
+        rows = self._recent_recalled_messages_for_scope(self._event_scope_key(event), limit=limit)
+        if not rows:
+            return (
+                "【撤回消息查询】\n"
+                "用户正在问当前会话刚才撤回了什么,但当前会话没有可转述的撤回消息,或短期缓存已经过期。"
+                "请自然说明没有查到,不要编造。"
+            )
+        lines = [
+            "【撤回消息查询】",
+            "用户正在问当前会话刚才撤回了什么。下面是可转述的短期撤回记录；请用自然口吻回答,不要提插件、缓存或内部记录机制。",
+        ]
+        for index, row in enumerate(rows, 1):
+            sender = _single_line(row.get("sender_name"), 40) or _single_line(row.get("sender_id"), 40) or "未知"
+            text = _single_line(row.get("text"), 360)
+            elapsed = self._format_timestamp_elapsed(row.get("recalled_ts", 0))
+            lines.append(f"{index}. {sender}｜{elapsed}撤回：{text}")
+        return "\n".join(lines)
+
+    def _forbidden_recall_words(self) -> list[str]:
+        words = getattr(self, "recall_forbidden_words", [])
+        return [str(item) for item in words if str(item or "").strip()]
+
+    def _forbidden_recall_hit(self, text: str) -> str:
+        if not getattr(self, "enable_recall_enhancement", True):
+            return ""
+        if not getattr(self, "enable_forbidden_word_recall", False):
+            return ""
+        text = str(text or "")
+        if not text:
+            return ""
+        case_sensitive = bool(getattr(self, "recall_forbidden_word_case_sensitive", False))
+        haystack = text if case_sensitive else text.lower()
+        for word in self._forbidden_recall_words():
+            needle = word if case_sensitive else word.lower()
+            if needle and needle in haystack:
+                return word
+        return ""
+
+    def _chain_text_for_forbidden_recall(self, chain: list[Any], *, limit: int = 2000) -> str:
+        parts = [self._recall_component_text(comp) for comp in chain or []]
+        return _single_line(" ".join(item for item in parts if item), limit)
+
+    async def _try_delete_message(self, event: AstrMessageEvent, message_id: str, *, reason: str = "") -> bool:
+        message_id = _single_line(message_id, 120)
+        if not message_id:
+            return False
+        call = getattr(self, "_call_platform_action", None)
+        if not callable(call):
+            return False
+        attempts: list[Any] = [message_id]
+        try:
+            attempts.append(int(message_id))
+        except (TypeError, ValueError):
+            pass
+        for value in attempts:
+            try:
+                await call(event, "delete_msg", message_id=value)
+                logger.info("[PrivateCompanion] 已尝试撤回消息: message_id=%s reason=%s", message_id, _single_line(reason, 80))
+                return True
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 撤回消息失败: message_id=%s error=%s", message_id, _single_line(exc, 120))
+        return False
 
     def _candidate_trigger_message_id(self, candidate: dict[str, Any]) -> str:
         for key in ("trigger_message_id", "message_id", "msg_id"):

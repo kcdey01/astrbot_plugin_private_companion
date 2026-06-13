@@ -348,6 +348,85 @@
     },
     "default": 3
   },
+  "enable_recall_enhancement": {
+    "description": "启用撤回增强",
+    "type": "bool",
+    "hint": "总开关。启用后会感知 QQ/OneBot 撤回事件，并可用于发送前取消回复、短期缓存撤回消息转述和违禁词自动撤回。",
+    "default": true
+  },
+  "enable_recall_cancel_reply": {
+    "description": "撤回触发消息时取消回复",
+    "type": "bool",
+    "hint": "开启后，收到 friend_recall 或 group_recall 时会记录被撤回的 message_id；如果 Bot 的回复尚未发出且触发/唤醒消息已撤回，则静默取消本次发送和后续分段。",
+    "default": true,
+    "condition": "enable_recall_enhancement"
+  },
+  "enable_recall_message_cache": {
+    "description": "缓存撤回消息用于转述",
+    "type": "bool",
+    "hint": "开启后，短期缓存普通消息的文本摘要。用户在消息撤回后、缓存过期前，可用“陪伴 撤回消息”或“陪伴群 撤回消息”查看最近撤回内容。缓存只在内存中保存，不写入数据文件。",
+    "default": true,
+    "condition": "enable_recall_enhancement"
+  },
+  "enable_recall_transcribe_command": {
+    "description": "允许命令转述撤回消息",
+    "type": "bool",
+    "hint": "开启后允许通过命令查看当前会话最近撤回消息。私聊需要插件管理权限；群聊需要插件管理权限或群管理员权限。",
+    "default": true,
+    "condition": "enable_recall_enhancement"
+  },
+  "recall_message_cache_ttl_seconds": {
+    "description": "撤回消息缓存秒数",
+    "type": "float",
+    "hint": "普通消息和撤回记录在内存中的保留时间。过期后无法再转述，也不再用于取消待发送回复。",
+    "slider": {
+      "min": 60,
+      "max": 3600,
+      "step": 30
+    },
+    "default": 600,
+    "condition": "enable_recall_enhancement"
+  },
+  "recall_message_cache_max_items": {
+    "description": "撤回消息缓存上限",
+    "type": "int",
+    "hint": "内存中最多保留多少条消息摘要。0 表示不按数量限制，但仍受缓存秒数限制。",
+    "slider": {
+      "min": 0,
+      "max": 3000,
+      "step": 50
+    },
+    "default": 300,
+    "condition": "enable_recall_enhancement"
+  },
+  "enable_forbidden_word_recall": {
+    "description": "违禁词自动撤回",
+    "type": "bool",
+    "hint": "开启且词表非空时，Bot 自己待发送消息命中会优先拦截；已进入事件流的群消息或 Bot 自己消息命中时会尝试调用 delete_msg 撤回。能否成功取决于平台和 Bot 权限。",
+    "default": false,
+    "condition": "enable_recall_enhancement"
+  },
+  "recall_forbidden_words": {
+    "description": "撤回违禁词表",
+    "type": "list",
+    "hint": "命中任一词时触发违禁词撤回。建议一行一个词；词表为空时不会执行自动撤回。",
+    "default": [],
+    "condition": "enable_forbidden_word_recall"
+  },
+  "recall_forbidden_scope": {
+    "description": "违禁词撤回范围",
+    "type": "string",
+    "hint": "bot_only 只检查 Bot 自己消息；group_only 检查群聊消息；bot_and_group 同时检查 Bot 自己消息和群聊消息。",
+    "default": "bot_and_group",
+    "condition": "enable_forbidden_word_recall"
+  },
+  "recall_forbidden_word_case_sensitive": {
+    "description": "违禁词大小写敏感",
+    "type": "bool",
+    "hint": "关闭时英文大小写不区分；开启时按原样匹配。",
+    "default": false,
+    "condition": "enable_forbidden_word_recall"
+  },
   "enable_message_debounce": {
     "description": "启用消息收口防抖",
     "type": "bool",

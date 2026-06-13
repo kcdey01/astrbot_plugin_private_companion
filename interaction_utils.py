@@ -22,6 +22,7 @@ class InteractionUtilsMixin:
             "我会永远陪着你 命令：\n"
             "陪伴 状态\n"
             "陪伴 查看主动判定\n"
+            "陪伴 撤回消息\n"
             "陪伴 重置插件\n"
             "陪伴 增添状态 <状态描述>[|持续小时]\n"
             "陪伴 查看今日日程\n"
@@ -29,6 +30,7 @@ class InteractionUtilsMixin:
             "陪伴 当前细化\n"
             "陪伴 重置细化\n"
             "陪伴 能力列表\n"
+            "陪伴 TTS语种 日语|中文|英语|默认\n"
             "陪伴 查看提示词 日程|细化|主动|回复注入\n"
             "陪伴 生成状态\n"
             "陪伴 梦境\n"
@@ -126,6 +128,9 @@ class InteractionUtilsMixin:
         return "这个操作会修改插件状态,需要 Bot 管理员、配置目标用户或群管理员来执行。"
 
     async def _reply(self, event: AstrMessageEvent, text: str, *, quote_current: bool = True):
+        recalled_message_id = await self._should_cancel_reply_for_missing_or_recalled_trigger(event)
+        if recalled_message_id:
+            return
         quote_message_id = self._group_current_reply_quote_message_id(event) if quote_current else ""
         if quote_message_id and text:
             await event.send(event.chain_result(self._with_optional_reply([Plain(text)], quote_message_id)))
@@ -141,6 +146,9 @@ class InteractionUtilsMixin:
         quote_message_id: str = "",
     ):
         quote_message_id = _single_line(quote_message_id, 120) if getattr(self, "enable_proactive_quote_trigger_message", False) else ""
+        recalled_message_id = await self._should_cancel_reply_for_missing_or_recalled_trigger(event, quote_message_id)
+        if recalled_message_id:
+            return
         if (image_path and os.path.exists(image_path)) or extra_components:
             await event.send(
                 event.chain_result(

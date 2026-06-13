@@ -159,6 +159,71 @@ class TtsEnhancementMixin:
     def _tts_language_label(self) -> str:
         return {"ja": "日语", "zh": "中文", "en": "英语"}.get(getattr(self, "tts_voice_language", "ja"), "日语")
 
+    def _normalize_tts_voice_language_value(self, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        compact = re.sub(r"[\s_\\/-]+", "", text)
+        aliases = {
+            "ja": "ja",
+            "jp": "ja",
+            "japanese": "ja",
+            "日语": "ja",
+            "日文": "ja",
+            "日本语": "ja",
+            "日本語": "ja",
+            "zh": "zh",
+            "cn": "zh",
+            "chinese": "zh",
+            "中文": "zh",
+            "汉语": "zh",
+            "汉文": "zh",
+            "普通话": "zh",
+            "国语": "zh",
+            "en": "en",
+            "eng": "en",
+            "english": "en",
+            "英语": "en",
+            "英文": "en",
+        }
+        return aliases.get(compact, "")
+
+    def _apply_tts_runtime_overrides(self) -> None:
+        settings = self.data.get("runtime_settings") if isinstance(getattr(self, "data", None), dict) else None
+        if not isinstance(settings, dict):
+            return
+        lang = self._normalize_tts_voice_language_value(settings.get("tts_voice_language"))
+        if lang:
+            self.tts_voice_language = lang
+
+    def _format_tts_voice_language_status(self) -> str:
+        settings = self.data.get("runtime_settings") if isinstance(getattr(self, "data", None), dict) else None
+        override = ""
+        if isinstance(settings, dict):
+            override = self._normalize_tts_voice_language_value(settings.get("tts_voice_language"))
+        source = "指令覆盖" if override else "配置页"
+        return f"当前 TTS 语音语种：{self._tts_language_label()}（来源：{source}）。可用：日语 / 中文 / 英语；发送“陪伴 TTS语种 默认”可恢复配置页设置。"
+
+    def _set_tts_voice_language_from_command(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text or text in {"查看", "状态", "当前"}:
+            return self._format_tts_voice_language_status()
+        settings = self.data.setdefault("runtime_settings", {})
+        if not isinstance(settings, dict):
+            settings = {}
+            self.data["runtime_settings"] = settings
+        if text.lower() in {"default", "config", "reset", "clear"} or text in {"默认", "配置", "配置页", "重置", "清除", "跟随配置"}:
+            settings.pop("tts_voice_language", None)
+            configured = self._normalize_tts_voice_language_value(getattr(self, "config", {}).get("tts_voice_language", "ja") if getattr(self, "config", None) is not None else "ja")
+            self.tts_voice_language = configured or "ja"
+            self._save_data_sync()
+            return f"已恢复 TTS 语音语种为配置页设置：{self._tts_language_label()}。"
+        lang = self._normalize_tts_voice_language_value(text)
+        if not lang:
+            return "没认出这个 TTS 语种。可用：日语 / 中文 / 英语；例如：陪伴 TTS语种 日语。"
+        self.tts_voice_language = lang
+        settings["tts_voice_language"] = lang
+        self._save_data_sync()
+        return f"已切换 TTS 语音语种：{self._tts_language_label()}。之后 <tts> 和自动语音转换会按这个语种处理。"
+
     def _normalize_tts_tags(self, text: str) -> str:
         source = str(text or "")
         source = re.sub(r"<(/?)t{2,}s\b[^>]*>", lambda m: f"</tts>" if m.group(1) else "<tts>", source, flags=re.IGNORECASE)

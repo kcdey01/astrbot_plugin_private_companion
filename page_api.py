@@ -1904,6 +1904,7 @@ class PrivateCompanionPageApi:
             "enable_cycle_state",
             "enable_skill_growth_simulation",
             "enable_message_debounce",
+            "enable_recall_enhancement",
             "enable_environment_perception",
             "enable_holiday_perception",
             "enable_platform_perception",
@@ -2158,6 +2159,16 @@ class PrivateCompanionPageApi:
             "max_daily_messages",
             "inbound_message_debounce_seconds",
             "enable_message_debounce",
+            "enable_recall_enhancement",
+            "enable_recall_cancel_reply",
+            "enable_recall_message_cache",
+            "enable_recall_transcribe_command",
+            "recall_message_cache_ttl_seconds",
+            "recall_message_cache_max_items",
+            "enable_forbidden_word_recall",
+            "recall_forbidden_words",
+            "recall_forbidden_scope",
+            "recall_forbidden_word_case_sensitive",
             "text_message_debounce_seconds",
             "image_message_debounce_seconds",
             "forward_message_debounce_seconds",
@@ -2814,6 +2825,7 @@ class PrivateCompanionPageApi:
             "enable_cycle_state",
             "enable_skill_growth_simulation",
             "enable_message_debounce",
+            "enable_recall_enhancement",
             "enable_environment_perception",
             "enable_holiday_perception",
             "enable_platform_perception",
@@ -3121,8 +3133,11 @@ class PrivateCompanionPageApi:
             return str(value or "").strip()[:1200]
         if key == "QZONE_COOKIE":
             return str(value or "").replace("\r", ";").replace("\n", ";").strip()[:8000]
-        if key in {"group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords"}:
+        if key in {"group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "recall_forbidden_words"}:
             return str(value or "").strip()[:1200]
+        if key == "recall_forbidden_scope":
+            scope = str(value or "bot_and_group").strip().lower()
+            return scope if scope in {"bot_only", "group_only", "bot_and_group"} else "bot_and_group"
         if key == "private_image_self_recognition_hint":
             return str(value or "").strip()[:1200]
         if key == "worldview_adaptation_mode":
@@ -3454,6 +3469,16 @@ class PrivateCompanionPageApi:
             "forward_message_parse_nested",
             "forward_message_image_vision",
             "enable_message_debounce",
+            "enable_recall_enhancement",
+            "enable_recall_cancel_reply",
+            "enable_recall_message_cache",
+            "enable_recall_transcribe_command",
+            "recall_message_cache_ttl_seconds",
+            "recall_message_cache_max_items",
+            "enable_forbidden_word_recall",
+            "recall_forbidden_words",
+            "recall_forbidden_scope",
+            "recall_forbidden_word_case_sensitive",
             "enable_semantic_message_debounce",
             "enable_proactive_quote_trigger_message",
             "enable_local_photo_load_guard",
