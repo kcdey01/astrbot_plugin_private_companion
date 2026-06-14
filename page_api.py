@@ -1119,7 +1119,8 @@ class PrivateCompanionPageApi:
 
     async def update_worldbook_member(self) -> dict[str, Any]:
         payload = await request.get_json(silent=True) or {}
-        user_id = self._single_line(payload.get("user_id"), 40)
+        raw_user_id = self._single_line(payload.get("user_id"), 80)
+        user_id = self._normalize_worldbook_member_id(raw_user_id)
         if not user_id:
             return self._error("缺少 user_id")
         try:
@@ -1139,8 +1140,14 @@ class PrivateCompanionPageApi:
                     self.plugin._save_data_sync()
                     data = deepcopy(self.plugin.data)
                     return self._ok({"changed": changed, "message": "已删除关系节点", "worldbook": self._worldbook_summary(data)})
-                if not user_id.isdigit() or len(user_id) < 5:
-                    return self._error("关系节点必须使用有效 QQ 号作为身份键")
+                if not self._worldbook_member_id_valid(user_id):
+                    return self._error("关系节点必须使用有效 QQ 号或 B 站外部身份键")
+                linked_qq_user_id = self._single_line(
+                    payload.get("linked_qq_user_id") or payload.get("bound_qq_user_id") or payload.get("qq_user_id"),
+                    40,
+                )
+                if linked_qq_user_id and (not linked_qq_user_id.isdigit() or len(linked_qq_user_id) < 5):
+                    return self._error("绑定目标必须是有效 QQ 号")
                 deleted = self.plugin.data.setdefault("worldbook_deleted_member_ids", [])
                 if isinstance(deleted, list) and user_id in deleted:
                     self.plugin.data["worldbook_deleted_member_ids"] = [item for item in deleted if str(item) != user_id]
@@ -1161,6 +1168,7 @@ class PrivateCompanionPageApi:
                     }
                     profiles[user_id] = profile
                 profile["user_id"] = user_id
+                profile["identity_type"] = "qq" if user_id.isdigit() else "external"
                 if "enabled" in payload:
                     profile["enabled"] = bool(payload.get("enabled"))
                 if "name" in payload:
@@ -1211,15 +1219,23 @@ class PrivateCompanionPageApi:
                 if "priority" in payload:
                     profile["priority"] = self._clamp_int(payload.get("priority"), 120, -1000, 10000)
                 profile["manual_edit_ts"] = time.time()
+                bind_result: dict[str, Any] | None = None
+                if linked_qq_user_id and linked_qq_user_id != user_id:
+                    bind_result = self._bind_worldbook_external_member_locked(profiles, user_id, linked_qq_user_id, profile)
                 self.plugin._save_data_sync()
                 data = deepcopy(self.plugin.data)
             if payload.keys() <= {"user_id", "enabled"}:
                 message = "已更新关系节点状态"
             elif "important_memories" in payload and len(payload) <= 2:
                 message = "已更新重要记忆"
+            elif bind_result:
+                message = "已绑定到 QQ 关系节点"
             else:
                 message = "已保存关系节点"
-            return self._ok({"message": message, "worldbook": self._worldbook_summary(data)})
+            response = {"message": message, "worldbook": self._worldbook_summary(data)}
+            if bind_result:
+                response["bind"] = bind_result
+            return self._ok(response)
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 更新关系节点失败: {exc}", exc_info=True)
             return self._error(str(exc))
@@ -2213,6 +2229,7 @@ class PrivateCompanionPageApi:
             "segmented_proactive_regex",
             "segmented_proactive_split_words",
             "enable_segmented_proactive_content_cleanup",
+            "segmented_proactive_content_cleanup_scope",
             "segmented_proactive_content_cleanup_rule",
             "segmented_proactive_content_cleanup_words",
             "segmented_proactive_interval_method",
@@ -3021,6 +3038,7 @@ class PrivateCompanionPageApi:
             "segmented_proactive_regex",
             "segmented_proactive_split_words",
             "enable_segmented_proactive_content_cleanup",
+            "segmented_proactive_content_cleanup_scope",
             "segmented_proactive_content_cleanup_rule",
             "segmented_proactive_content_cleanup_words",
             "segmented_proactive_interval_method",
@@ -3220,6 +3238,9 @@ class PrivateCompanionPageApi:
         if key == "segmented_proactive_interval_method":
             mode = str(value or "log").strip().lower()
             return mode if mode in {"log", "random"} else "log"
+        if key == "segmented_proactive_content_cleanup_scope":
+            mode = str(value or "all").strip().lower()
+            return mode if mode in {"all", "trailing"} else "all"
         if key in {"segmented_proactive_split_words", "segmented_proactive_content_cleanup_words"}:
             def _decode_segmented_word(raw: Any) -> str:
                 text = str(raw or "")
@@ -3558,6 +3579,190 @@ class PrivateCompanionPageApi:
                 lines.append(line)
         return "\n".join(lines)[:limit].strip()
 
+    @classmethod
+    def _normalize_worldbook_member_id(cls, value: Any) -> str:
+        text = cls._single_line(value, 80)
+        if not text:
+            return ""
+        lowered = text.lower()
+        if lowered.startswith("bili:") or lowered.startswith("bilibili:"):
+            digits = re.sub(r"\D+", "", lowered.split(":", 1)[1])
+            return f"bili:{digits}" if digits else ""
+        if lowered.startswith("bili_live_"):
+            return re.sub(r"[^A-Za-z0-9_:-]+", "_", text)[:80]
+        if text.isdigit():
+            return text
+        return re.sub(r"[^A-Za-z0-9_:-]+", "_", text)[:80]
+
+    @staticmethod
+    def _worldbook_member_id_valid(user_id: str) -> bool:
+        if user_id.isdigit():
+            return len(user_id) >= 5
+        lowered = user_id.lower()
+        if lowered.startswith("bili:"):
+            return bool(re.fullmatch(r"bili:\d{2,}", lowered))
+        if lowered.startswith("bili_live_"):
+            return bool(re.fullmatch(r"bili_live_[A-Za-z0-9_-]{6,64}", user_id))
+        return False
+
+    def _bind_worldbook_external_member_locked(
+        self,
+        profiles: dict[str, Any],
+        source_id: str,
+        target_id: str,
+        source_profile: dict[str, Any],
+    ) -> dict[str, Any]:
+        target = profiles.get(target_id)
+        if not isinstance(target, dict):
+            target = {
+                "user_id": target_id,
+                "name": self._single_line(source_profile.get("name"), 80) or target_id,
+                "aliases": [],
+                "content": "",
+                "identity_note": f"QQ {target_id}，由外部身份绑定创建。",
+                "boundary_note": "",
+                "important_memories": [],
+                "enabled": True,
+                "priority": 120,
+                "source_entries": [],
+                "observed_names": [],
+            }
+            profiles[target_id] = target
+        target["user_id"] = target_id
+        target["identity_type"] = "qq"
+        live_names = self._worldbook_string_list(source_profile.get("observed_names"), limit=12, item_limit=40)
+        live_name = self._single_line(source_profile.get("name"), 40)
+        if live_name and live_name != target_id:
+            live_names.insert(0, live_name)
+        aliases = self._worldbook_string_list(target.get("aliases"), limit=30, item_limit=40)
+        for alias in live_names:
+            if alias and alias != target_id and alias not in aliases:
+                aliases.append(alias)
+        target["aliases"] = aliases[:30]
+
+        external_ids = self._worldbook_string_list(target.get("external_ids"), limit=20, item_limit=80)
+        if source_id not in external_ids:
+            external_ids.insert(0, source_id)
+        target["external_ids"] = external_ids[:20]
+        target["linked_bili_profile_id"] = source_id
+        target["manual_edit_ts"] = time.time()
+
+        for field, limit in (("content", 2000), ("identity_note", 2000), ("boundary_note", 1200)):
+            source_text = str(source_profile.get(field) or "").strip()
+            target_text = str(target.get(field) or "").strip()
+            if source_text and source_text not in target_text:
+                glue = "\n" if target_text else ""
+                target[field] = (target_text + glue + source_text)[:limit]
+
+        source_memories = self._normalize_important_memories(source_profile.get("important_memories"))
+        target_memories = self._normalize_important_memories(target.get("important_memories"))
+        seen = {self._single_line(item.get("content"), 160) for item in target_memories if isinstance(item, dict)}
+        for memory in source_memories:
+            content = self._single_line(memory.get("content"), 160)
+            if content and content not in seen:
+                target_memories.append(memory)
+                seen.add(content)
+        target["important_memories"] = target_memories[:30]
+
+        source_entries = self._worldbook_string_list(target.get("source_entries"), limit=30, item_limit=80)
+        for entry in self._worldbook_string_list(source_profile.get("source_entries"), limit=12, item_limit=80):
+            if entry not in source_entries:
+                source_entries.append(entry)
+        if "live_stream_companion" not in source_entries:
+            source_entries.append("live_stream_companion")
+        target["source_entries"] = source_entries[:30]
+
+        source_profile["enabled"] = False
+        source_profile["linked_qq_user_id"] = target_id
+        source_profile["merged_into_user_id"] = target_id
+        source_profile["manual_edit_ts"] = time.time()
+        self._merge_live_viewer_activity_for_worldbook_bind(source_id, target_id, live_names)
+        return {"source_user_id": source_id, "target_user_id": target_id}
+
+    def _worldbook_string_list(self, value: Any, *, limit: int = 20, item_limit: int = 60) -> list[str]:
+        raw_items: list[Any]
+        if isinstance(value, list):
+            raw_items = value
+        elif isinstance(value, str):
+            raw_items = re.split(r"[\n,，;；]+", value)
+        else:
+            raw_items = []
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            text = self._single_line(item, item_limit)
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+            if len(result) >= limit:
+                break
+        return result
+
+    def _merge_live_viewer_activity_for_worldbook_bind(self, source_id: str, target_id: str, live_names: list[str]) -> None:
+        store = self.plugin.data.get("live_stream_companion")
+        if not isinstance(store, dict):
+            return
+        activity = store.get("viewer_activity")
+        if not isinstance(activity, dict):
+            return
+        target_key = f"user:{target_id}"
+        source_keys = [f"user:{source_id}"]
+        source_keys.extend(f"live:{name}" for name in live_names if name)
+        target = activity.setdefault(target_key, {"viewer_key": target_key, "user_id": target_id, "recent_events": [], "recent_danmaku": [], "event_counts": {}})
+        if not isinstance(target, dict):
+            target = {"viewer_key": target_key, "user_id": target_id, "recent_events": [], "recent_danmaku": [], "event_counts": {}}
+            activity[target_key] = target
+        target["viewer_key"] = target_key
+        target["user_id"] = target_id
+        aliases = target.setdefault("live_usernames", [])
+        if not isinstance(aliases, list):
+            aliases = []
+            target["live_usernames"] = aliases
+        for name in live_names:
+            if name and name not in aliases:
+                aliases.insert(0, name)
+        del aliases[8:]
+        for key in source_keys:
+            item = activity.get(key)
+            if not isinstance(item, dict) or item is target:
+                continue
+            self._merge_activity_item(target, item)
+            activity.pop(key, None)
+
+    @staticmethod
+    def _merge_activity_item(target: dict[str, Any], source: dict[str, Any]) -> None:
+        def as_float(value: Any, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        def as_int(value: Any, default: int = 0) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        target["total_events"] = as_int(target.get("total_events")) + as_int(source.get("total_events"))
+        if source.get("display_name") and not target.get("display_name"):
+            target["display_name"] = source.get("display_name")
+        if source.get("live_username") and not target.get("live_username"):
+            target["live_username"] = source.get("live_username")
+        target["first_seen"] = min(as_float(target.get("first_seen"), time.time()), as_float(source.get("first_seen"), time.time()))
+        target["last_seen"] = max(as_float(target.get("last_seen")), as_float(source.get("last_seen")))
+        counts = target.setdefault("event_counts", {})
+        if isinstance(counts, dict) and isinstance(source.get("event_counts"), dict):
+            for key, value in source["event_counts"].items():
+                counts[key] = as_int(counts.get(key)) + as_int(value)
+        for field, limit in (("recent_events", 12), ("recent_danmaku", 8)):
+            rows = []
+            for row in [*(target.get(field) if isinstance(target.get(field), list) else []), *(source.get(field) if isinstance(source.get(field), list) else [])]:
+                if isinstance(row, dict):
+                    rows.append(row)
+            rows.sort(key=lambda row: as_float(row.get("ts")), reverse=True)
+            target[field] = rows[:limit]
+
     def _worldbook_summary(self, data: dict[str, Any]) -> dict[str, Any]:
         profiles = data.get("worldbook_member_profiles") if isinstance(data.get("worldbook_member_profiles"), dict) else {}
         groups = data.get("worldbook_group_profiles") if isinstance(data.get("worldbook_group_profiles"), dict) else {}
@@ -3569,6 +3774,7 @@ class PrivateCompanionPageApi:
                 continue
             aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
             observed = item.get("observed_names") if isinstance(item.get("observed_names"), list) else []
+            external_ids = item.get("external_ids") if isinstance(item.get("external_ids"), list) else []
             memories = self._normalize_important_memories(item.get("important_memories"))
             pending = item.get("pending_observations") if isinstance(item.get("pending_observations"), list) else []
             pending_items = []
@@ -3590,11 +3796,16 @@ class PrivateCompanionPageApi:
             profile_items.append(
                 {
                     "user_id": self._single_line(user_id, 40),
+                    "identity_type": self._single_line(item.get("identity_type") or ("qq" if str(user_id).isdigit() else "external"), 20),
                     "name": self._single_line(item.get("name"), 60),
                     "enabled": bool(item.get("enabled", True)),
                     "priority": item.get("priority", 120),
                     "aliases": [self._single_line(alias, 40) for alias in aliases if self._single_line(alias, 40)],
                     "observed_names": [self._single_line(name, 40) for name in observed if self._single_line(name, 40)],
+                    "external_ids": [self._single_line(ext, 80) for ext in external_ids if self._single_line(ext, 80)],
+                    "linked_qq_user_id": self._single_line(item.get("linked_qq_user_id") or item.get("merged_into_user_id"), 40),
+                    "linked_bili_profile_id": self._single_line(item.get("linked_bili_profile_id"), 80),
+                    "auto_registration_pending": bool(item.get("auto_registration_pending", False)),
                     "content": self._single_line(item.get("content"), 260),
                     "identity_note": self._single_line(item.get("identity_note") or item.get("note") or item.get("content"), 500),
                     "boundary_note": self._single_line(item.get("boundary_note"), 500),

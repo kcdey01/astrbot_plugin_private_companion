@@ -1373,17 +1373,28 @@ class GroupObservationMixin:
             return False, "今日群聊插话已达上限"
         if _now_ts() - _safe_float(group.get("last_interject_at"), 0) < self.group_interject_min_interval_minutes * 60:
             return False, "群聊插话间隔太近"
+        recent = group.get("recent_messages") if isinstance(group.get("recent_messages"), list) else []
+        current = recent[-1] if recent and isinstance(recent[-1], dict) else {}
+        talking_to = str(current.get("talking_to") or "group") if isinstance(current, dict) else "group"
+        if talking_to not in {"", "group", "bot"}:
+            return False, "当前更像群友之间的一对一对话"
+        if re.search(r"^\s*(?:@|回复|引用)", text):
+            return False, "当前消息有明确对话对象"
+        if re.search(r"(别插|别接|别吵|别回|闭嘴|别打断)", text):
+            return False, "群友表达了不希望被打断"
         atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
         mood = str(atmosphere.get("mood") or "")
         pace = str(atmosphere.get("pace") or "")
         if pace == "热闹" and mood not in {"玩笑", "求助"}:
             return False, "群聊太热闹,不抢话"
-        if re.search(r"(有没有人|谁懂|救命|怎么回事|咋办|笑死|绷不住|太离谱)", text):
-            return random.random() < 0.08, "有自然接话口"
+        if re.search(r"(有没有人|谁懂|救命|怎么回事|咋办)", text):
+            return random.random() < 0.055, "有开放式接话口"
+        if re.search(r"(笑死|绷不住|太离谱)", text):
+            return random.random() < (0.018 if mood == "玩笑" else 0.008), "玩笑反应口"
         if mood == "玩笑":
-            return random.random() < 0.025, "玩笑气氛"
+            return random.random() < 0.015, "玩笑气氛"
         if mood == "求助":
-            return random.random() < 0.045, "求助气氛"
+            return random.random() < 0.035, "求助气氛"
         return False, "没有自然插话口"
 
     def _group_repeat_signature(self, text: str) -> str:
@@ -1644,7 +1655,7 @@ class GroupObservationMixin:
         if not allowed:
             return
         prompt = f"""
-你在一个群聊里,现在可以非常轻地接一句。
+你在一个群聊里,系统认为现在也许可以非常轻地接一句,但你必须先判断这句会不会显得硬插话。
 只输出要发到群里的正文,不要解释。
 
 【群聊上下文】
@@ -1654,8 +1665,11 @@ class GroupObservationMixin:
 {_single_line(text, 180)}
 
 要求：
+- 如果这像群友之间的一对一、已经有人在自然接话、你这句没有新增价值,输出空字符串
+- 宁可不说,不要为了存在感插话
 - 1 句,最多 35 个中文字符
 - 像群友自然接话,不要像助手
+- 只顺着当前话题轻轻补一句,不要开新话题,不要把自己变成中心
 - 不要主持群聊,不要总结,不要 @ 人
 - 不要提系统、观察、黑话学习、插件
 - 如果不适合说话,输出空字符串

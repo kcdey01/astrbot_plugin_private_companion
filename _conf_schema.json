@@ -3381,10 +3381,27 @@
     },
     "default": "[\\n]"
   },
+  "segmented_proactive_content_cleanup_scope": {
+    "description": "主动分段内容清理范围",
+    "type": "string",
+    "hint": "all 会按旧逻辑清理片段中所有匹配内容；trailing 只清理每段末尾连续出现的清理词/正则，适合只去掉句尾标点。",
+    "options": [
+      "all",
+      "trailing"
+    ],
+    "labels": [
+      "全段清理",
+      "仅句尾清理"
+    ],
+    "condition": {
+      "enable_segmented_proactive_content_cleanup": true
+    },
+    "default": "all"
+  },
   "segmented_proactive_content_cleanup_words": {
     "description": "主动分段内容清理词列表",
     "type": "list",
-    "hint": "仅在分段模式为 words 时生效；每一项会按原文移除。清理会跳过括号和双引号内的内容。",
+    "hint": "仅在分段模式为 words 时生效；scope=all 时每一项会按原文移除，scope=trailing 时只移除每段末尾连续出现的词。清理会跳过括号和双引号内的内容。",
     "condition": {
       "enable_segmented_proactive_content_cleanup": true,
       "segmented_proactive_split_mode": "words"

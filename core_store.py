@@ -652,7 +652,7 @@ class CoreStoreMixin:
         ):
             user["manual_disabled"] = True
         if created:
-            user["enabled"] = str(user_id).isdigit() and str(user_id) in set(self._configured_target_ids())
+            user["enabled"] = self._is_target_private_user(user_id, user)
         elif user.get("manual_disabled"):
             user["enabled"] = False
         elif not self._is_target_private_user(user_id, user):
@@ -665,6 +665,8 @@ class CoreStoreMixin:
 
     def _is_target_private_user(self, user_id: str, user: dict[str, Any] | None = None) -> bool:
         user_id = self._canonical_private_user_id(str(user_id or "").strip())
+        if self._is_bot_self_user_id(user_id):
+            return False
         if isinstance(user, dict) and user.get("manual_enabled"):
             return True
         if not user_id or not user_id.isdigit():
@@ -672,6 +674,30 @@ class CoreStoreMixin:
         if user_id in set(self._configured_target_ids()):
             return True
         return False
+
+    def _is_bot_self_user_id(self, user_id: str) -> bool:
+        user_id = str(user_id or "").strip()
+        return bool(user_id and user_id in self._known_bot_self_ids())
+
+    def _known_bot_self_ids(self) -> set[str]:
+        ids: set[str] = set()
+        for attr in ("bot_self_id", "bot_user_id", "self_id"):
+            value = str(getattr(self, attr, "") or "").strip()
+            if value.isdigit():
+                ids.add(value)
+        raw_ids = getattr(self, "bot_self_ids", None)
+        if isinstance(raw_ids, (list, tuple, set)):
+            for item in raw_ids:
+                value = str(item or "").strip()
+                if value.isdigit():
+                    ids.add(value)
+        platform_manager = getattr(getattr(self, "context", None), "platform_manager", None)
+        for inst in list(getattr(platform_manager, "platform_insts", []) or []):
+            for attr in ("client_self_id", "self_id", "bot_self_id", "bot_user_id"):
+                value = str(getattr(inst, attr, "") or "").strip()
+                if value.isdigit():
+                    ids.add(value)
+        return ids
 
     def _get_group(self, group_id: str) -> dict[str, Any]:
         groups = self.data.setdefault("groups", {})

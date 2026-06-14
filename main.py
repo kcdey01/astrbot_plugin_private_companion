@@ -299,7 +299,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.6.0",
+    "3.6.2",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -490,6 +490,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         split_words = c.get("segmented_proactive_split_words", ["。", "？", "！", "~", "…", "“"])
         self.segmented_proactive_split_words = [str(item) for item in split_words] if isinstance(split_words, list) else ["。", "？", "！", "~", "…", "“"]
         self.enable_segmented_proactive_content_cleanup = self._cfg_bool(c, "enable_segmented_proactive_content_cleanup", False)
+        self.segmented_proactive_content_cleanup_scope = self._cfg_str(c, "segmented_proactive_content_cleanup_scope", "all", "all")
+        if self.segmented_proactive_content_cleanup_scope not in {"all", "trailing"}:
+            self.segmented_proactive_content_cleanup_scope = "all"
         self.segmented_proactive_content_cleanup_rule = str(c.get("segmented_proactive_content_cleanup_rule", r"[\n]"))
         cleanup_words = c.get("segmented_proactive_content_cleanup_words", ["\n"])
         self.segmented_proactive_content_cleanup_words = (
@@ -1337,9 +1340,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         return await self._pc_qzone_view_feed_impl(event, user_id=user_id, pos=pos, like=like, reply=reply)
 
     @filter.llm_tool(name="pc_qzone_publish_feed")
-    async def pc_qzone_publish_feed(self, event: AstrMessageEvent, text: str = "") -> str:
+    async def pc_qzone_publish_feed(self, event: AstrMessageEvent, text: str = "", **kwargs) -> str:
         """发布一条 QQ 空间说说。必须通过 text 参数传入最终正文。"""
-        return await self._pc_qzone_publish_feed_impl(event, text)
+        return await self._pc_qzone_publish_feed_impl(event, text, **kwargs)
 
     @filter.llm_tool(name="pc_get_group_id_by_name")
     async def pc_get_group_id_by_name(self, event: AstrMessageEvent, **kwargs) -> str:
@@ -2424,6 +2427,10 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self._qzone_note_event_bot(event)
         received_ts = _now_ts()
         user_id = str(event.get_sender_id())
+        self_id = self._event_self_id(event)
+        if user_id and self_id and user_id == self_id:
+            logger.info("[PrivateCompanion] 忽略 Bot 自己的私聊回流事件: user=%s", user_id)
+            return
         sender_display_name = _single_line(self._sender_display_name(event), 40)
         text = _single_line(event.message_str, 120)
         if text.startswith(("陪伴", "/陪伴", "私聊陪伴", "主动陪伴")):
@@ -2471,6 +2478,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             self._note_private_display_name_observation(fast_user, user_id, sender_display_name, now=received_ts)
             fast_user["last_seen"] = received_ts
             fast_user["last_user_message"] = text
+            self._apply_user_rest_silence_from_message(fast_user, text, now=received_ts)
             fast_user["inbound_count"] = _safe_int(fast_user.get("inbound_count"), 0) + 1
             fast_user["relationship_score"] = _safe_int(fast_user.get("relationship_score"), 0) + 1
             fast_user["ignored_streak"] = 0
@@ -2625,6 +2633,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             user["ignored_streak"] = 0
             if text:
                 user["last_user_message"] = text
+                self._apply_user_rest_silence_from_message(user, text, now=received_ts)
                 self._apply_private_image_vision_negative_feedback(user, text)
                 user["episode_message_count"] = _safe_int(user.get("episode_message_count"), 0, 0) + 1
                 self._update_expression_profile_from_message(user, text)
@@ -2674,6 +2683,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self._qzone_note_event_bot(event)
         if not self.enable_group_companion:
             return
+        received_ts = _now_ts()
         text = _single_line(event.message_str, 260)
         if not text:
             return
@@ -2689,6 +2699,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         sender_name = self._sender_display_name(event)
         registration_payload = None
         continuation: bool | None = False
+        resting_mention_notice = ""
         scene: dict[str, Any] = {}
         wakeup_state_effect: dict[str, Any] = {}
         group_for_judge: dict[str, Any] = {}
@@ -2700,22 +2711,48 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 self._save_data_sync()
                 return
             group = self._get_group(group_id)
-            scene = self._infer_group_scene(event, group, sender_id=sender_id, sender_name=sender_name, text=text)
-            high_intensity_state = self._group_high_intensity_state(group)
-            continuation = await self._group_message_is_bot_continuation(
+            _, resting_mention_notice = self._group_resting_mention_notice(
+                event,
                 group,
-                sender_id,
-                sender_name,
-                scene,
-                text,
-                allow_llm=False,
+                sender_id=sender_id,
+                now=received_ts,
             )
+            if resting_mention_notice:
+                self._save_data_sync()
+            scene = self._infer_group_scene(event, group, sender_id=sender_id, sender_name=sender_name, text=text)
+            if resting_mention_notice:
+                continuation = True
+                scene.update(
+                    {
+                        "trigger": "group_wakeup_resting_mention",
+                        "talking_to": "bot",
+                        "talking_to_name": "你",
+                        "reason": "mentioned_resting_user",
+                        "wakeup_word": "@休息用户",
+                        "wakeup_strength": "strong",
+                        "wakeup_strength_label": "明确需要你接话",
+                        "wakeup_instruction": (
+                            f"群友刚刚 @ 了一个已明确在休息的用户（内部提示：{resting_mention_notice}）。请用当前人格自然提醒发起 @ 的群友晚点再叫他；"
+                            "语气柔和、像群友接话，不要像系统通知；不要私聊或 @ 休息用户，不要泄露具体休息截止时间或私聊原因。"
+                        ),
+                    }
+                )
+            high_intensity_state = self._group_high_intensity_state(group)
+            if not resting_mention_notice:
+                continuation = await self._group_message_is_bot_continuation(
+                    group,
+                    sender_id,
+                    sender_name,
+                    scene,
+                    text,
+                    allow_llm=False,
+                )
             if continuation is None:
                 if high_intensity_state.get("active"):
                     continuation = False
                 else:
                     group_for_judge = deepcopy(group)
-                    active_for_judge = deepcopy(self._group_active_conversation(group))
+                active_for_judge = deepcopy(self._group_active_conversation(group))
 
         if continuation is None:
             judged = await self._group_followup_llm_judge(
@@ -2731,7 +2768,26 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         async with self._data_lock:
             group = self._get_group(group_id)
             scene = self._infer_group_scene(event, group, sender_id=sender_id, sender_name=sender_name, text=text)
-            if continuation:
+            if resting_mention_notice:
+                setattr(event, "is_at_or_wake_command", True)
+                setattr(event, "is_wake", True)
+                scene.update(
+                    {
+                        "trigger": "group_wakeup_resting_mention",
+                        "talking_to": "bot",
+                        "talking_to_name": "你",
+                        "reason": "mentioned_resting_user",
+                        "wakeup_word": "@休息用户",
+                        "wakeup_strength": "strong",
+                        "wakeup_strength_label": "明确需要你接话",
+                        "wakeup_fatigue": {},
+                        "wakeup_instruction": (
+                            f"群友刚刚 @ 了一个已明确在休息的用户（内部提示：{resting_mention_notice}）。请用当前人格自然提醒发起 @ 的群友晚点再叫他；"
+                            "语气柔和、像群友接话，不要像系统通知；不要私聊或 @ 休息用户，不要泄露具体休息截止时间或私聊原因。"
+                        ),
+                    }
+                )
+            elif continuation:
                 setattr(event, "is_at_or_wake_command", True)
                 setattr(event, "is_wake", True)
                 scene.update({"trigger": "bot_conversation_followup", "talking_to": "bot", "talking_to_name": "你", "reason": "contextual_followup_after_bot_wake"})

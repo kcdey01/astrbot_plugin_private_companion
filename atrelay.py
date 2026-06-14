@@ -530,6 +530,22 @@ class AtRelayMixin:
         )
         del log[:-80]
 
+    def _atrelay_target_resting_reason(self, user_id: str, *, now: float | None = None) -> str:
+        target_user_id = _single_line(user_id, 40)
+        if not target_user_id:
+            return ""
+        users = self.data.get("users", {})
+        user = users.get(target_user_id) if isinstance(users, dict) else None
+        if not isinstance(user, dict):
+            return ""
+        check_now = _now_ts() if now is None else now
+        rest_until = self._user_rest_silence_until(user, now=check_now)
+        if rest_until <= check_now:
+            return ""
+        reason = _single_line(user.get("user_rest_reason"), 80)
+        until_text = datetime.fromtimestamp(rest_until).strftime("%m-%d %H:%M")
+        return f"目标用户明确在休息中（静默至 {until_text}" + (f"，原因：{reason}" if reason else "") + "）"
+
     def _pop_due_atrelay_tasks_for_sender(self, group_id: str, sender_id: str) -> list[dict[str, Any]]:
         group = self._get_group(group_id)
         tasks = group.get("pending_atrelay_tasks")

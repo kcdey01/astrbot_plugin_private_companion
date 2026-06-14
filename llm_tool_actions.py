@@ -25,7 +25,7 @@ class LlmToolActionsMixin:
 【QQ 空间动态工具】
 当用户明确要求你查看说说、QQ 空间动态、点赞/评论说说,或要求你发一条说说时,可以使用 Private Companion 的 QQ 空间工具。
 - 查看说说：使用 `pc_qzone_view_feed`。不知道目标 QQ 时默认当前用户。
-- 发布说说：使用 `pc_qzone_publish_feed`。必须把最终要发布的正文放进 `text` 参数,例如 `{"text":"今天想慢一点。"}`；只有用户明确要求发布时才调用；不要把草稿当作已发布。
+- 发布说说：使用 `pc_qzone_publish_feed`。必须把最终要发布的正文放进 `text` 参数,例如 `{"text":"今天想慢一点。"}`；如果用户明确要求“发布刚才/最近生成的生活说说草稿”,可传 `{"use_latest_draft":true}`；不要空调用,不要把草稿当作已发布。
 - 发布内容必须服从当前人格与世界观,但不要泄露私聊隐私、内部状态数值、关系网资料或插件实现。
 - 工具失败时简短说明失败原因,不要假装已经发布或点赞。
 """.strip()
@@ -65,14 +65,17 @@ class LlmToolActionsMixin:
         except Exception as exc:
             return json.dumps({"status": "error", "message": _single_line(exc, 160)}, ensure_ascii=False)
 
-    async def _pc_qzone_publish_feed_impl(self, event: AstrMessageEvent, text: str = "") -> str:
-        content = _single_line(text, 300)
+    async def _pc_qzone_publish_feed_impl(self, event: AstrMessageEvent, text: str = "", **kwargs) -> str:
+        content = _single_line(text or kwargs.get("content") or kwargs.get("message") or kwargs.get("draft"), 300)
+        if not content and kwargs.get("use_latest_draft"):
+            state = self.data.get("qzone_integration") if isinstance(self.data.get("qzone_integration"), dict) else {}
+            content = _single_line(state.get("last_life_publish_draft") or state.get("last_life_publish_text"), 300)
         if not content:
             return json.dumps(
                 {
                     "status": "need_text",
                     "success": False,
-                    "message": "缺少 text 参数。请把要发布的说说正文作为 text 传入,不要空调用。",
+                    "message": "缺少 text 参数。请把要发布的说说正文作为 text 传入；若要发布最近自动生成的生活草稿,传 use_latest_draft=true。",
                     "required_args": {"text": "要发布到 QQ 空间的说说正文"},
                 },
                 ensure_ascii=False,
@@ -306,6 +309,9 @@ class LlmToolActionsMixin:
             at_label = _single_line(resolved.get("name"), 60)
             if not at_qq:
                 return "发送失败：未找到要 @ 的群友"
+            resting = self._atrelay_target_resting_reason(at_qq)
+            if resting:
+                return f"发送失败：{resting}，不会在群里继续 @ 打扰；可以改用延迟转述，等对方出现时再说。"
         platform = str(getattr(event, "unified_msg_origin", "") or "").split(":")[0] or self.target_platform or "aiocqhttp"
         target_umo = f"{platform}:GroupMessage:{target_group}"
         chain: list[Any] = []
@@ -337,6 +343,9 @@ class LlmToolActionsMixin:
         boundary = self._atrelay_boundary_guard(text)
         if boundary:
             return boundary
+        resting = self._atrelay_target_resting_reason(target_user)
+        if resting:
+            return f"私聊发送失败：{resting}，不会私聊叫醒；可以改成延迟转述或等对方醒来后再发。"
         duplicate = self._atrelay_duplicate_guard("private", target_user, text)
         if duplicate:
             return duplicate

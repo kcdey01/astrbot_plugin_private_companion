@@ -1434,6 +1434,80 @@ class EventDispatchMixin:
                     reply_to_id = str(value).strip()
         return {"self_id": self_id, "at_targets": at_targets, "at_all": at_all, "reply_to_id": reply_to_id}
 
+    def _event_at_user_ids(self, event: AstrMessageEvent) -> set[str]:
+        ids: set[str] = set()
+        for item in self._event_scene_signals(event).get("at_targets", []):
+            if not isinstance(item, dict) or item.get("is_bot"):
+                continue
+            user_id = re.sub(r"\D+", "", str(item.get("user_id") or ""))
+            if user_id:
+                ids.add(user_id)
+        raw_parts = [str(getattr(event, "message_str", "") or "")]
+        message_obj = getattr(event, "message_obj", None)
+        if message_obj is not None:
+            raw_parts.append(str(getattr(message_obj, "raw_message", "") or ""))
+        raw = "\n".join(raw_parts)
+        for match in re.finditer(r"\[At:(\d+)\]|@(\d{5,})", raw):
+            ids.add(match.group(1) or match.group(2))
+        return ids
+
+    def _group_resting_mention_notice(
+        self,
+        event: AstrMessageEvent,
+        group: dict[str, Any],
+        *,
+        sender_id: str,
+        now: float | None = None,
+    ) -> tuple[str, str]:
+        check_now = _now_ts() if now is None else now
+        self_id = self._event_self_id(event)
+        users = self.data.get("users", {})
+        if not isinstance(users, dict):
+            return "", ""
+        for target_id in sorted(self._event_at_user_ids(event)):
+            if not target_id or target_id == sender_id or target_id == self_id:
+                continue
+            user = users.get(target_id)
+            if not isinstance(user, dict):
+                continue
+            rest_until = self._user_rest_silence_until(user, now=check_now)
+            if rest_until <= check_now:
+                continue
+            log = group.setdefault("resting_at_notice_log", [])
+            if not isinstance(log, list):
+                log = []
+                group["resting_at_notice_log"] = log
+            kept = [
+                item for item in log
+                if isinstance(item, dict) and check_now - _safe_float(item.get("ts"), 0) <= 3600
+            ]
+            signature = f"{sender_id}:{target_id}"
+            if any(
+                str(item.get("signature") or "") == signature
+                and check_now - _safe_float(item.get("ts"), 0) <= 10 * 60
+                for item in kept
+            ):
+                group["resting_at_notice_log"] = kept
+                return "", ""
+            kept.append({"ts": check_now, "signature": signature, "sender_id": sender_id, "target_id": target_id})
+            group["resting_at_notice_log"] = kept[-50:]
+            target_name = _single_line(
+                user.get("nickname")
+                or user.get("last_display_name")
+                or user.get("display_name")
+                or target_id,
+                24,
+            )
+            logger.info(
+                "[PrivateCompanion] 群聊 @ 休息用户提醒: group=%s sender=%s target=%s until=%s",
+                self._extract_group_id_from_event(event),
+                sender_id,
+                target_id,
+                datetime.fromtimestamp(rest_until).strftime("%m-%d %H:%M"),
+            )
+            return target_id, f"{target_name}现在在休息，晚点再叫他吧。"
+        return "", ""
+
     def _event_priority(self, event: dict[str, Any]) -> tuple[int, float]:
         reason = str(event.get("reason") or "")
         action = str(event.get("action") or "")
@@ -1731,16 +1805,51 @@ class EventDispatchMixin:
         def _clean_segment(segment: str) -> str:
             original = str(segment or "")
             cleaned_parts: list[str] = []
+            cleanup_scope = str(getattr(self, "segmented_proactive_content_cleanup_scope", "all") or "all")
+
+            def _strip_trailing_words(value: str, words: list[str]) -> str:
+                stripped = str(value or "").rstrip()
+                if not words:
+                    return stripped
+                sorted_words = sorted({str(word) for word in words if str(word) != ""}, key=len, reverse=True)
+                changed = True
+                while changed and stripped:
+                    changed = False
+                    for word in sorted_words:
+                        if stripped.endswith(word):
+                            stripped = stripped[: -len(word)].rstrip()
+                            changed = True
+                            break
+                return stripped
+
+            def _strip_trailing_pattern(value: str, pattern: re.Pattern[str]) -> str:
+                stripped = str(value or "").rstrip()
+                while stripped:
+                    trailing_match = None
+                    for match in pattern.finditer(stripped):
+                        if match.end() == len(stripped) and match.start() != match.end():
+                            trailing_match = match
+                    if trailing_match is None:
+                        break
+                    stripped = stripped[: trailing_match.start()].rstrip()
+                return stripped
+
             for chunk, protected in _protected_cleanup_chunks(original):
                 if protected:
                     cleaned_parts.append(chunk)
                     continue
                 cleaned_chunk = chunk
                 if cleanup_words:
-                    for word in cleanup_words:
-                        cleaned_chunk = cleaned_chunk.replace(word, "")
+                    if cleanup_scope == "trailing":
+                        cleaned_chunk = _strip_trailing_words(cleaned_chunk, cleanup_words)
+                    else:
+                        for word in cleanup_words:
+                            cleaned_chunk = cleaned_chunk.replace(word, "")
                 elif cleanup_pattern:
-                    cleaned_chunk = cleanup_pattern.sub("", cleaned_chunk)
+                    if cleanup_scope == "trailing":
+                        cleaned_chunk = _strip_trailing_pattern(cleaned_chunk, cleanup_pattern)
+                    else:
+                        cleaned_chunk = cleanup_pattern.sub("", cleaned_chunk)
                 cleaned_parts.append(cleaned_chunk)
             cleaned = "".join(cleaned_parts)
             cleaned = self._strip_leading_sentence_boundary_artifacts(cleaned)
