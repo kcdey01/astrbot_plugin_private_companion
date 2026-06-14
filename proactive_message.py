@@ -1053,7 +1053,95 @@ class ProactiveMessageMixin:
         }
         for key, value in replacements.items():
             prompt = prompt.replace(key, value)
+        consequence_hint = self._format_action_consequence_hint(user)
+        if consequence_hint:
+            prompt = (
+                f"{prompt}\n\n"
+                "【最近主动行为闭环】\n"
+                f"{consequence_hint}\n"
+                "使用方式：只当作关系和节奏背景；如果上一条还没被接住，这次要更轻，不要装作用户刚刚主动开了新话题。"
+            )
+        specificity_hint = self._format_proactive_specificity_hint(
+            user,
+            reason=reason,
+            action=action,
+            action_context=action_context,
+            motive=motive,
+        )
+        if specificity_hint:
+            prompt = f"{prompt}\n\n{specificity_hint}"
+        style_fatigue_hint = self._format_proactive_style_fatigue_hint(user)
+        if style_fatigue_hint:
+            prompt = f"{prompt}\n\n{style_fatigue_hint}"
         return prompt.strip()
+
+    def _format_proactive_specificity_hint(
+        self,
+        user: dict[str, Any],
+        *,
+        reason: str,
+        action: str,
+        action_context: str = "",
+        motive: str = "",
+    ) -> str:
+        ignored = _safe_int(user.get("ignored_streak"), 0, 0)
+        topic = _single_line(user.get("planned_proactive_topic"), 60)
+        motive_text = _single_line(motive or user.get("planned_proactive_motive"), 120)
+        context = _single_line(action_context, 180)
+        has_specific_context = bool(
+            topic
+            or motive_text
+            or (
+                context
+                and not context.startswith("message")
+                and "只发送" not in context
+                and "普通私聊文本" not in context
+            )
+        )
+        lines = [
+            "【主动意图具体化】",
+            "主动消息宁少勿泛：只有一个具体由头就围绕它说半句，不要同时问候、关心、汇报状态、另开话题。",
+            "优先选择当前日程里的一个小物件/动作/余味，或者上一条闭环里尚未接住的一点；没有具体由头时就写得更短。",
+            "禁止把“想找你、刷存在感、来看看你、最近忙不忙、辛苦了”当作唯一内容。",
+        ]
+        if not has_specific_context and reason in {"check_in", "quiet_care", "state_share"} and action == "message":
+            lines.append("本轮没有强具体由头：最多一句，像轻轻放下，不要追问，不要扩成主动陪伴小作文。")
+        if ignored >= 1:
+            lines.append(f"对方已经连续 {ignored} 次没接主动消息：这次要更低压、更短，不要期待回复。")
+        return "\n".join(lines)
+
+    def _format_proactive_style_fatigue_hint(self, user: dict[str, Any]) -> str:
+        items = user.get("action_consequences")
+        if not isinstance(items, list):
+            return ""
+        recent_texts: list[str] = []
+        for item in items[-8:]:
+            if not isinstance(item, dict):
+                continue
+            text = _single_line(item.get("text"), 90)
+            if text:
+                recent_texts.append(text)
+        if len(recent_texts) < 2:
+            return ""
+        openings: dict[str, int] = {}
+        soft_tokens = ("唔", "嗯", "诶", "呀", "啦", "嘛", "哦", "呢")
+        soft_count = 0
+        for text in recent_texts:
+            opening = re.split(r"[，,。！？!?…\s]", text, maxsplit=1)[0][:8]
+            if opening:
+                openings[opening] = openings.get(opening, 0) + 1
+            soft_count += sum(text.count(token) for token in soft_tokens)
+        repeated = [key for key, count in openings.items() if count >= 2]
+        lines = [
+            "【语言风格疲劳】",
+            "最近主动消息的口癖和开头会疲劳。不要复用最近几次的开头、句式和同一组语气词。",
+            "这次换一种更具体的落点：可以少一点软词、少一点省略号，或者改成干净短句。",
+        ]
+        if repeated:
+            lines.append("最近重复开头：" + " / ".join(repeated[:4]) + "。本轮避开这些开头。")
+        if soft_count >= max(6, len(recent_texts) * 2):
+            lines.append("最近语气词偏多：本轮减少“唔/嗯/诶/呀/啦/嘛/哦/呢”和连续省略号。")
+        return "\n".join(lines)
 
     def _proactive_time_guard_hint(self, reason: str, current_item: dict[str, Any] | None) -> str:
         activity = _single_line((current_item or {}).get("activity"), 80)
@@ -1429,7 +1517,59 @@ class ProactiveMessageMixin:
                 action=action,
                 action_context=action_context,
             )
+        cleaned = self._apply_proactive_style_variation(cleaned, user)
+        if self._should_drop_vague_generic_proactive(user, reason=reason, action=action, action_context=action_context, text=cleaned):
+            return ""
         return self._normalize_proactive_sentence_flow(cleaned)
+
+    def _should_drop_vague_generic_proactive(
+        self,
+        user: dict[str, Any],
+        *,
+        reason: str,
+        action: str,
+        action_context: str = "",
+        text: str = "",
+    ) -> bool:
+        if reason != "check_in" or action != "message":
+            return False
+        if _safe_int(user.get("ignored_streak"), 0, 0) < 2:
+            return False
+        context = _single_line(action_context, 180)
+        if context and not context.startswith("message") and "普通私聊文本" not in context:
+            return False
+        cleaned = _single_line(text, 160)
+        if not cleaned:
+            return True
+        vague_tokens = ("想找你", "来看看你", "刷存在感", "最近忙不忙", "辛苦了", "在吗", "有点想你", "没什么事", "就是想")
+        concrete_markers = ("刚", "路上", "窗", "雨", "书", "饭", "水", "图", "群", "视频", "作业", "游戏", "梦")
+        return any(token in cleaned for token in vague_tokens) and not any(token in cleaned for token in concrete_markers)
+
+    def _apply_proactive_style_variation(self, text: str, user: dict[str, Any]) -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return ""
+        items = user.get("action_consequences")
+        if not isinstance(items, list):
+            return cleaned
+        recent_texts = [
+            _single_line(item.get("text"), 80)
+            for item in items[-5:]
+            if isinstance(item, dict) and _single_line(item.get("text"), 80)
+        ]
+        if not recent_texts:
+            return cleaned
+        current_opening = re.split(r"[，,。！？!?…\s]", _single_line(cleaned, 80), maxsplit=1)[0][:6]
+        repeated_opening = current_opening and any(
+            re.split(r"[，,。！？!?…\s]", text, maxsplit=1)[0][:6] == current_opening
+            for text in recent_texts
+        )
+        if repeated_opening:
+            cleaned = re.sub(r"^(唔|嗯|诶|啊|欸)[…\.。!！?？~～\s，,]*", "", cleaned).strip()
+            cleaned = re.sub(r"^(刚好|突然|我就是|我来|来找你)[^，,。！？!?…\n]{0,16}[，,。！？!?…\s]*", "", cleaned).strip()
+        if sum(cleaned.count(token) for token in ("唔", "嗯", "诶", "呀", "啦", "嘛", "哦", "呢")) >= 5:
+            cleaned = re.sub(r"(呀|啦|嘛|哦|呢)(?=.*\1)", "", cleaned)
+        return cleaned or str(text or "").strip()
 
     def _action_style_hint(self, action: str, reason: str) -> str:
         terms = self._worldview_terms()
@@ -4005,7 +4145,10 @@ class ProactiveMessageMixin:
             reasons.append("important_date_share")
         if current_item and self.include_schedule_in_messages and random.random() < 0.22:
             reasons.append("background_schedule")
-        reasons.append("check_in")
+        if not reasons:
+            reasons.append("check_in")
+        elif _safe_int(user.get("ignored_streak"), 0, 0) <= 0 and random.random() < 0.12:
+            reasons.append("check_in")
         reason = planned_reason if planned_reason and self._is_reason_allowed_now(planned_reason) else random.choice(reasons)
 
         if reason == "insomnia_night":

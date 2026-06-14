@@ -347,7 +347,7 @@ QQ空间 = 公开札记
         </div>
         <div id="worldbookSummary" class="worldbook-summary"></div>
         <div class="worldbook-toolbar">
-          <input id="worldbookMemberFilter" type="search" placeholder="筛选 QQ / 名字 / 别名" />
+          <input id="worldbookMemberFilter" type="search" placeholder="筛选 QQ / B站 / 名字 / 别名" />
           <span id="worldbookSourceFiles" class="muted"></span>
         </div>
         <div class="worldbook-layout">
@@ -357,7 +357,7 @@ QQ空间 = 公开札记
               <span id="worldbookMemberCount" class="muted"></span>
             </div>
             <form id="worldbookAddMemberForm" class="inline-form manage-form">
-              <label>身份 QQ <input name="user_id" placeholder="例如 123456789" required inputmode="numeric" /></label>
+              <label>身份键 <input name="user_id" placeholder="QQ 号或 bili:UID" required /></label>
               <label>名称 <input name="name" placeholder="成员显示名" /></label>
               <label>优先级 <input name="priority" type="number" value="120" /></label>
               <button type="submit">新增节点</button>
@@ -718,8 +718,14 @@ QQ空间 = 公开札记
                 <label class="wide-field">分段正则 <textarea name="segmented_proactive_regex" rows="2" placeholder="仅 regex 模式使用"></textarea></label>
                 <label class="wide-field">分段词列表 <textarea name="segmented_proactive_split_words" rows="3" placeholder="仅 words 模式使用；一行一个或逗号分隔"></textarea></label>
                 <label class="toggle-row"><input name="enable_segmented_proactive_content_cleanup" type="checkbox" /> <span>启用分段内容清理</span></label>
+                <label>清理范围
+                  <select name="segmented_proactive_content_cleanup_scope">
+                    <option value="all">全段清理</option>
+                    <option value="trailing">仅句尾清理</option>
+                  </select>
+                </label>
                 <label class="wide-field">清理正则 <textarea name="segmented_proactive_content_cleanup_rule" rows="2" placeholder="仅 regex 模式使用"></textarea></label>
-                <label class="wide-field">清理词列表 <textarea name="segmented_proactive_content_cleanup_words" rows="3" placeholder="仅 words 模式使用；例如句号、空格或换行"></textarea></label>
+                <label class="wide-field">清理词列表 <textarea name="segmented_proactive_content_cleanup_words" rows="3" placeholder="仅 words 模式使用；例如句尾句号、省略号或换行"></textarea></label>
                 <label>分段间隔方式
                   <select name="segmented_proactive_interval_method">
                     <option value="log">按字数对数</option>
@@ -772,6 +778,7 @@ QQ空间 = 公开札记
               <label>高强度唤醒阈值 <input name="group_high_intensity_wakeup_threshold" type="number" min="2" max="20" /></label>
               <label>收口持续秒数 <input name="group_high_intensity_cooldown_seconds" type="number" min="30" max="1800" /></label>
               <label>合并等待秒数 <input name="group_high_intensity_merge_seconds" type="number" min="1" max="30" /></label>
+              <label class="toggle-row"><input name="enable_group_persona_denoise" type="checkbox" /> <span>群聊人格降噪</span></label>
               <label class="toggle-row"><input name="enable_forward_message_adaptation" type="checkbox" /> <span>启用合并消息阅读</span></label>
               <label>合并消息适配方式
                 <select name="forward_message_mode">

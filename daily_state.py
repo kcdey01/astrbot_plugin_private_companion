@@ -6555,7 +6555,14 @@ class DailyStateMixin:
                     current["proactive_sent_count"] = _safe_int(current.get("proactive_sent_count"), 0) + 1
                     current["ignored_streak"] = _safe_int(current.get("ignored_streak"), 0) + 1
                     current["awaiting_reply_since"] = _now_ts()
-                    self._note_action_sent(current, current["last_proactive_action"])
+                    self._note_action_sent(
+                        current,
+                        current["last_proactive_action"],
+                        reason=reason,
+                        text=text,
+                        motive=planned_motive_for_send,
+                        action_summary=action_summary,
+                    )
                     existing_followup = current.get("pending_followup_event")
                     if isinstance(existing_followup, dict) and existing_followup:
                         current["pending_followup_event"] = existing_followup

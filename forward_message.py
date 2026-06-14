@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -830,8 +830,9 @@ class ForwardMessageMixin:
         if not self.forward_message_image_vision:
             return ""
         limit = max(0, int(getattr(self, "forward_message_image_limit", 0) or 0))
+        original_sources = [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:limit]
         sources = await self._prepare_private_image_sources_for_model(
-            [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:limit],
+            original_sources,
             namespace="forward_vision",
         )
         if not sources:
@@ -870,6 +871,8 @@ class ForwardMessageMixin:
         image_urls = [url for _, url in image_items]
         if not image_urls:
             return ""
+        image_aliases = self._private_image_cache_aliases_for_sources([*original_sources, *sources])
+        image_count = len(original_sources) or len(sources)
         default_prompt = (
             "请按出现顺序把合并消息里的图片压缩成短摘要。每张图只写一行,不要写标题、分析过程或长篇描述。\n"
             "格式：第N张：<图片类型>；内容=<可见文字/主体/动作/关键细节,50字内>；表达=<用户可能借图表达的情绪、态度、疑问、用途或梗,45字内>。\n"
@@ -896,7 +899,14 @@ class ForwardMessageMixin:
             if self_recognition_prompt and self_recognition_prompt not in prompt:
                 prompt = f"{prompt}\n\n{self_recognition_prompt}"
             cache_key = self._private_image_vision_cache_key(image_keys, provider_id, prompt, scope="forward_image")
-            cached_text = self._get_private_image_vision_cache(cache_key, provider_id=provider_id, image_keys=image_keys, scope="forward_image")
+            cached_text = self._get_private_image_vision_cache(
+                cache_key,
+                provider_id=provider_id,
+                image_keys=image_keys,
+                image_aliases=image_aliases,
+                image_count=image_count,
+                scope="forward_image",
+            )
             if cached_text:
                 logger.info(
                     "[PrivateCompanion] 合并消息图片视觉命中缓存: provider=%s images=%s preview=%s",
@@ -936,7 +946,16 @@ class ForwardMessageMixin:
                     len(cleaned_text),
                     _single_line(cleaned_text, 220),
                 )
-                self._set_private_image_vision_cache(cache_key, cleaned_text, provider_id=provider_id, image_keys=image_keys, prompt=prompt, scope="forward_image")
+                self._set_private_image_vision_cache(
+                    cache_key,
+                    cleaned_text,
+                    provider_id=provider_id,
+                    image_keys=image_keys,
+                    image_aliases=image_aliases,
+                    image_count=image_count,
+                    prompt=prompt,
+                    scope="forward_image",
+                )
                 return cleaned_text
             except asyncio.TimeoutError as exc:
                 elapsed_ms = int((time.time() - start) * 1000) if "start" in locals() else 0

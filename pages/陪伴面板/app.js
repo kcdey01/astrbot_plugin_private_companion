@@ -296,6 +296,7 @@ const featureMeta = {
   enable_group_slang_learning: ["群黑话学习", "记录群内常用梗、简称和特殊表达。"],
   enable_group_member_profiles: ["群成员画像", "记录成员发言习惯和群内角色，帮助判断气氛。"],
   enable_group_context_injection: ["群上下文注入", "在群聊回复时加入群氛围、话题和成员信息。"],
+  enable_group_persona_denoise: ["群聊人格降噪", "降低群聊里的私聊腔、状态汇报和关系画像外溢。"],
   enable_forward_message_adaptation: ["合并消息阅读", "读取合并转发节点并整理成自然聊天记录，让 Bot 能理解转发里的发言顺序、人物和话题。"],
   enable_group_scene_awareness: ["群聊场景感知", "推断当前消息是在对 Bot、某个群友还是整个群说话，减少误以为别人都在问自己。"],
   enable_group_reality_promise_guard: ["阻止群聊现实承诺", "群聊里避免承诺自己能拉人、修网、开房间或操作现实设备；私聊扮演不受影响。"],
@@ -377,6 +378,7 @@ const featureGroups = [
     keys: [
       "enable_group_companion",
       "enable_group_context_injection",
+      "enable_group_persona_denoise",
       "enable_group_scene_awareness",
       "enable_group_reality_promise_guard",
       "enable_group_wakeup_enhancement",
@@ -527,6 +529,7 @@ const configLabels = {
   segmented_proactive_regex: "分段正则",
   segmented_proactive_split_words: "分段词列表",
   enable_segmented_proactive_content_cleanup: "分段内容清理",
+  segmented_proactive_content_cleanup_scope: "清理范围",
   segmented_proactive_content_cleanup_rule: "清理正则",
   segmented_proactive_content_cleanup_words: "清理词列表",
   segmented_proactive_interval_method: "分段间隔方式",
@@ -766,8 +769,9 @@ const configDescriptions = {
   segmented_proactive_regex: "分段模式为 regex 时使用的切分正则。",
   segmented_proactive_split_words: "分段模式为 words 时使用的分段词。推荐一行一个；中文逗号要单独写一行，或写“逗号”。英文点号会把连续 ... 当成一个省略号边界；网址内部字符会自动保护，完整网址结束处可作为自然断点；括号或引号内部字符会跳过。",
   enable_segmented_proactive_content_cleanup: "开启后会在分段时清理分隔符或无意义字符。",
+  segmented_proactive_content_cleanup_scope: "全段清理会移除片段内所有匹配内容；仅句尾清理只移除每段末尾连续出现的清理词/正则。",
   segmented_proactive_content_cleanup_rule: "regex 模式下的后清理正则。",
-  segmented_proactive_content_cleanup_words: "words 模式下的后清理词。可用于清理句号、空格等词模式分隔符。",
+  segmented_proactive_content_cleanup_words: "words 模式下的后清理词。配合“仅句尾清理”时，适合只去掉句尾句号、省略号或换行。",
   segmented_proactive_interval_method: "log 会按分段长度计算自然间隔；random 会在最小/最大间隔之间随机。普通 LLM 回复的后续片段会在后台等待，不阻塞首段发送。",
   segmented_proactive_interval_min: "两段消息之间的最小等待秒数；普通 LLM 回复只影响后台补发片段。",
   segmented_proactive_interval_max: "两段消息之间的最大等待秒数；普通 LLM 回复只影响后台补发片段。",
@@ -903,7 +907,7 @@ const featureSettingGroups = {
   enable_open_loop_tracking: ["max_dialogue_episodes"],
   enable_user_habit_learning: ["user_habit_min_count", "user_habit_max_items"],
   enable_humanized_states: ["humanized_state_intensity", "inject_passive_states", "enable_cycle_state"],
-  enable_segmented_proactive_reply: ["segmented_proactive_scope", "segmented_proactive_threshold", "segmented_proactive_min_segment_chars", "segmented_proactive_max_segments", "segmented_proactive_split_mode", "segmented_proactive_regex", "segmented_proactive_split_words", "enable_segmented_proactive_content_cleanup", "segmented_proactive_content_cleanup_rule", "segmented_proactive_content_cleanup_words", "segmented_proactive_interval_method", "segmented_proactive_interval_min", "segmented_proactive_interval_max", "segmented_proactive_log_base"],
+  enable_segmented_proactive_reply: ["segmented_proactive_scope", "segmented_proactive_threshold", "segmented_proactive_min_segment_chars", "segmented_proactive_max_segments", "segmented_proactive_split_mode", "segmented_proactive_regex", "segmented_proactive_split_words", "enable_segmented_proactive_content_cleanup", "segmented_proactive_content_cleanup_scope", "segmented_proactive_content_cleanup_rule", "segmented_proactive_content_cleanup_words", "segmented_proactive_interval_method", "segmented_proactive_interval_min", "segmented_proactive_interval_max", "segmented_proactive_log_base"],
   inject_passive_states: ["humanized_state_intensity"],
   enable_cycle_state: ["humanized_state_intensity"],
   enable_skill_growth_simulation: ["skill_growth_rate", "skill_growth_custom_skills", "enable_skill_growth_schedule_influence", "skill_growth_schedule_influence_strength"],
@@ -924,7 +928,8 @@ const featureSettingGroups = {
   enable_almanac_perception: ["environment_perception_timezone"],
   enable_yesterday_screen_diary_context: ["screen_diary_context_max_chars"],
   enable_group_companion: ["max_group_recent_messages", "max_group_slang_terms"],
-  enable_group_context_injection: ["max_group_recent_messages", "group_scene_recent_limit"],
+  enable_group_context_injection: ["enable_group_persona_denoise", "max_group_recent_messages", "group_scene_recent_limit"],
+  enable_group_persona_denoise: ["max_group_recent_messages", "group_scene_recent_limit"],
   enable_forward_message_adaptation: ["forward_message_mode", "forward_message_max_messages", "forward_message_max_chars", "forward_message_parse_nested", "forward_message_image_vision", "forward_message_image_limit"],
   enable_group_scene_awareness: ["group_scene_recent_limit", "group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
   enable_group_wakeup_enhancement: ["group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_scene_recent_limit"],
@@ -1009,7 +1014,7 @@ const featureSettingSections = {
     {
       title: "内容清理",
       note: "用于去掉句尾分隔符、空格或换行；括号和双引号内的内容会被保护。",
-      keys: ["enable_segmented_proactive_content_cleanup", "segmented_proactive_content_cleanup_rule", "segmented_proactive_content_cleanup_words"],
+      keys: ["enable_segmented_proactive_content_cleanup", "segmented_proactive_content_cleanup_scope", "segmented_proactive_content_cleanup_rule", "segmented_proactive_content_cleanup_words"],
     },
     {
       title: "发送间隔",
@@ -1105,6 +1110,7 @@ const featureSettingTypes = {
   segmented_proactive_scope: { type: "select", options: [["proactive_only", "仅插件主动"], ["all_llm", "全部 LLM 纯文本回复"]] },
   segmented_proactive_split_mode: { type: "select", options: [["regex", "正则"], ["words", "分段词列表"]] },
   segmented_proactive_interval_method: { type: "select", options: [["log", "按字数对数"], ["random", "随机"]] },
+  segmented_proactive_content_cleanup_scope: { type: "select", options: [["all", "全段清理"], ["trailing", "仅句尾清理"]] },
   recall_forbidden_scope: { type: "select", options: [["bot_and_group", "Bot 自己 + 群聊"], ["bot_only", "仅 Bot 自己"], ["group_only", "仅群聊"]] },
   atrelay_default_relay_style: { type: "select", options: [["persona", "语气转译"], ["soft", "委婉转述"], ["original", "原话模式"]] },
   worldbook_config_paths: { type: "textarea" },
@@ -2895,6 +2901,10 @@ function renderWorldbook() {
     const haystack = [
       item.user_id,
       item.name,
+      item.identity_type,
+      item.linked_qq_user_id,
+      item.linked_bili_profile_id,
+      ...(Array.isArray(item.external_ids) ? item.external_ids : []),
       ...(Array.isArray(item.aliases) ? item.aliases : []),
       ...(Array.isArray(item.observed_names) ? item.observed_names : []),
       item.content,
@@ -2903,7 +2913,7 @@ function renderWorldbook() {
   });
 
   $("#worldbookSummary").innerHTML = [
-    worldbookStat("QQ 身份锚点", worldbook.enabled_member_count || 0, `${worldbook.member_count || 0} 个关系节点`),
+    worldbookStat("身份节点", worldbook.enabled_member_count || 0, `${worldbook.member_count || 0} 个关系节点`),
     worldbookStat("群资料", worldbook.group_count || 0, "可用于群聊上下文"),
     worldbookStat("待确认观察", worldbook.pending_observation_total || 0, "确认后才写入重要记忆"),
     worldbookStat("识别方式", worldbook.enabled ? "QQ 精确" : "关闭", worldbook.match_aliases ? "称呼辅助开启" : "仅 QQ 确认"),
@@ -2960,18 +2970,24 @@ function worldbookStat(label, value, note) {
 function worldbookMemberCard(item) {
   const aliases = Array.isArray(item.aliases) ? item.aliases : [];
   const observed = Array.isArray(item.observed_names) ? item.observed_names : [];
+  const externalIds = Array.isArray(item.external_ids) ? item.external_ids : [];
   const memories = Array.isArray(item.important_memories) ? item.important_memories : [];
   const pending = Array.isArray(item.pending_observations) ? item.pending_observations : [];
   const chips = [...aliases.map((name) => `别名：${name}`), ...observed.map((name) => `群名片：${name}`)].slice(0, 12);
   const sourceEntries = Array.isArray(item.source_entries) ? item.source_entries : [];
   const detailId = `worldbook-editor-${String(item.user_id || "").replace(/[^A-Za-z0-9_-]/g, "_")}`;
   const previewItems = worldbookMemberPreviewItems(item, memories);
+  const isExternal = item.identity_type === "external" || !/^\d+$/.test(String(item.user_id || ""));
+  const identityLabel = isExternal ? "外部身份" : "身份 QQ";
+  const bindLine = item.linked_qq_user_id
+    ? ` · 已绑定 QQ ${escapeHtml(item.linked_qq_user_id)}`
+    : (item.linked_bili_profile_id ? ` · B站 ${escapeHtml(item.linked_bili_profile_id)}` : "");
   return `
     <section class="worldbook-member-card ${item.enabled ? "" : "off"}" data-worldbook-user-id="${escapeHtml(item.user_id || "")}">
       <div class="worldbook-member-head">
         <div>
           <b>${escapeHtml(item.name || item.user_id || "未命名成员")}</b>
-          <span>身份 QQ ${escapeHtml(item.user_id || "-")} · 优先级 ${escapeHtml(item.priority ?? "-")}</span>
+          <span>${identityLabel} ${escapeHtml(item.user_id || "-")} · 优先级 ${escapeHtml(item.priority ?? "-")}${bindLine}</span>
         </div>
         <div class="worldbook-card-actions">
           <button type="button" data-worldbook-edit="${escapeHtml(detailId)}">编辑</button>
@@ -2984,6 +3000,7 @@ function worldbookMemberCard(item) {
       <div class="worldbook-compact-meta">
         <span>${escapeHtml(aliases.length)} 个别名</span>
         <span>${escapeHtml(observed.length)} 个曾见群名片</span>
+        ${externalIds.length ? `<span>${escapeHtml(externalIds.length)} 个外部身份</span>` : ""}
         <span>${escapeHtml((item.important_memories || []).length)} 条记忆</span>
         ${pending.length ? `<span>${escapeHtml(pending.length)} 条待确认观察</span>` : ""}
         ${sourceEntries.length ? `<span>${escapeHtml(sourceEntries.slice(0, 2).join(" / "))}</span>` : ""}
@@ -3018,6 +3035,15 @@ function worldbookMemberCard(item) {
         <label>互动边界（可选）
           <textarea data-worldbook-boundary-note="${escapeHtml(item.user_id || "")}" rows="3">${escapeHtml(item.boundary_note || "")}</textarea>
         </label>
+        ${isExternal ? `
+          <label>绑定到已有 QQ（可选）
+            <input data-worldbook-linked-qq="${escapeHtml(item.user_id || "")}" placeholder="填已有 QQ 后保存，会合并到该关系节点" value="${escapeHtml(item.linked_qq_user_id || "")}" />
+          </label>
+        ` : `
+          <label>已关联外部身份
+            <input readonly value="${escapeHtml(externalIds.join(" / ") || item.linked_bili_profile_id || "暂无")}" />
+          </label>
+        `}
         <div class="worldbook-memory-list">
           ${pending.length ? pending.map((obs) => worldbookPendingObservationCard(item.user_id || "", obs)).join("") : ""}
           ${memories.length ? memories.map((memory, index) => worldbookMemoryCard(item.user_id || "", memory, index)).join("") : `<div class="empty small">暂无重要记忆</div>`}
@@ -3112,11 +3138,12 @@ async function handleWorldbookMemberAction(button) {
     const nameInput = findWorldbookField("name", userId);
     const priorityInput = findWorldbookField("priority", userId);
     const contentInput = findWorldbookField("content", userId);
+    const linkedQqInput = findWorldbookField("linked-qq", userId);
     const aliases = String(aliasBox?.value || "")
       .split(/[\n,，;；]+/)
       .map((item) => item.trim())
       .filter(Boolean);
-    await runAction(() => postJson("/worldbook/member/update", {
+    const payload = {
       user_id: userId,
       name: nameInput?.value || "",
       priority: Number(priorityInput?.value || 120),
@@ -3124,7 +3151,11 @@ async function handleWorldbookMemberAction(button) {
       identity_note: identityInput?.value || "",
       boundary_note: boundaryInput?.value || "",
       aliases,
-    }), "已保存关系节点", button);
+    };
+    if (linkedQqInput && String(linkedQqInput.value || "").trim()) {
+      payload.linked_qq_user_id = String(linkedQqInput.value || "").trim();
+    }
+    await runAction(() => postJson("/worldbook/member/update", payload), "已保存关系节点", button);
     return;
   }
   if (button.dataset.worldbookMemoryToggle !== undefined) {
@@ -5557,6 +5588,7 @@ function segmentedPreviewValues(root = document) {
     "segmented_proactive_regex",
     "segmented_proactive_split_words",
     "enable_segmented_proactive_content_cleanup",
+    "segmented_proactive_content_cleanup_scope",
     "segmented_proactive_content_cleanup_rule",
     "segmented_proactive_content_cleanup_words",
     "segmented_proactive_interval_method",
@@ -5571,6 +5603,7 @@ function segmentedPreviewValues(root = document) {
   });
   values.enable_segmented_proactive_reply = Boolean(values.enable_segmented_proactive_reply);
   values.enable_segmented_proactive_content_cleanup = Boolean(values.enable_segmented_proactive_content_cleanup);
+  values.segmented_proactive_content_cleanup_scope = String(values.segmented_proactive_content_cleanup_scope || "all");
   values.segmented_proactive_split_words = String(values.segmented_proactive_split_words ?? "");
   values.segmented_proactive_content_cleanup_words = String(values.segmented_proactive_content_cleanup_words ?? "");
   return values;
@@ -5589,6 +5622,7 @@ function simulateSegmentedProactive(text, values) {
   const splitMode = String(values.segmented_proactive_split_mode || "regex");
   const scope = String(values.segmented_proactive_scope || "proactive_only");
   const cleanupEnabled = Boolean(values.enable_segmented_proactive_content_cleanup);
+  const cleanupScope = String(values.segmented_proactive_content_cleanup_scope || "all");
   const minChars = Math.max(1, Number(values.segmented_proactive_min_segment_chars || 8));
   const maxSegments = Math.max(1, Number(values.segmented_proactive_max_segments || 3));
   const cleanupWords = parseSegmentedWordList(values.segmented_proactive_content_cleanup_words);
@@ -5601,6 +5635,37 @@ function simulateSegmentedProactive(text, values) {
   const cleanSegment = (segment) => {
     const original = String(segment || "");
     let cleaned = "";
+    const stripTrailingWords = (value, words) => {
+      let next = String(value || "").trimEnd();
+      const sortedWords = Array.from(new Set(words.filter((word) => word !== ""))).sort((a, b) => b.length - a.length);
+      let changed = true;
+      while (changed && next) {
+        changed = false;
+        for (const word of sortedWords) {
+          if (next.endsWith(word)) {
+            next = next.slice(0, -word.length).trimEnd();
+            changed = true;
+            break;
+          }
+        }
+      }
+      return next;
+    };
+    const stripTrailingRegex = (value, pattern) => {
+      let next = String(value || "").trimEnd();
+      if (!pattern) return next;
+      let changed = true;
+      while (changed && next) {
+        changed = false;
+        const matches = Array.from(next.matchAll(pattern));
+        const trailing = matches.reverse().find((match) => match.index != null && match.index + match[0].length === next.length && match[0].length > 0);
+        if (trailing) {
+          next = next.slice(0, trailing.index).trimEnd();
+          changed = true;
+        }
+      }
+      return next;
+    };
     segmentedProtectedCleanupChunks(original).forEach(([chunk, protectedChunk]) => {
       if (protectedChunk || !cleanupEnabled) {
         cleaned += chunk;
@@ -5608,11 +5673,15 @@ function simulateSegmentedProactive(text, values) {
       }
       let next = chunk;
       if (splitMode === "words") {
-        cleanupWords.forEach((word) => {
-          if (word !== "") next = next.split(word).join("");
-        });
+        if (cleanupScope === "trailing") {
+          next = stripTrailingWords(next, cleanupWords);
+        } else {
+          cleanupWords.forEach((word) => {
+            if (word !== "") next = next.split(word).join("");
+          });
+        }
       } else if (cleanupRegex) {
-        next = next.replace(cleanupRegex, "");
+        next = cleanupScope === "trailing" ? stripTrailingRegex(next, cleanupRegex) : next.replace(cleanupRegex, "");
       }
       cleaned += next;
     });
@@ -5740,6 +5809,7 @@ function updateSegmentedConfigVisibility(root = document) {
   const visibility = {
     segmented_proactive_regex: mode === "regex",
     segmented_proactive_split_words: mode === "words",
+    segmented_proactive_content_cleanup_scope: cleanupEnabled,
     segmented_proactive_content_cleanup_rule: cleanupEnabled && mode === "regex",
     segmented_proactive_content_cleanup_words: cleanupEnabled && mode === "words",
     segmented_proactive_interval_min: intervalMethod === "random",
@@ -6343,6 +6413,12 @@ const featureDetailGuides = {
     trigger: "Bot 准备在群聊回复时。",
     enabled: "Bot 更容易知道刚才在聊什么、提到的是谁。",
     disabled: "群回复主要依赖原始消息，上下文感会弱。",
+  },
+  enable_group_persona_denoise: {
+    summary: "群聊回复时降低人格外溢，减少私聊腔、状态汇报和关系画像直出。",
+    trigger: "Bot 准备在群聊回复时。",
+    enabled: "回复更贴当前群话题，更少硬插话和自报状态。",
+    disabled: "群聊会更完整吃到陪伴人格背景，但也更容易显得黏或跑偏。",
   },
   enable_forward_message_adaptation: {
     summary: "让 Bot 能阅读合并转发，把节点顺序、发言人、嵌套记录和图片摘要整理成可理解上下文。",
@@ -7847,8 +7923,9 @@ $("#worldbookAddMemberForm").addEventListener("submit", async (event) => {
   const form = new FormData(event.currentTarget);
   const userId = String(form.get("user_id") || "").trim();
   if (!userId) return;
-  if (!/^\d{5,}$/.test(userId)) {
-    alert("关系节点必须使用有效 QQ 号作为身份键");
+  const validId = /^\d{5,}$/.test(userId) || /^bili:\d{2,}$/i.test(userId) || /^bili_live_[A-Za-z0-9_-]{6,64}$/.test(userId);
+  if (!validId) {
+    alert("关系节点必须使用有效 QQ 号或 B 站外部身份键");
     return;
   }
   await runAction(() => postJson("/worldbook/member/update", {

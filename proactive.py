@@ -250,7 +250,7 @@ class ProactiveMixin:
         ids = []
         for part in parts:
             user_id = str(part).strip()
-            if user_id and user_id.isdigit() and user_id not in ids:
+            if user_id and user_id.isdigit() and not self._is_bot_self_user_id(user_id) and user_id not in ids:
                 ids.append(user_id)
         return ids
 
@@ -430,6 +430,7 @@ class ProactiveMixin:
             self._clear_pending_proactive_plan(user)
             return
         now = now or _now_ts()
+        rest_until = self._user_rest_silence_until(user, now=now)
         planned_event = self._pick_best_planned_event(user, now)
         reason = (
             str(planned_event.get("reason") or "")
@@ -516,6 +517,8 @@ class ProactiveMixin:
                 )
                 user["planned_candidate_id"] = item.get("id", "")
                 return
+        if rest_until > now and scheduled < rest_until:
+            scheduled = rest_until + random.uniform(20 * 60, 90 * 60)
         user["next_proactive_at"] = scheduled
         user["planned_proactive_reason"] = reason
         user["planned_proactive_action"] = action
@@ -558,6 +561,89 @@ class ProactiveMixin:
             note="日程/随机调度",
         )
         user["planned_candidate_id"] = item.get("id", "")
+
+    def _user_rest_silence_until(self, user: dict[str, Any], *, now: float | None = None) -> float:
+        check_now = _now_ts() if now is None else now
+        rest_until = _safe_float(user.get("user_rest_until"), 0)
+        if rest_until <= 0:
+            return 0.0
+        if rest_until <= check_now:
+            user["user_rest_until"] = 0
+            user["user_rest_reason"] = ""
+            user["user_rest_set_at"] = 0
+            return 0.0
+        return rest_until
+
+    def _next_user_rest_morning_ts(self, *, now: float) -> float:
+        timezone_name = _single_line(getattr(self, "environment_perception_timezone", ""), 64) or "Asia/Shanghai"
+        try:
+            tz = zoneinfo.ZoneInfo(timezone_name)
+        except Exception:
+            tz = zoneinfo.ZoneInfo("Asia/Shanghai")
+        current = datetime.fromtimestamp(now, tz)
+        target = current.replace(hour=8, minute=30, second=0, microsecond=0)
+        if target.timestamp() <= now + 3600:
+            target += timedelta(days=1)
+        return max(target.timestamp(), now + 6 * 3600)
+
+    def _detect_user_rest_silence_until(self, text: str, *, now: float | None = None) -> float:
+        cleaned = _single_line(text, 260).lower()
+        if not cleaned:
+            return 0.0
+        check_now = _now_ts() if now is None else now
+        cancel_pattern = (
+            r"(?:我|俺|咱|人家).{0,10}(?:醒了|起床了|睡醒了|不睡了|回来了|可以聊)"
+            r"|(?:睡醒了|起床了|不睡了|可以聊了|回来了)"
+        )
+        if re.search(cancel_pattern, cleaned):
+            return -1.0
+        hard_quiet = re.search(r"(?:别|不要|先别|暂时别).{0,10}(?:打扰|吵|主动|发消息)", cleaned)
+        tomorrow = re.search(r"明天再(?:聊|说|回|看)", cleaned)
+        nap = re.search(r"(?:我|俺|咱|人家).{0,10}(?:午休|眯一会|歇会|躺会|休息一下|休息会)", cleaned)
+        sleep = re.search(
+            r"(?:晚安|睡觉去了|先睡了|去睡了|睡了哈|睡啦|我睡了|我先睡|我去睡|我困了|困死了|补觉)",
+            cleaned,
+        )
+        rest = re.search(r"(?:我|俺|咱|人家).{0,10}(?:休息|歇一下|躺一下|缓一会)", cleaned)
+        if hard_quiet or tomorrow or sleep:
+            return self._next_user_rest_morning_ts(now=check_now)
+        if nap:
+            return check_now + 2.5 * 3600
+        if rest:
+            return check_now + 3.5 * 3600
+        return 0.0
+
+    def _apply_user_rest_silence_from_message(
+        self,
+        user: dict[str, Any],
+        text: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        check_now = _now_ts() if now is None else now
+        rest_until = self._detect_user_rest_silence_until(text, now=check_now)
+        if rest_until < 0:
+            if _safe_float(user.get("user_rest_until"), 0) > check_now:
+                user["user_rest_until"] = 0
+                user["user_rest_reason"] = ""
+                user["user_rest_set_at"] = 0
+                logger.info("[PrivateCompanion] 用户休息静默已解除: user=%s", user.get("user_id") or user.get("id") or "")
+                return True
+            return False
+        if rest_until <= check_now:
+            return False
+        user["user_rest_until"] = rest_until
+        user["user_rest_reason"] = _single_line(text, 120)
+        user["user_rest_set_at"] = check_now
+        if str(user.get("planned_proactive_source") or "") != "timer":
+            self._clear_pending_proactive_plan(user)
+        logger.info(
+            "[PrivateCompanion] 已记录用户休息静默: user=%s until=%s reason=%s",
+            user.get("user_id") or user.get("id") or "",
+            datetime.fromtimestamp(rest_until).strftime("%m-%d %H:%M"),
+            _single_line(text, 80),
+        )
+        return True
 
     def _promote_earlier_daily_greeting_event(
         self,

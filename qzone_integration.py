@@ -41,6 +41,21 @@ class QzoneMixin:
         if bot is not None:
             self._qzone_last_bot = bot
 
+    def _qzone_find_runtime_bot(self) -> Any | None:
+        bot = getattr(self, "_qzone_last_bot", None)
+        if bot is not None:
+            return bot
+        platform_manager = getattr(getattr(self, "context", None), "platform_manager", None)
+        for inst in list(getattr(platform_manager, "platform_insts", []) or []):
+            if any(callable(getattr(inst, name, None)) for name in ("get_cookies", "get_credentials", "get_login_info")):
+                self._qzone_last_bot = inst
+                return inst
+            api = getattr(inst, "api", None)
+            if callable(getattr(api, "call_action", None)):
+                self._qzone_last_bot = inst
+                return inst
+        return None
+
     @staticmethod
     def _qzone_gtk(p_skey: str) -> str:
         hash_val = 5381
@@ -244,7 +259,9 @@ class QzoneMixin:
                 raise RuntimeError(f"手动 QZONE_COOKIE 不可用：{_single_line(exc, 120)}") from exc
             logger.debug("[PrivateCompanion] QQ 空间使用手动 QZONE_COOKIE: uin=%s", ctx.get("uin"))
             return ctx["cookie_header"]
-        bot = getattr(event, "bot", None) if event is not None else getattr(self, "_qzone_last_bot", None)
+        bot = getattr(event, "bot", None) if event is not None else None
+        if bot is None:
+            bot = self._qzone_find_runtime_bot()
         if bot is not None:
             self._qzone_last_bot = bot
         if bot is None:
@@ -613,6 +630,88 @@ class QzoneMixin:
             raise RuntimeError(_single_line(payload.get("message") or payload.get("msg") or f"评论失败 code={code}", 160))
         return comment
 
+    def _qzone_public_state_hint(self, state: dict[str, Any]) -> str:
+        """Return a public-safe mood hint for Qzone posts without internal state fields."""
+        if not isinstance(state, dict):
+            return "心情平稳,适合写一小段生活感。"
+        mood = _single_line(state.get("mood_bias"), 24) or "平稳"
+        weather = _single_line(state.get("weather"), 80)
+        sleep = _single_line(state.get("sleep"), 40)
+        hints: list[str] = []
+        if mood:
+            hints.append(f"心情底色偏{mood}")
+        if weather and weather != "暂无天气信息":
+            hints.append(f"天气余味：{weather}")
+        if sleep and sleep not in {"睡眠平稳", "正常"}:
+            hints.append(f"节奏偏{sleep}")
+        if not hints:
+            hints.append("生活节奏平稳")
+        hints.append("只能写成自然感受,不要写状态标签、数值或内部变量。")
+        return "；".join(hints)
+
+    def _qzone_text_leaks_internal_state(self, text: str) -> bool:
+        compact = str(text or "")
+        if not compact.strip():
+            return False
+        patterns = (
+            r"能量\s*[：:=]?\s*\d{1,3}\s*/\s*100",
+            r"心理能量",
+            r"\d{1,3}\s*/\s*100",
+            r"状态变量",
+            r"当前状态",
+            r"拟人状态",
+            r"内部状态",
+            r"插件",
+            r"模型",
+            r"系统提示",
+        )
+        return any(re.search(pattern, compact, flags=re.IGNORECASE) for pattern in patterns)
+
+    def _strip_qzone_internal_state_fragments(self, text: str) -> str:
+        cleaned = _single_line(text, 180)
+        if not cleaned:
+            return ""
+        cleaned = re.sub(r"(?:心理)?能量\s*[：:=]?\s*\d{1,3}\s*/\s*100[，,。；;\s]*", "", cleaned)
+        cleaned = re.sub(r"\d{1,3}\s*/\s*100[，,。；;\s]*", "", cleaned)
+        cleaned = re.sub(r"(?:当前状态|拟人状态|状态变量|内部状态)[：:，,。；;\s]*", "", cleaned)
+        cleaned = re.sub(r"(?:插件|模型|系统提示)[^。！？!?；;]{0,40}[。！？!?；;]?", "", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ，,。；;")
+        return _single_line(cleaned, 180)
+
+    async def _sanitize_qzone_life_post_text(self, text: str, *, prompt: str = "") -> str:
+        cleaned = _single_line(text, 180)
+        if not self._qzone_text_leaks_internal_state(cleaned):
+            return cleaned
+        stripped = self._strip_qzone_internal_state_fragments(cleaned)
+        if stripped and not self._qzone_text_leaks_internal_state(stripped) and len(stripped) >= 12:
+            logger.warning("[PrivateCompanion] QQ 空间说说草稿含内部状态,已净化: %s", _single_line(cleaned, 160))
+            return stripped
+        rewrite_prompt = f"""
+下面是一条 QQ 空间说说草稿,里面泄露了内部状态/数值。请重写成自然生活动态。
+只输出正文,30 到 120 字,不要解释。
+禁止出现：能量、心理能量、/100、当前状态、状态变量、插件、模型、系统提示。
+
+【原草稿】
+{cleaned}
+
+【原任务背景】
+{_single_line(prompt, 600)}
+""".strip()
+        try:
+            rewritten = await self._llm_call(
+                rewrite_prompt,
+                max_tokens=160,
+                provider_id=self._task_provider(self.mai_style_provider_id, self.llm_provider_id),
+                task="qzone_publish_sanitize",
+            )
+            rewritten = _single_line(rewritten, 180)
+            if rewritten and not self._qzone_text_leaks_internal_state(rewritten):
+                logger.warning("[PrivateCompanion] QQ 空间说说草稿含内部状态,已重写: %s", _single_line(cleaned, 160))
+                return rewritten
+        except Exception as exc:
+            logger.warning("[PrivateCompanion] QQ 空间说说内部状态重写失败: %s", _single_line(exc, 120))
+        logger.warning("[PrivateCompanion] QQ 空间说说草稿含内部状态且重写失败,使用兜底文案")
+        return "夜色慢慢安静下来,窗外的风也轻了些。想把这一点点清醒和柔软留在今晚,明天再慢慢展开。"
 
     async def _publish_qzone_text(self, text: str, event: AstrMessageEvent | None = None) -> dict[str, Any]:
         if not self.enable_qzone_integration:
@@ -660,11 +759,12 @@ class QzoneMixin:
 要求：
 - 30 到 120 字。
 - 像自然生活动态,不是公告、不是任务汇报。
-- 可以带一点当前状态、日程、天气或日记余味,但不要暴露插件、模型、内部状态数值。
+- 可以带一点公开可见的心情、天气或日记余味,但不要暴露插件、模型、内部状态数值。
+- 禁止出现“能量”“心理能量”“/100”“状态变量”“当前状态”等内部汇报词。
 - 不要 @ 用户,不要泄露私聊内容,不要写得像营销文。
 
-【当前状态】
-{self._format_state_for_prompt(daily_state if isinstance(daily_state, dict) else {})}
+【公开可写的状态余味】
+{self._qzone_public_state_hint(daily_state if isinstance(daily_state, dict) else {})}
 
 【当前/附近日程】
 {self._format_plan_item_for_prompt(current_item) or "无明确日程"}
@@ -681,7 +781,7 @@ class QzoneMixin:
                 provider_id=self._task_provider(self.mai_style_provider_id, self.llm_provider_id),
                 task="qzone_publish_test",
             )
-            draft = _single_line(draft, 180)
+            draft = await self._sanitize_qzone_life_post_text(draft, prompt=prompt)
         except Exception as exc:
             draft = ""
             lines.append(f"- 草稿生成：失败，{_single_line(exc, 160)}")
@@ -760,9 +860,11 @@ class QzoneMixin:
             state["last_life_publish_checked_at"] = now
             self._save_data_sync()
             return
-        if getattr(self, "_qzone_last_bot", None) is None:
+        try:
+            await self._qzone_get_cookies(None)
+        except Exception as exc:
             state["last_life_publish_failed_at"] = now
-            state["last_life_publish_status"] = "failed:no_onebot_connection"
+            state["last_life_publish_status"] = f"failed:{_single_line(exc, 80)}"
             state["last_life_publish_checked_at"] = now
             self._save_data_sync()
             return
@@ -776,11 +878,12 @@ class QzoneMixin:
 要求：
 - 30 到 120 字。
 - 像自然生活动态,不是公告、不是任务汇报。
-- 可以带一点当前状态、日程、天气或日记余味,但不要暴露插件、模型、内部状态数值。
+- 可以带一点公开可见的心情、天气或日记余味,但不要暴露插件、模型、内部状态数值。
+- 禁止出现“能量”“心理能量”“/100”“状态变量”“当前状态”等内部汇报词。
 - 不要 @ 用户,不要泄露私聊内容,不要写得像营销文。
 
-【当前状态】
-{self._format_state_for_prompt(daily_state if isinstance(daily_state, dict) else {})}
+【公开可写的状态余味】
+{self._qzone_public_state_hint(daily_state if isinstance(daily_state, dict) else {})}
 
 【当前/附近日程】
 {self._format_plan_item_for_prompt(current_item) or "无明确日程"}
@@ -796,7 +899,9 @@ class QzoneMixin:
             provider_id=self._task_provider(self.mai_style_provider_id, self.llm_provider_id),
             task="qzone_publish",
         )
-        text = _single_line(text, 180)
+        text = await self._sanitize_qzone_life_post_text(text, prompt=prompt)
+        state["last_life_publish_draft"] = _single_line(text, 300)
+        state["last_life_publish_draft_at"] = now
         result = await self._publish_qzone_text(text)
         if result.get("success"):
             state["last_life_publish_at"] = now

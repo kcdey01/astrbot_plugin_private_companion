@@ -352,6 +352,10 @@ class ProactiveEngineMixin:
         now = _now_ts()
         source = _single_line(candidate.get("source"), 40) or "unknown"
         scheduled = _safe_float(candidate.get("scheduled_ts"), now)
+        rest_until = self._user_rest_silence_until(user, now=now)
+        if rest_until > now and scheduled < rest_until and source != "timer":
+            self._record_proactive_candidate(user_id, candidate, status="blocked", note="用户明确休息中")
+            return False
         if not self._user_enabled_for_proactive(str(user_id), user):
             self._clear_pending_proactive_plan(user)
             return False
@@ -553,6 +557,14 @@ class ProactiveEngineMixin:
             return self._should_send_simulation(user)
         if self.max_daily_messages <= 0:
             return False, "每日上限为 0"
+        now = _now_ts()
+        due_timer_active = self._has_due_llm_timer(user, now=now)
+        if (
+            self._user_rest_silence_until(user, now=now) > now
+            and not due_timer_active
+            and str(user.get("planned_proactive_source") or "") != "timer"
+        ):
+            return False, "用户明确休息中"
         if self._is_quiet_time() and not self._can_send_insomnia_night_message(user):
             return False, "免打扰时段"
         rel_state = user.get("relationship_state")
@@ -564,9 +576,7 @@ class ProactiveEngineMixin:
         ):
             return False, "关系状态处于收敛期"
 
-        now = _now_ts()
         planned_reason = str(user.get("planned_proactive_reason") or "")
-        due_timer_active = self._has_due_llm_timer(user, now=now)
         if due_timer_active and str(user.get("planned_proactive_source") or "") != "timer":
             self._promote_due_llm_timer_plan(user, now=now)
             planned_reason = str(user.get("planned_proactive_reason") or "")

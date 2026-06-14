@@ -445,6 +445,9 @@ class UserMemoryMixin:
         open_loop_text = self._format_open_loops_for_prompt(user)
         if open_loop_text:
             lines.append("未完成约定/可续话头：\n" + open_loop_text)
+        consequence_text = self._format_action_consequence_hint(user)
+        if consequence_text:
+            lines.append("最近主动行为闭环：\n" + consequence_text)
         return "\n".join(lines) if lines else "暂无专门沉淀的用户记忆。"
 
     def _format_dialogue_episodes_for_prompt(self, user: dict[str, Any]) -> str:
@@ -567,6 +570,163 @@ class UserMemoryMixin:
                 item["like"] = min(20, _safe_int(item.get("like"), 0, 0) + 1)
                 item["note"] = _single_line(cleaned, 90)
             item["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def _action_consequence_items(self, user: dict[str, Any]) -> list[dict[str, Any]]:
+        items = user.setdefault("action_consequences", [])
+        if not isinstance(items, list):
+            items = []
+            user["action_consequences"] = items
+        now = _now_ts()
+        kept: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            created = _safe_float(item.get("ts"), now)
+            if now - created > 7 * 86400:
+                continue
+            kept.append(item)
+        if len(kept) != len(items):
+            user["action_consequences"] = kept[-18:]
+        return user["action_consequences"]
+
+    def _classify_action_reply_feedback(self, text: str) -> str:
+        cleaned = _single_line(text, 220)
+        if not cleaned:
+            return "neutral"
+        negative = (
+            "别",
+            "不要",
+            "不许",
+            "烦",
+            "打扰",
+            "闭嘴",
+            "硬",
+            "生硬",
+            "不喜欢",
+            "不对",
+            "不是",
+            "笨",
+            "怎么又",
+            "没收到",
+            "哪里",
+            "图呢",
+        )
+        positive = (
+            "好",
+            "可以",
+            "喜欢",
+            "可爱",
+            "聪明",
+            "对",
+            "正常",
+            "收到",
+            "摸摸",
+            "抱抱",
+            "谢谢",
+            "不错",
+        )
+        if any(token in cleaned for token in negative):
+            return "negative"
+        if any(token in cleaned for token in positive):
+            return "positive"
+        return "neutral"
+
+    def _note_action_sent(
+        self,
+        user: dict[str, Any],
+        action: str,
+        *,
+        reason: str = "",
+        text: str = "",
+        motive: str = "",
+        action_summary: str = "",
+    ) -> None:
+        action = _single_line(action, 40) or "message"
+        items = self._action_consequence_items(user)
+        items.append(
+            {
+                "ts": _now_ts(),
+                "action": action,
+                "reason": _single_line(reason, 50),
+                "text": _single_line(_strip_internal_message_blocks(text), 120),
+                "motive": _single_line(motive, 100),
+                "summary": _single_line(action_summary, 120),
+                "status": "awaiting_reply",
+                "feedback": "",
+                "reply_text": "",
+                "reply_ts": 0,
+            }
+        )
+        del items[:-18]
+        continuity = user.setdefault("state_continuity", {})
+        if not isinstance(continuity, dict):
+            continuity = {}
+            user["state_continuity"] = continuity
+        continuity["last_action_ts"] = _now_ts()
+        continuity["last_action"] = action
+        continuity["last_action_reason"] = _single_line(reason, 50)
+        continuity["last_action_text"] = _single_line(_strip_internal_message_blocks(text), 120)
+
+    def _note_action_reply_feedback(self, user: dict[str, Any], action: str, text: str = "") -> None:
+        action = _single_line(action, 40) or "message"
+        affinity = user.setdefault("action_reply_affinity", {})
+        if not isinstance(affinity, dict):
+            affinity = {}
+            user["action_reply_affinity"] = affinity
+        affinity[action] = _safe_int(affinity.get(action), 0, 0) + 1
+
+        feedback = self._classify_action_reply_feedback(text)
+        now = _now_ts()
+        for item in reversed(self._action_consequence_items(user)):
+            if not isinstance(item, dict):
+                continue
+            if item.get("status") != "awaiting_reply":
+                continue
+            if _single_line(item.get("action"), 40) != action:
+                continue
+            item["status"] = "replied"
+            item["feedback"] = feedback
+            item["reply_text"] = _single_line(text, 120)
+            item["reply_ts"] = now
+            break
+        continuity = user.setdefault("state_continuity", {})
+        if not isinstance(continuity, dict):
+            continuity = {}
+            user["state_continuity"] = continuity
+        continuity["last_reply_ts"] = now
+        continuity["last_reply_feedback"] = feedback
+        continuity["last_reply_text"] = _single_line(text, 120)
+
+    def _format_action_consequence_hint(self, user: dict[str, Any]) -> str:
+        items = self._action_consequence_items(user)
+        if not items:
+            return ""
+        lines: list[str] = []
+        for item in items[-5:]:
+            if not isinstance(item, dict):
+                continue
+            action = _single_line(item.get("action"), 30)
+            reason = _single_line(item.get("reason"), 40)
+            text = _single_line(item.get("text"), 70)
+            status = _single_line(item.get("status"), 24)
+            feedback = _single_line(item.get("feedback"), 24)
+            reply = _single_line(item.get("reply_text"), 70)
+            if not action and not text:
+                continue
+            when = self._format_timestamp_elapsed(item.get("ts"))
+            parts = [f"{when}主动{action or 'message'}"]
+            if reason:
+                parts.append(f"原因:{reason}")
+            if text:
+                parts.append(f"内容:{text}")
+            if status == "awaiting_reply":
+                parts.append("还没有自然接上,下次不要当作用户刚刚主动找你")
+            elif reply:
+                parts.append(f"用户反馈:{feedback or 'neutral'}:{reply}")
+            lines.append("- " + "；".join(parts))
+        if not lines:
+            return ""
+        return "\n".join(lines)
 
     def _time_bucket_for_user_habit(self, when: datetime | None = None) -> tuple[str, int]:
         when = when or datetime.now()

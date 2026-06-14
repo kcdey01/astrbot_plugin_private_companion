@@ -320,6 +320,30 @@ class TtsEnhancementMixin:
             return letters >= max(4, cjk)
         return bool(spoken)
 
+    def _tts_text_needs_language_conversion(self, text: str, *, provider_kind: str) -> bool:
+        spoken = self._normalize_tts_spoken_text(text, provider_kind=provider_kind)
+        if not spoken:
+            return False
+        lang = getattr(self, "tts_voice_language", "ja")
+        if lang == "zh":
+            return False
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", spoken))
+        if lang == "en":
+            return cjk_count > 0
+        if lang != "ja":
+            return False
+        kana_count = len(re.findall(r"[\u3040-\u30ff\u31f0-\u31ff]", spoken))
+        chinese_markers = (
+            "的", "了", "吗", "呢", "吧", "呀", "哦", "啊", "嘛",
+            "就是", "有点", "很", "超", "画风", "氛围", "标签", "喜欢",
+            "不好意思", "说出口", "温柔",
+        )
+        if any(marker in spoken for marker in chinese_markers):
+            return True
+        if not kana_count and cjk_count >= 4:
+            return True
+        return bool(cjk_count >= 6 and kana_count < max(2, int(cjk_count * 0.35)))
+
     def _build_tts_rule_prompt(self, provider_kind: str = "generic") -> str:
         lang = self._tts_language_label()
         mode = getattr(self, "tts_generation_mode", "hybrid")
@@ -398,7 +422,7 @@ class TtsEnhancementMixin:
         if not chain or any(isinstance(comp, Record) for comp in chain):
             return
         plain_parts = [str(getattr(comp, "text", "") or "") for comp in chain if isinstance(comp, Plain)]
-        if len(plain_parts) != len(chain):
+        if not plain_parts:
             return
         text = "".join(plain_parts).strip()
         if not text:
@@ -410,7 +434,51 @@ class TtsEnhancementMixin:
             new_chain = await self._maybe_convert_plain_reply_to_tts(normalized, event)
         if not new_chain:
             return
+        if len(plain_parts) != len(chain):
+            non_plain_tail = [comp for comp in chain if not isinstance(comp, Plain)]
+            if non_plain_tail:
+                new_chain = list(new_chain) + non_plain_tail
+        ordered_chunks = self._split_tts_chain_for_ordered_send(new_chain)
+        if len(ordered_chunks) > 1:
+            event.set_result(self._build_result_from_chain(ordered_chunks[0]))
+            asyncio.create_task(self._send_tts_chain_chunks_after_first(event, ordered_chunks[1:]))
+            return
         event.set_result(self._build_result_from_chain(new_chain))
+
+    def _split_tts_chain_for_ordered_send(self, chain: list[Any]) -> list[list[Any]]:
+        chunks: list[list[Any]] = []
+        current_visible: list[Any] = []
+        has_record = False
+        has_visible = False
+        for comp in chain:
+            if isinstance(comp, Record):
+                has_record = True
+                if current_visible:
+                    chunks.append(current_visible)
+                    current_visible = []
+                chunks.append([comp])
+            else:
+                has_visible = True
+                current_visible.append(comp)
+        if current_visible:
+            chunks.append(current_visible)
+        return chunks if has_record and has_visible else [chain]
+
+    async def _send_tts_chain_chunks_after_first(self, event: Any, chunks: list[list[Any]]) -> None:
+        if not chunks:
+            return
+        for chunk in chunks:
+            if not chunk:
+                continue
+            await asyncio.sleep(0.45)
+            try:
+                await event.send(event.chain_result(chunk))
+            except Exception as exc:
+                try:
+                    await event.send(self._build_result_from_chain(chunk))
+                except Exception:
+                    logger.warning("[PrivateCompanion] TTS 分块后台补发失败: %s", _single_line(exc, 120))
+                    return
 
     async def _maybe_convert_plain_reply_to_tts(self, text: str, event: Any) -> list[Any]:
         mode = getattr(self, "tts_generation_mode", "hybrid")
@@ -791,8 +859,15 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
             if not spoken:
                 pos = match.end()
                 continue
-            if getattr(self, "tts_voice_language", "ja") == "ja" and not self._tts_text_matches_language(spoken):
+            if self._tts_text_needs_language_conversion(spoken, provider_kind=provider_kind):
+                before_convert = spoken
                 spoken = await self._convert_text_to_spoken_language(spoken, event, provider_kind=provider_kind)
+                if spoken != before_convert:
+                    logger.info(
+                        "[PrivateCompanion] TTS语音块已按目标语种修正: '%s' -> '%s'",
+                        _single_line(before_convert, 80),
+                        _single_line(spoken, 80),
+                    )
             record = await self._tts_record_component(spoken, tts_provider, provider_settings, config or {})
             if record is not None:
                 output.append(record)
@@ -805,7 +880,16 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
     async def _convert_text_to_spoken_language(self, text: str, event: Any, *, provider_kind: str) -> str:
         provider = await self._get_tts_conversion_provider(event) if event is not None else None
         lang = self._tts_language_label()
-        prompt = f"把下面内容改写成自然{lang}口语，只输出朗读文本，不要解释：\n{text}"
+        prompt = f"""
+把下面内容改写成自然{lang}口语，只输出朗读文本，不要解释。
+要求：
+- 作品名、人名、专有名词可以按原文保留或自然音译。
+- 中文评价、语气词和说明句必须改成{lang}，不要夹中文。
+- 保留原本害羞、轻声、亲近的语气。
+
+原文：
+{text}
+""".strip()
         try:
             if provider is not None:
                 resp = await self._tts_provider_text_chat(provider, prompt, max_tokens=360)

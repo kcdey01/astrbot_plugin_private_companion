@@ -616,6 +616,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.enable_group_slang_learning = self._cfg_bool(c, "enable_group_slang_learning", True)
         self.enable_group_member_profiles = self._cfg_bool(c, "enable_group_member_profiles", True)
         self.enable_group_context_injection = self._cfg_bool(c, "enable_group_context_injection", True)
+        self.enable_group_persona_denoise = self._cfg_bool(c, "enable_group_persona_denoise", True)
         self.enable_forward_message_adaptation = self._cfg_bool(c, "enable_forward_message_adaptation", True)
         self.forward_message_mode = self._cfg_str(c, "forward_message_mode", "inject", "inject").lower()
         if self.forward_message_mode in {"注入", "injection"}:
@@ -1505,6 +1506,26 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         )
         return not any(token in cleaned for token in heavy_tokens)
 
+    def _format_group_persona_denoise_prompt(self, event: AstrMessageEvent | None = None) -> str:
+        if not bool(getattr(self, "enable_group_persona_denoise", True)):
+            return ""
+        scene = getattr(event, "private_companion_group_scene", None) if event is not None else None
+        trigger = _single_line(scene.get("trigger"), 40) if isinstance(scene, dict) else ""
+        high_intensity = getattr(event, "private_companion_group_high_intensity", None) if event is not None else None
+        high_active = isinstance(high_intensity, dict) and bool(high_intensity.get("active"))
+        lines = [
+            "【群聊人格降噪】",
+            "这是群聊，不是私聊。优先回答当前被问到的事或接住当前话题，少用亲密私聊腔。",
+            "状态、日程、情绪、关系画像只作为语气背景，除非别人明确问，否则不要主动报告能量、天气、日程、心情或插件状态。",
+            "不要为了表现人格而硬插动作描写、撒娇、长解释或关系总结；一句能说清就一句。",
+            "如果只是被轻轻提到或话题不需要你，宁可短、轻、贴当前梗，不要扩写成主动陪伴消息。",
+        ]
+        if trigger:
+            lines.append(f"本轮触发：{trigger}。只按这个触发强度回应，不要擅自升级亲密度或话题范围。")
+        if high_active:
+            lines.append("群里刚才较密集，回复要更像收口：集中一个重点，避免逐条点名回应。")
+        return "\n".join(lines)
+
     @filter.on_llm_request()
     async def inject_humanized_state(self, event: AstrMessageEvent, req: ProviderRequest):
         """LLM 请求前注入陪伴状态、群聊上下文、工具边界和合并消息阅读上下文。"""
@@ -1584,6 +1605,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                             recall_context = self._format_recalled_messages_for_natural_query(event, limit=5)
                             if recall_context:
                                 extra = f"{extra}\n\n{recall_context}" if extra else f"\n\n{recall_context}"
+                        denoise_text = self._format_group_persona_denoise_prompt(event)
+                        if denoise_text:
+                            extra = f"{extra}\n\n{denoise_text}" if extra else f"\n\n{denoise_text}"
                         req.system_prompt = (
                             f"{current_prompt}\n\n{marker}\n{self._format_group_context_for_prompt(group, sender_id, str(event.message_str or ''))}{wakeup_state_text}{extra}"
                         ).strip()
@@ -2481,6 +2505,18 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             self._apply_user_rest_silence_from_message(fast_user, text, now=received_ts)
             fast_user["inbound_count"] = _safe_int(fast_user.get("inbound_count"), 0) + 1
             fast_user["relationship_score"] = _safe_int(fast_user.get("relationship_score"), 0) + 1
+            if _safe_float(fast_user.get("awaiting_reply_since"), 0) > 0:
+                fast_user["reply_count"] = _safe_int(fast_user.get("reply_count"), 0) + 1
+                self._note_action_reply_feedback(
+                    fast_user,
+                    str(fast_user.get("last_proactive_action") or "message"),
+                    text,
+                )
+                fast_user["relationship_score"] = _safe_int(fast_user.get("relationship_score"), 0) + 2
+                fast_user["awaiting_reply_since"] = 0
+                fast_user["last_reply_at"] = received_ts
+                fast_user["pending_followup_event"] = {}
+                fast_user["planned_proactive_quota_exempt"] = False
             fast_user["ignored_streak"] = 0
             self._schedule_data_save()
             return
@@ -2624,6 +2660,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 self._note_action_reply_feedback(
                     user,
                     str(user.get("last_proactive_action") or "message"),
+                    text,
                 )
                 user["relationship_score"] = _safe_int(user.get("relationship_score"), 0) + 2
                 user["awaiting_reply_since"] = 0

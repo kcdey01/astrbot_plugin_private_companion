@@ -247,6 +247,8 @@ _DEFAULT_USER_TEMPLATE = {
     "dialogue_episodes": [],
     "open_loops": [],
     "action_preferences": {},
+    "action_consequences": [],
+    "state_continuity": {},
     "episode_message_count": 0,
     "last_episode_refresh_at": 0,
     "last_memory_refresh_at": 0,

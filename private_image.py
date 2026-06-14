@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +13,7 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -339,31 +339,129 @@ class PrivateImageMixin:
         except Exception as exc:
             logger.debug("[PrivateCompanion] 私聊图片缓存键生成失败: %s", exc)
         if re.match(r"^https?://", text, flags=re.I):
+            return self._private_image_normalized_url_cache_key(text)
+        return ""
+
+    def _private_image_normalized_url_cache_key(self, source: str) -> str:
+        text = str(source or "").strip()
+        if not text:
+            return ""
+        try:
+            parsed = urlparse(text)
+            volatile_keys = {
+                "term", "is_origin", "spec", "rkey", "token", "sign", "expires", "expire", "ts",
+                "timestamp", "t", "time", "cache", "cache_key", "ck", "rand", "random", "nonce",
+                "download", "disposition", "file_size", "size", "width", "height", "w", "h",
+                "quality", "format", "fmt", "x-oss-process", "imageView2", "imageMogr2",
+            }
+            query_parts = []
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+                lowered = key.lower()
+                if lowered in volatile_keys or lowered.startswith("utm_"):
+                    continue
+                query_parts.append((key, value))
+            normalized = urlunparse((
+                parsed.scheme.lower() or "https",
+                parsed.netloc.lower(),
+                parsed.path,
+                "",
+                urlencode(sorted(query_parts)),
+                "",
+            ))
+            return "url:" + hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()
+        except Exception:
+            return "url:" + hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
+
+    def _private_image_source_cache_aliases(self, source: str) -> list[str]:
+        text = str(source or "").strip()
+        aliases: list[str] = []
+
+        def add(value: str) -> None:
+            item = str(value or "").strip()
+            if item and item not in aliases:
+                aliases.append(item)
+
+        primary = self._private_image_source_cache_key(text)
+        add(primary)
+        if re.match(r"^https?://", text, flags=re.I):
+            add(self._private_image_normalized_url_cache_key(text))
             try:
                 parsed = urlparse(text)
-                volatile_keys = {
-                    "term", "is_origin", "spec", "rkey", "token", "sign", "expires", "expire", "ts",
-                    "timestamp", "t", "time", "cache", "cache_key", "ck", "rand", "random", "nonce",
-                    "download", "disposition", "file_size", "size", "width", "height",
-                }
-                query_parts = []
-                for key, value in parse_qsl(parsed.query, keep_blank_values=True):
-                    lowered = key.lower()
-                    if lowered in volatile_keys or lowered.startswith("utm_"):
-                        continue
-                    query_parts.append((key, value))
-                normalized = urlunparse((
-                    parsed.scheme.lower() or "https",
-                    parsed.netloc.lower(),
-                    parsed.path,
-                    "",
-                    urlencode(sorted(query_parts)),
-                    "",
-                ))
-                return "url:" + hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()
+                name = unquote((parsed.path or "").rsplit("/", 1)[-1]).lower()
+                stem = re.sub(r"\.(?:jpg|jpeg|png|webp|gif|bmp)$", "", name, flags=re.I)
+                for token in re.findall(r"[a-f0-9]{16,64}", stem):
+                    add("urlhex:" + token)
             except Exception:
-                return "url:" + hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
-        return ""
+                pass
+        raw = self._private_image_source_bytes_for_cache_alias(text)
+        if raw:
+            for alias in self._private_image_visual_cache_aliases_from_bytes(raw):
+                add(alias)
+        return aliases[:8]
+
+    def _private_image_source_bytes_for_cache_alias(self, source: str) -> bytes:
+        text = str(source or "").strip()
+        if not text:
+            return b""
+        try:
+            if text.startswith("data:") and "," in text:
+                meta, payload = text.split(",", 1)
+                return base64.b64decode(payload, validate=False) if ";base64" in meta.lower() else payload.encode("utf-8", errors="ignore")
+            if text.startswith("base64://"):
+                return base64.b64decode(text[len("base64://"):], validate=False)
+            if text.startswith("file://"):
+                text = text[len("file://"):]
+            if re.match(r"^https?://", text, flags=re.I):
+                return b""
+            path = Path(text)
+            if path.exists() and path.is_file():
+                return path.read_bytes()
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 私聊图片缓存别名字节读取失败: %s", exc)
+        return b""
+
+    def _private_image_visual_cache_aliases_from_bytes(self, raw: bytes) -> list[str]:
+        if not raw:
+            return []
+        try:
+            from PIL import Image as PILImage
+        except Exception:
+            return []
+        try:
+            with PILImage.open(io.BytesIO(raw)) as image:
+                frame_total = int(getattr(image, "n_frames", 1) or 1)
+                if bool(getattr(image, "is_animated", False) or frame_total > 1):
+                    return []
+                width, height = image.size
+                if width <= 0 or height <= 0:
+                    return []
+                gray = image.convert("L")
+                ahash_image = gray.resize((8, 8))
+                ahash_pixels = list(ahash_image.getdata())
+                average = sum(ahash_pixels) / max(1, len(ahash_pixels))
+                ahash_bits = "".join("1" if value >= average else "0" for value in ahash_pixels)
+                dhash_image = gray.resize((9, 8))
+                dhash_pixels = list(dhash_image.getdata())
+                dhash_bits = []
+                for row in range(8):
+                    offset = row * 9
+                    for col in range(8):
+                        dhash_bits.append("1" if dhash_pixels[offset + col] > dhash_pixels[offset + col + 1] else "0")
+                ahash = f"{int(ahash_bits, 2):016x}"
+                dhash = f"{int(''.join(dhash_bits), 2):016x}"
+                aspect_bucket = max(1, min(999, int(round((width / max(1, height)) * 100))))
+                return [f"pxhash:v1:a{aspect_bucket}:ah{ahash}:dh{dhash}"]
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 私聊图片视觉指纹生成失败: %s", exc)
+        return []
+
+    def _private_image_cache_aliases_for_sources(self, sources: list[str]) -> list[str]:
+        aliases: list[str] = []
+        for source in [str(item).strip() for item in (sources or []) if str(item or "").strip()][:4]:
+            for alias in self._private_image_source_cache_aliases(source):
+                if alias and alias not in aliases:
+                    aliases.append(alias)
+        return aliases[:24]
 
     def _private_image_cache_image_keys(self, sources: list[str]) -> list[str]:
         keys: list[str] = []
@@ -388,11 +486,23 @@ class PrivateImageMixin:
         raw = "v3|" + _single_line(scope, 40) + "|" + str(provider_id or "") + "|" + prompt_sig + "|" + "|".join(clean_keys)
         return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
 
-    def _get_private_image_vision_cache(self, cache_key: str, *, provider_id: str = "", image_keys: list[str] | None = None, scope: str = "private_image", allow_image_key_fallback: bool = True) -> str:
+    def _get_private_image_vision_cache(
+        self,
+        cache_key: str,
+        *,
+        provider_id: str = "",
+        image_keys: list[str] | None = None,
+        image_aliases: list[str] | None = None,
+        image_count: int = 0,
+        scope: str = "private_image",
+        allow_image_key_fallback: bool = True,
+    ) -> str:
         if not bool(getattr(self, "enable_private_image_vision_cache", True)):
             return ""
         cache = self._private_image_vision_cache_store()
         clean_image_keys = [str(item).strip() for item in (image_keys or []) if str(item or "").strip()]
+        clean_aliases = {str(item).strip() for item in (image_aliases or []) if str(item or "").strip()}
+        expected_count = max(0, int(image_count or 0))
 
         def use_item(key: str, item: dict[str, Any], *, fallback: bool = False, detail: str = "") -> str:
             text = _single_line(item.get("text"), 900 if scope == "forward_image" else 600)
@@ -441,10 +551,51 @@ class PrivateImageMixin:
                 if text:
                     return text
 
+            if clean_aliases and expected_count == 1:
+                alias_provider_fallback: tuple[str, dict[str, Any]] | None = None
+                for key, item in list(cache.items()):
+                    if key == cache_key or not isinstance(item, dict):
+                        continue
+                    cached_scope = _single_line(item.get("scope"), 40)
+                    if cached_scope and expected_scope and cached_scope != expected_scope:
+                        continue
+                    cached_count = _safe_int(item.get("image_count"), 0, 0)
+                    if cached_count <= 0:
+                        cached_count = 1 if len([value for value in item.get("image_keys", []) if str(value or "").strip()]) == 1 else 0
+                    if cached_count != 1:
+                        continue
+                    cached_aliases = {str(value).strip() for value in item.get("image_aliases", []) if str(value or "").strip()}
+                    if not (cached_aliases & clean_aliases):
+                        continue
+                    cached_provider = _single_line(item.get("provider_id"), 160)
+                    if expected_provider and cached_provider and cached_provider != expected_provider:
+                        if alias_provider_fallback is None:
+                            alias_provider_fallback = (key, item)
+                        continue
+                    text = use_item(key, item, fallback=True, detail="alias_fallback")
+                    if text:
+                        return text
+                if alias_provider_fallback is not None:
+                    key, item = alias_provider_fallback
+                    text = use_item(key, item, fallback=True, detail="alias_provider_fallback")
+                    if text:
+                        return text
+
         self._record_cache_metric(f"image_vision:{scope}", hit=False, detail="miss")
         return ""
 
-    def _set_private_image_vision_cache(self, cache_key: str, text: str, *, provider_id: str, image_keys: list[str], prompt: str = "", scope: str = "private_image") -> None:
+    def _set_private_image_vision_cache(
+        self,
+        cache_key: str,
+        text: str,
+        *,
+        provider_id: str,
+        image_keys: list[str],
+        image_aliases: list[str] | None = None,
+        image_count: int = 0,
+        prompt: str = "",
+        scope: str = "private_image",
+    ) -> None:
         if not bool(getattr(self, "enable_private_image_vision_cache", True)):
             return
         cleaned = _single_line(text, 900 if scope == "forward_image" else 600)
@@ -454,6 +605,11 @@ class PrivateImageMixin:
         clean_image_keys = [str(item) for item in image_keys[:4] if str(item or "").strip()]
         clean_scope = _single_line(scope, 40)
         clean_provider = _single_line(provider_id, 160)
+        clean_aliases = [str(item).strip() for item in (image_aliases or []) if str(item or "").strip()]
+        clean_aliases = list(dict.fromkeys(clean_aliases))[:24]
+        clean_count = max(0, int(image_count or 0))
+        if clean_count <= 0:
+            clean_count = len(clean_image_keys)
         prompt_sig = hashlib.sha1(str(prompt or "").encode("utf-8", errors="ignore")).hexdigest()[:16] if prompt else ""
         removed_variants = 0
         for old_key, old_item in list(cache.items()):
@@ -464,6 +620,10 @@ class PrivateImageMixin:
             old_provider = _single_line(old_item.get("provider_id"), 160)
             old_prompt_sig = _single_line(old_item.get("prompt_sig"), 32)
             same_reusable_image = old_keys == clean_image_keys and old_scope == clean_scope
+            old_aliases = {str(value).strip() for value in old_item.get("image_aliases", []) if str(value or "").strip()}
+            old_count = _safe_int(old_item.get("image_count"), 0, 0)
+            same_single_alias = clean_count == 1 and old_count == 1 and bool(old_aliases & set(clean_aliases)) and old_scope == clean_scope
+            same_reusable_image = same_reusable_image or same_single_alias
             same_provider_variant = same_reusable_image and old_provider == clean_provider
             stale_prompt_variant = same_provider_variant and old_prompt_sig != prompt_sig
             duplicate_provider_variant = same_reusable_image and old_provider and old_provider != clean_provider and _safe_int(old_item.get("hits"), 0, 0) == 0
@@ -474,6 +634,8 @@ class PrivateImageMixin:
             "text": cleaned,
             "provider_id": clean_provider,
             "image_keys": clean_image_keys,
+            "image_aliases": clean_aliases,
+            "image_count": clean_count,
             "scope": clean_scope,
             "prompt_sig": prompt_sig,
             "created_ts": _now_ts(),
@@ -503,9 +665,10 @@ class PrivateImageMixin:
         except Exception as exc:
             logger.debug("[PrivateCompanion] 私聊图片视觉缓存保存失败: %s", exc)
 
-    def _invalidate_private_image_vision_cache_by_image_keys(self, image_keys: list[str], *, reason: str = "") -> int:
+    def _invalidate_private_image_vision_cache_by_image_keys(self, image_keys: list[str], *, image_aliases: list[str] | None = None, reason: str = "") -> int:
         targets = {str(item) for item in image_keys or [] if str(item or "").strip()}
-        if not targets:
+        alias_targets = {str(item).strip() for item in (image_aliases or []) if str(item or "").strip()}
+        if not targets and not alias_targets:
             return 0
         cache = self._private_image_vision_cache_store()
         removed = 0
@@ -513,7 +676,8 @@ class PrivateImageMixin:
             if not isinstance(item, dict):
                 continue
             cached_keys = {str(value) for value in item.get("image_keys", []) if str(value or "").strip()}
-            if cached_keys & targets:
+            cached_aliases = {str(value).strip() for value in item.get("image_aliases", []) if str(value or "").strip()}
+            if (cached_keys & targets) or (cached_aliases & alias_targets):
                 cache.pop(key, None)
                 removed += 1
         if removed:
@@ -546,7 +710,8 @@ class PrivateImageMixin:
         if ts <= 0 or _now_ts() - ts > 180:
             return False
         image_keys = [str(item) for item in target.get("image_keys", []) if str(item or "").strip()]
-        removed = self._invalidate_private_image_vision_cache_by_image_keys(image_keys, reason=text)
+        image_aliases = [str(item) for item in target.get("image_aliases", []) if str(item or "").strip()]
+        removed = self._invalidate_private_image_vision_cache_by_image_keys(image_keys, image_aliases=image_aliases, reason=text)
         target["negative_feedback_ts"] = _now_ts()
         target["negative_feedback_text"] = _single_line(text, 160)
         target["invalidated_cache_items"] = removed
@@ -1159,8 +1324,9 @@ class PrivateImageMixin:
         )
 
     async def _transcribe_private_inbound_images(self, image_sources: list[str], *, umo: str = "", user_text: str = "", force_contextual: bool = False) -> str:
+        original_sources = [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:4]
         sources = await self._prepare_private_image_sources_for_model(
-            [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:4],
+            original_sources,
             namespace="private_vision",
         )
         if not sources:
@@ -1170,6 +1336,8 @@ class PrivateImageMixin:
         image_urls = [url for _, url in image_items]
         if not image_urls:
             return ""
+        image_aliases = self._private_image_cache_aliases_for_sources([*original_sources, *sources])
+        image_count = len(original_sources) or len(sources)
         default_prompt = (
             "请把用户刚发的图片压缩成给聊天模型看的短摘要。先判断它更像表情包/贴纸/GIF,还是照片/截图/漫画/聊天记录。"
             "只输出下面 4 行,不要写标题、分析过程、帧列表或长篇描述。\n"
@@ -1207,6 +1375,8 @@ class PrivateImageMixin:
                 cache_key,
                 provider_id=provider_id,
                 image_keys=image_keys,
+                image_aliases=image_aliases,
+                image_count=image_count,
                 scope=scope,
                 allow_image_key_fallback=not contextual,
             )
@@ -1257,7 +1427,16 @@ class PrivateImageMixin:
                     ownership_line or "无",
                     _single_line(cleaned_text, 220),
                 )
-                self._set_private_image_vision_cache(cache_key, cleaned_text, provider_id=provider_id, image_keys=image_keys, prompt=prompt, scope=scope)
+                self._set_private_image_vision_cache(
+                    cache_key,
+                    cleaned_text,
+                    provider_id=provider_id,
+                    image_keys=image_keys,
+                    image_aliases=image_aliases,
+                    image_count=image_count,
+                    prompt=prompt,
+                    scope=scope,
+                )
                 return cleaned_text
             except Exception as exc:
                 self._record_llm_usage(
@@ -1878,6 +2057,7 @@ class PrivateImageMixin:
             )
             await self._send_private_image_reply_text(event, reply)
             image_keys = self._private_image_cache_image_keys([str(item) for item in images[:4] if str(item or "").strip()])
+            image_aliases = self._private_image_cache_aliases_for_sources([str(item) for item in images[:4] if str(item or "").strip()])
             if image_keys:
                 try:
                     async with self._data_lock:
@@ -1885,6 +2065,7 @@ class PrivateImageMixin:
                         user["last_private_image_vision_feedback_target"] = {
                             "ts": _now_ts(),
                             "image_keys": image_keys,
+                            "image_aliases": image_aliases,
                             "vision_text": _single_line(vision_text, 600),
                             "reply": _single_line(reply, 300),
                             "ownership": ownership_line,
