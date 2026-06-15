@@ -509,7 +509,9 @@ class ProactiveEngineMixin:
         user["planned_proactive_source"] = "timer"
         user["planned_proactive_motive"] = self._normalize_internal_motive_text(_single_line(event.get("motive"), 140))
         user["planned_proactive_topic"] = _single_line(event.get("topic"), 60)
-        user["planned_event_chain"] = list(event.get("chain") or []) if isinstance(event.get("chain"), list) else []
+        user["planned_event_chain"] = [] if self._private_user_role(user) == "friend" else (
+            list(event.get("chain") or []) if isinstance(event.get("chain"), list) else []
+        )
         user["planned_opener_mode"] = ""
         user["planned_followup_kind"] = ""
         user["planned_proactive_quota_exempt"] = False
@@ -535,7 +537,9 @@ class ProactiveEngineMixin:
         user["planned_proactive_source"] = "timer"
         user["planned_proactive_motive"] = self._normalize_internal_motive_text(_single_line(event.get("motive"), 140))
         user["planned_proactive_topic"] = _single_line(event.get("topic"), 60)
-        user["planned_event_chain"] = list(event.get("chain") or []) if isinstance(event.get("chain"), list) else []
+        user["planned_event_chain"] = [] if self._private_user_role(user) == "friend" else (
+            list(event.get("chain") or []) if isinstance(event.get("chain"), list) else []
+        )
         user["planned_opener_mode"] = ""
         user["planned_followup_kind"] = ""
         user["planned_proactive_quota_exempt"] = False
@@ -624,7 +628,7 @@ class ProactiveEngineMixin:
                     self._reschedule_greeting_within_window(user, planned_reason, now=now)
                 return False, "用户刚活跃过"
         min_interval = self._effective_min_interval_seconds(user)
-        if self._is_greeting_reason(planned_reason):
+        if self._is_greeting_reason(planned_reason) and self._private_user_role(user) != "friend":
             min_interval = min(min_interval, self._greeting_min_interval_seconds(planned_reason))
         if not due_timer_active and now - _safe_float(user.get("last_sent"), 0) < min_interval:
             if self._is_sticky_greeting_reason(planned_reason):
@@ -749,7 +753,7 @@ class ProactiveEngineMixin:
             else self._effective_user_idle_minutes(probe) * 60
         )
         min_interval = self._effective_min_interval_seconds(probe)
-        if self._is_greeting_reason(planned_reason):
+        if self._is_greeting_reason(planned_reason) and self._private_user_role(probe) != "friend":
             min_interval = min(min_interval, self._greeting_min_interval_seconds(planned_reason))
         reason_allowed = self._is_reason_allowed_now(planned_reason)
         moment_ok = True
@@ -822,7 +826,9 @@ class ProactiveEngineMixin:
         user["planned_proactive_source"] = "simulation"
         user["planned_proactive_motive"] = _single_line(current.get("motive"), 140)
         user["planned_proactive_topic"] = _single_line(current.get("topic"), 60)
-        user["planned_event_chain"] = list(current.get("chain") or []) if isinstance(current.get("chain"), list) else []
+        user["planned_event_chain"] = [] if self._private_user_role(user) == "friend" else (
+            list(current.get("chain") or []) if isinstance(current.get("chain"), list) else []
+        )
         user["planned_opener_mode"] = ""
         user["planned_followup_kind"] = ""
         user["planned_proactive_quota_exempt"] = bool(current.get("_free_screen_peek"))
@@ -1454,6 +1460,8 @@ class ProactiveEngineMixin:
         self, user: dict[str, Any], now: float | None = None
     ) -> dict[str, Any] | None:
         now = now or _now_ts()
+        if self._private_user_role(user) == "friend":
+            return None
         if self._in_llm_timer_silence_window(user, now=now):
             return None
         opener_event = self._build_suspended_opener_followup_event(user, now=now)
@@ -2971,6 +2979,8 @@ class ProactiveEngineMixin:
         action: str,
         motive: str,
     ) -> bool:
+        if self._private_user_role(user) == "friend":
+            return False
         if action != "message":
             return False
         if str(user.get("planned_followup_kind") or "") == "suspended_opener":

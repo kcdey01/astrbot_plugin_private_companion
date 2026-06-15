@@ -955,6 +955,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self._disable_integrated_features_when_external_plugins_present()
         self.data_file = os.path.join(self.data_dir, "companions.json")
         self._data_lock = asyncio.Lock()
+        self._conversation_db_lock = asyncio.Lock()
+        self._framework_agent_lock = asyncio.Lock()
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._default_persona_prompt_cache = ""
@@ -1197,9 +1199,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         compact = text.lower()
         error_markers = (
             "error occurred while processing agent request",
+            "all chat models failed",
             "sqlite3.operationalerror",
             "database is locked",
             "sqlalche.me/e/20/e3q8",
+            "model do not support image input",
+            "image_url",
+            "invalidparameter",
         )
         if not any(marker in compact for marker in error_markers):
             return
@@ -2720,6 +2726,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             self._apply_user_rest_silence_from_message(fast_user, text, now=received_ts)
             fast_user["inbound_count"] = _safe_int(fast_user.get("inbound_count"), 0) + 1
             fast_user["relationship_score"] = _safe_int(fast_user.get("relationship_score"), 0) + 1
+            fast_user["episode_message_count"] = _safe_int(fast_user.get("episode_message_count"), 0, 0) + 1
             if _safe_float(fast_user.get("awaiting_reply_since"), 0) > 0:
                 fast_user["reply_count"] = _safe_int(fast_user.get("reply_count"), 0) + 1
                 self._note_action_reply_feedback(
@@ -2733,6 +2740,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 fast_user["pending_followup_event"] = {}
                 fast_user["planned_proactive_quota_exempt"] = False
             fast_user["ignored_streak"] = 0
+            if self._apply_interaction_warmth_to_state(text, fast_user):
+                fast_user["relationship_score"] = _safe_int(fast_user.get("relationship_score"), 0) + 1
             self._schedule_data_save()
             return
 
@@ -2909,6 +2918,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             care_feedback_applied = bool(text) and self._apply_care_feedback_to_state(text)
             if care_feedback_applied:
                 user["relationship_score"] = _safe_int(user.get("relationship_score"), 0) + 2
+            interaction_warmth_applied = bool(text) and is_target_user and self._apply_interaction_warmth_to_state(text, user)
+            if interaction_warmth_applied:
+                user["relationship_score"] = _safe_int(user.get("relationship_score"), 0) + 1
             schedule_adjustment_applied = bool(text) and self._record_schedule_adjustment_from_interaction(text)
             if schedule_adjustment_applied:
                 user["relationship_score"] = _safe_int(user.get("relationship_score"), 0) + 1

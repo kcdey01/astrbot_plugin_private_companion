@@ -2076,6 +2076,7 @@ function renderTokens() {
   const externalTokens = Number(externalScope?.totals?.total_tokens || 0);
   const budget = stats.budget || {};
   const dailyLimit = Number(budget.limit || 0);
+  const dailyUsed = Number(budget.used || 0);
   const softLimit = Number(budget.soft_limit || 0);
   const softRemaining = budget.soft_remaining == null ? null : Number(budget.soft_remaining || 0);
   const exemptUsed = Number(budget.exempt_used || 0);
@@ -2084,27 +2085,25 @@ function renderTokens() {
   const showHourlyTrend = state.tokenView === "total";
   const hourlyPanel = $("#tokenHourlyPanel");
   if (hourlyPanel) hourlyPanel.hidden = !showHourlyTrend;
-  const budgetCards = scope.isToday ? [
-    tokenBudgetStat({
-      limit: dailyLimit > 0 ? formatCompactNumber(dailyLimit) : "不限",
-      remaining: dailyRemaining == null ? "不限" : formatCompactNumber(dailyRemaining),
-      softLabel: budget.soft_active ? "软限额已接管" : "每日软限额",
-      softValue: budget.soft_enabled && softLimit > 0
-        ? (budget.soft_active ? `已暂缓 ${formatNumber(budget.deferred_calls || 0)} 次` : `剩 ${formatCompactNumber(softRemaining)}`)
-        : "关闭",
-    }),
-    miniStat("主动消息", formatCompactNumber(exemptUsed)),
-  ] : [];
-  $("#tokenSummary").innerHTML = [
-    miniStat(scope.label, formatNumber(totalTokens)),
-    miniStat(externalScope.label, formatNumber(externalTokens)),
-    ...budgetCards,
-    miniStat("调用次数", formatNumber(calls)),
-    miniStat("平均 Token", formatNumber(Math.round(Number(totals.avg_tokens || 0)))),
-    miniStat("平均延迟", `${formatNumber(Math.round(Number(totals.avg_latency_ms || 0)))} ms`),
-    miniStat("估算占比", `${Math.round(estimatedRatio * 100)}%`),
-    miniStat("失败次数", formatNumber(errors)),
-  ].join("");
+  $("#tokenSummary").innerHTML = tokenSummaryBoard({
+    scope,
+    externalScope,
+    totalTokens,
+    externalTokens,
+    totals,
+    calls,
+    errors,
+    estimatedRatio,
+    dailyLimit,
+    dailyUsed,
+    dailyRemaining,
+    softLimit,
+    softRemaining,
+    softEnabled: Boolean(budget.soft_enabled),
+    softActive: Boolean(budget.soft_active),
+    deferredCalls: Number(budget.deferred_calls || 0),
+    proactiveMessages: exemptUsed,
+  });
 
   renderTokenChart("#tokenProviderChart", scope.providers || [], "暂无 Provider 消耗数据", (item) => item.key || "default");
   renderTokenChart("#tokenTaskChart", scope.tasks || [], "暂无任务消耗数据", (item) => tokenTaskLabel(item.key));
@@ -2118,6 +2117,92 @@ function renderTokens() {
   renderTokenProviderTable(scope.providers || []);
   renderTokenTaskTable(scope.tasks || []);
   renderTokenRecentTable(scope.recent || []);
+}
+
+function tokenSummaryBoard({
+  scope,
+  externalScope,
+  totalTokens,
+  externalTokens,
+  totals,
+  calls,
+  errors,
+  estimatedRatio,
+  dailyLimit,
+  dailyUsed,
+  dailyRemaining,
+  softLimit,
+  softRemaining,
+  softEnabled,
+  softActive,
+  deferredCalls,
+  proactiveMessages,
+}) {
+  const avgTokens = Math.round(Number(totals.avg_tokens || 0));
+  const avgLatency = Math.round(Number(totals.avg_latency_ms || 0));
+  const hardPercent = dailyLimit > 0 ? Math.min(100, Math.round((dailyUsed / Math.max(1, dailyLimit)) * 100)) : 0;
+  const remainingValue = dailyRemaining == null
+    ? (dailyLimit > 0 ? Math.max(0, dailyLimit - dailyUsed) : null)
+    : dailyRemaining;
+  const softUsed = softEnabled && softLimit > 0 && softRemaining != null ? Math.max(0, softLimit - softRemaining) : 0;
+  const softPercent = softEnabled && softLimit > 0 ? Math.min(100, Math.round((softUsed / Math.max(1, softLimit)) * 100)) : 0;
+  const scopeNote = scope.isToday
+    ? (dailyLimit > 0 ? `硬限额 ${formatCompactNumber(dailyLimit)} · 剩 ${formatCompactNumber(remainingValue)}` : "今日不限额")
+    : `${scope.mode === "total" ? "全部历史" : "选定日期"} · ${formatNumber(calls)} 次调用`;
+  return `
+    <section class="token-summary-board">
+      <article class="token-primary-card">
+        <span>${escapeHtml(scope.label)}</span>
+        <b>${escapeHtml(formatNumber(totalTokens))}</b>
+        <small>${escapeHtml(scopeNote)}</small>
+        ${scope.isToday && dailyLimit > 0 ? `<div class="token-progress"><i style="width:${hardPercent}%"></i></div>` : ""}
+      </article>
+      <article class="token-budget-card">
+        <div class="token-budget-head">
+          <span>预算</span>
+          <b>${escapeHtml(scope.isToday && dailyLimit > 0 ? `${hardPercent}%` : "概览")}</b>
+        </div>
+        <div class="token-budget-lines">
+          ${tokenBudgetLine("今日上限", dailyLimit > 0 ? formatCompactNumber(dailyLimit) : "不限", hardPercent, scope.isToday && dailyLimit > 0)}
+          ${tokenBudgetLine("今日剩余", remainingValue == null ? "不限" : formatCompactNumber(remainingValue), dailyLimit > 0 ? 100 - hardPercent : 0, scope.isToday && dailyLimit > 0)}
+          ${tokenBudgetLine(
+            softActive ? "软限额接管" : "每日软限额",
+            softEnabled && softLimit > 0 ? (softActive ? `暂缓 ${formatNumber(deferredCalls)} 次` : `剩 ${formatCompactNumber(softRemaining)}`) : "关闭",
+            softPercent,
+            softEnabled && softLimit > 0,
+            softActive ? "warn" : "",
+          )}
+        </div>
+      </article>
+      <div class="token-metric-grid">
+        ${tokenMetricCard(externalScope.label, formatNumber(externalTokens))}
+        ${tokenMetricCard("主动消息", formatCompactNumber(proactiveMessages))}
+        ${tokenMetricCard("调用次数", formatNumber(calls))}
+        ${tokenMetricCard("平均 Token", formatNumber(avgTokens))}
+        ${tokenMetricCard("平均延迟", `${formatNumber(avgLatency)} ms`)}
+        ${tokenMetricCard("估算 / 失败", `${Math.round(estimatedRatio * 100)}% · ${formatNumber(errors)}`)}
+      </div>
+    </section>
+  `;
+}
+
+function tokenBudgetLine(label, value, percent, active, tone = "") {
+  return `
+    <div class="token-budget-line ${active ? "active" : "off"} ${escapeHtml(tone)}">
+      <span>${escapeHtml(label)}</span>
+      <b>${escapeHtml(value)}</b>
+      <em><i style="width:${Math.max(0, Math.min(100, Number(percent || 0)))}%"></i></em>
+    </div>
+  `;
+}
+
+function tokenMetricCard(label, value) {
+  return `
+    <span class="token-metric-card">
+      <small>${escapeHtml(label)}</small>
+      <b>${escapeHtml(value)}</b>
+    </span>
+  `;
 }
 
 function externalTokenScopeData(stats, pluginScope) {
@@ -4422,7 +4507,7 @@ function renderProactiveCandidates() {
   ].join("");
   $("#proactiveSourceChart").innerHTML = donutChart(sourceCounts);
   $("#proactiveStatusChart").innerHTML = donutChart(counts || {});
-  renderProactiveCandidateFilters(users, selectedFilter, data.total || allItems.length);
+  renderProactiveCandidateFilters(users, selectedFilter, data.total || allItems.length, total, items.length);
   if (!items.length) {
     $("#proactiveCandidateList").innerHTML = `<div class="empty small">暂无符合筛选的主动候选</div>`;
     return;
@@ -4474,29 +4559,74 @@ function sumObjectValues(data) {
   return Object.values(data || {}).reduce((sum, value) => sum + Number(value || 0), 0);
 }
 
-function renderProactiveCandidateFilters(users, selected, visibleCount) {
+function renderProactiveCandidateFilters(users, selected, allTotal, selectedTotal, visibleCount) {
   const root = $("#proactiveCandidateFilters");
   if (!root) return;
-  const options = [
-    `<option value="all" ${selected === "all" ? "selected" : ""}>全部用户 · ${escapeHtml(visibleCount || 0)}</option>`,
-    ...(users || []).map((user) => {
-      const label = `${user.label || user.user_id || "未知用户"} · ${user.role_label || "-"} · ${user.total || 0}`;
-      return `<option value="${escapeHtml(user.user_id || "")}" ${selected === String(user.user_id || "") ? "selected" : ""}>${escapeHtml(label)}</option>`;
-    }),
-  ].join("");
+  const userItems = Array.isArray(users) ? users : [];
+  const selectedUser = userItems.find((user) => String(user.user_id || "") === selected);
+  const title = selected === "all"
+    ? "全部私聊用户"
+    : (selectedUser?.label || selected || "未知用户");
+  const note = selected === "all"
+    ? `${formatNumber(userItems.length)} 个用户 · ${formatNumber(visibleCount || 0)} 条记录`
+    : `${selectedUser?.role_label || "用户"} · ${formatNumber(visibleCount || 0)} 条记录`;
+  const statusSummary = selectedUser?.counts
+    ? [
+        `计划 ${formatNumber(selectedUser.counts.accepted || 0)}`,
+        `发送 ${formatNumber(selectedUser.counts.sent || 0)}`,
+        `拦截 ${formatNumber(selectedUser.counts.blocked || 0)}`,
+      ].join(" · ")
+    : `${formatNumber(selectedTotal || 0)} 次触发`;
+  const allButton = proactiveCandidateFilterButton({
+    value: "all",
+    label: "全部用户",
+    roleLabel: "汇总视图",
+    total: allTotal || 0,
+    selected: selected === "all",
+  });
+  const userButtons = userItems.map((user) => proactiveCandidateFilterButton({
+    value: user.user_id || "",
+    label: user.label || user.user_id || "未知用户",
+    roleLabel: user.role_label || "-",
+    total: user.total || 0,
+    selected: selected === String(user.user_id || ""),
+    counts: user.counts || {},
+  })).join("");
   root.innerHTML = `
-    <label class="proactive-filter-select">
-      <span>私聊用户</span>
-      <select id="proactiveCandidateUserFilter">${options}</select>
-    </label>
+    <div class="proactive-filter-summary">
+      <span>当前视图</span>
+      <b>${escapeHtml(title)}</b>
+      <small>${escapeHtml(note)}</small>
+      <em>${escapeHtml(statusSummary)}</em>
+    </div>
+    <div class="proactive-filter-list" role="list" aria-label="候选记录用户视图">
+      ${allButton}
+      ${userButtons || `<span class="empty small">暂无用户候选</span>`}
+    </div>
   `;
-  const select = $("#proactiveCandidateUserFilter");
-  if (select) {
-    select.addEventListener("change", () => {
-      state.proactiveCandidateFilter = select.value || "all";
+  root.querySelectorAll("[data-proactive-candidate-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.proactiveCandidateFilter = button.dataset.proactiveCandidateFilter || "all";
       renderProactiveCandidates();
     });
-  }
+  });
+}
+
+function proactiveCandidateFilterButton({ value, label, roleLabel, total, selected, counts = {} }) {
+  const detail = [
+    counts.sent ? `发 ${formatNumber(counts.sent)}` : "",
+    counts.accepted ? `计 ${formatNumber(counts.accepted)}` : "",
+    counts.blocked ? `拦 ${formatNumber(counts.blocked)}` : "",
+  ].filter(Boolean).join(" · ");
+  return `
+    <button type="button" class="proactive-filter-user ${selected ? "is-active" : ""}" data-proactive-candidate-filter="${escapeHtml(value)}">
+      <span>
+        <b>${escapeHtml(label)}</b>
+        <small>${escapeHtml(roleLabel || "-")}${detail ? ` · ${escapeHtml(detail)}` : ""}</small>
+      </span>
+      <em>${escapeHtml(formatNumber(total || 0))}</em>
+    </button>
+  `;
 }
 
 function proactiveSummaryCard(label, value, note) {
@@ -7300,24 +7430,6 @@ function renderProviderFlow(providers) {
 
 function miniStat(label, value) {
   return `<div class="mini-stat"><b>${escapeHtml(value)}</b><span>${escapeHtml(label)}</span></div>`;
-}
-
-function tokenBudgetStat({ limit, remaining, softLabel, softValue }) {
-  const rows = [
-    ["今日上限", limit],
-    ["今日剩余", remaining],
-    [softLabel, softValue],
-  ];
-  return `
-    <div class="mini-stat token-budget-stat">
-      ${rows.map(([label, value]) => `
-        <span class="token-budget-item">
-          <b>${escapeHtml(value)}</b>
-          <small>${escapeHtml(label)}</small>
-        </span>
-      `).join("")}
-    </div>
-  `;
 }
 
 function scoreGauge(label, value, min, max) {

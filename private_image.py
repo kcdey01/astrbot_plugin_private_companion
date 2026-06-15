@@ -1007,6 +1007,19 @@ class PrivateImageMixin:
                     provider = None
         return self._provider_supports_image(provider)
 
+    @staticmethod
+    def _exception_indicates_image_input_unsupported(exc: Exception) -> bool:
+        text = str(exc or "").lower()
+        return bool(
+            "image_url" in text
+            and (
+                "do not support image" in text
+                or "not support image" in text
+                or "image input" in text
+                or "invalidparameter" in text
+            )
+        )
+
     def _private_image_role_self_recognition_hint(self) -> str:
         raw = str(getattr(self, "private_image_self_recognition_hint", "") or "")
         if not raw.strip():
@@ -1878,12 +1891,16 @@ class PrivateImageMixin:
                     "[PrivateCompanion] 私聊单图检测到动态 GIF,已改用抽帧视觉摘要链路: user=%s has_vision=%s",
                     user_id,
                     bool(vision_text),
-                )
+            )
             conv = None
             if umo:
-                conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
-                if conv_id:
-                    conv = await self.context.conversation_manager.get_conversation(umo, conv_id)
+                getter = getattr(self, "_get_current_conversation_safely", None)
+                if callable(getter):
+                    conv = await getter(umo, label="private_image_framework_read")
+                else:
+                    conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
+                    if conv_id:
+                        conv = await self.context.conversation_manager.get_conversation(umo, conv_id)
             cfg = self.context.get_config(umo=umo) if umo else self.context.get_config()
             provider_settings = cfg.get("provider_settings", {}) if isinstance(cfg, dict) else {}
             build_cfg = MainAgentBuildConfig(
@@ -1919,6 +1936,7 @@ class PrivateImageMixin:
                 )
             start = time.time()
             captured_tool_sends = []
+            llm_resp = None
             try:
                 async def _runner_factory():
                     return await build_main_agent(
@@ -1929,23 +1947,42 @@ class PrivateImageMixin:
                     )
 
                 capture_runner = getattr(self, "_capture_framework_send_message_calls", None)
-                if callable(capture_runner) and umo:
-                    result, captured_tool_sends = await capture_runner(
-                        target_session=umo,
-                        runner_factory=_runner_factory,
-                    )
-                    if captured_tool_sends:
-                        logger.info(
-                            "[PrivateCompanion] 私聊单图主链拦截到框架工具直发: user=%s count=%s",
-                            user_id,
-                            len(captured_tool_sends),
+                framework_lock = getattr(self, "_framework_agent_lock", None)
+                if not isinstance(framework_lock, asyncio.Lock):
+                    framework_lock = asyncio.Lock()
+                    self._framework_agent_lock = framework_lock
+                async with framework_lock:
+                    if callable(capture_runner) and umo:
+                        result, captured_tool_sends = await capture_runner(
+                            target_session=umo,
+                            runner_factory=_runner_factory,
                         )
+                        if captured_tool_sends:
+                            logger.info(
+                                "[PrivateCompanion] 私聊单图主链拦截到框架工具直发: user=%s count=%s",
+                                user_id,
+                                len(captured_tool_sends),
+                            )
+                    else:
+                        result = await _runner_factory()
+                        runner_for_step = getattr(result, "agent_runner", None) if result else None
+                        if runner_for_step is not None and hasattr(runner_for_step, "step_until_done"):
+                            async for _ in runner_for_step.step_until_done(20):
+                                pass
+            except Exception as exc:
+                if direct_image_mode and self._exception_indicates_image_input_unsupported(exc):
+                    logger.warning(
+                        "[PrivateCompanion] 私聊单图主链模型不支持图片输入,已降级为视觉摘要兜底: user=%s provider=%s error=%s",
+                        user_id,
+                        direct_provider_id,
+                        _single_line(exc, 180),
+                    )
+                    direct_image_mode = False
+                    reply = ""
+                    reply_source = "image_input_unsupported_fallback"
+                    result = None
                 else:
-                    result = await _runner_factory()
-                    runner_for_step = getattr(result, "agent_runner", None) if result else None
-                    if runner_for_step is not None and hasattr(runner_for_step, "step_until_done"):
-                        async for _ in runner_for_step.step_until_done(20):
-                            pass
+                    raise
             finally:
                 if selected_provider_changed:
                     try:
@@ -1953,9 +1990,12 @@ class PrivateImageMixin:
                     except Exception:
                         pass
             runner = getattr(result, "agent_runner", None) if result else None
-            llm_resp = runner.get_final_llm_resp() if runner else None
-            reply = str(getattr(llm_resp, "completion_text", "") or "").strip()
-            reply_source = "main_chain"
+            if llm_resp is None:
+                llm_resp = runner.get_final_llm_resp() if runner else None
+            if "reply" not in locals():
+                reply = str(getattr(llm_resp, "completion_text", "") or "").strip()
+            if "reply_source" not in locals():
+                reply_source = "main_chain"
             if not reply and captured_tool_sends:
                 captured_text_parts: list[str] = []
                 sanitizer = getattr(self, "_sanitize_captured_plain_text", None)

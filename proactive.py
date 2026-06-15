@@ -616,7 +616,9 @@ class ProactiveMixin:
                     created_at=_safe_float(timer_event.get("trigger_ts"), 0),
                 )
                 user["planned_event_chain"] = (
-                    list(timer_event.get("chain") or [])
+                    []
+                    if self._private_user_role(user) == "friend"
+                    else list(timer_event.get("chain") or [])
                     if isinstance(timer_event.get("chain"), list)
                     else []
                 )
@@ -653,12 +655,14 @@ class ProactiveMixin:
         )
         self._clear_planned_proactive_trigger(user)
         user["planned_event_chain"] = (
-            list(planned_event.get("chain") or [])
+            []
+            if self._private_user_role(user) == "friend"
+            else list(planned_event.get("chain") or [])
             if isinstance(planned_event, dict) and isinstance(planned_event.get("chain"), list)
             else []
         )
         user["planned_opener_mode"] = ""
-        user["planned_followup_kind"] = (
+        user["planned_followup_kind"] = "" if self._private_user_role(user) == "friend" else (
             "suspended_opener"
             if isinstance(planned_event, dict) and planned_event.get("_opener_followup")
             else "chain_followup"
@@ -804,7 +808,9 @@ class ProactiveMixin:
         user["planned_proactive_motive"] = motive
         user["planned_proactive_topic"] = _single_line(event.get("topic"), 60)
         self._clear_planned_proactive_trigger(user)
-        user["planned_event_chain"] = list(event.get("chain") or []) if isinstance(event.get("chain"), list) else []
+        user["planned_event_chain"] = [] if self._private_user_role(user) == "friend" else (
+            list(event.get("chain") or []) if isinstance(event.get("chain"), list) else []
+        )
         user["planned_opener_mode"] = ""
         user["planned_followup_kind"] = ""
         user["planned_proactive_quota_exempt"] = bool(event.get("_free_screen_peek"))

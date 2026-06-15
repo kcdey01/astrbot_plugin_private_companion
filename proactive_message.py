@@ -1102,6 +1102,7 @@ class ProactiveMessageMixin:
         lines = [
             "【主动意图具体化】",
             "主动消息宁少勿泛：只有一个具体由头就围绕它说半句，不要同时问候、关心、汇报状态、另开话题。",
+            "本轮只能生成一个候选主动内容；不要把两个不同由头、两个不同场景或两次想发的话拼在同一条里。",
             "优先选择当前日程里的一个小物件/动作/余味，或者上一条闭环里尚未接住的一点；没有具体由头时就写得更短。",
             "禁止把“想找你、刷存在感、来看看你、最近忙不忙、辛苦了”当作唯一内容。",
         ]
@@ -1246,6 +1247,33 @@ class ProactiveMessageMixin:
             SendMessageToUserTool.call = original_call
         return result, captured
 
+    async def _conversation_db_operation(self, label: str, operation: Any) -> Any:
+        lock = getattr(self, "_conversation_db_lock", None)
+        if not isinstance(lock, asyncio.Lock):
+            lock = asyncio.Lock()
+            self._conversation_db_lock = lock
+        for attempt in range(5):
+            try:
+                async with lock:
+                    return await operation()
+            except Exception as exc:
+                text = str(exc or "").lower()
+                locked = "database is locked" in text or "sqlite3.operationalerror" in text
+                if locked and attempt < 4:
+                    await asyncio.sleep(0.2 * (attempt + 1))
+                    continue
+                logger.debug("[PrivateCompanion] 会话数据库操作失败: %s error=%s", label, exc)
+                raise
+
+    async def _get_current_conversation_safely(self, umo: str, *, label: str = "conversation") -> Any:
+        async def _read():
+            conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
+            if not conv_id:
+                return None
+            return await self.context.conversation_manager.get_conversation(umo, conv_id)
+
+        return await self._conversation_db_operation(label, _read)
+
     async def _generate_proactive_message_via_framework(
         self,
         user: dict[str, Any],
@@ -1263,11 +1291,7 @@ class ProactiveMessageMixin:
         except Exception:
             logger.debug("[PrivateCompanion] 无法从 umo 构造会话: %s", umo)
             return ""
-        session_curr_cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
-        if not session_curr_cid:
-            logger.debug("[PrivateCompanion] 当前私聊没有活动对话,跳过框架式主动生成: %s", umo)
-            return ""
-        conv = await self.context.conversation_manager.get_conversation(umo, session_curr_cid)
+        conv = await self._get_current_conversation_safely(umo, label="proactive_framework_read")
         if not conv:
             logger.debug("[PrivateCompanion] 未拿到当前私聊对话,跳过框架式主动生成: %s", umo)
             return ""
@@ -1309,10 +1333,15 @@ class ProactiveMessageMixin:
                     req=req,
                 )
 
-            result, captured_tool_sends = await self._capture_framework_send_message_calls(
-                target_session=umo,
-                runner_factory=_runner_factory,
-            )
+            framework_lock = getattr(self, "_framework_agent_lock", None)
+            if not isinstance(framework_lock, asyncio.Lock):
+                framework_lock = asyncio.Lock()
+                self._framework_agent_lock = framework_lock
+            async with framework_lock:
+                result, captured_tool_sends = await self._capture_framework_send_message_calls(
+                    target_session=umo,
+                    runner_factory=_runner_factory,
+                )
             if not result:
                 return ""
             runner = result.agent_runner
@@ -1420,11 +1449,7 @@ class ProactiveMessageMixin:
         except Exception:
             logger.debug("[PrivateCompanion] 无法从 umo 构造语音会话: %s", umo)
             return ""
-        session_curr_cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
-        if not session_curr_cid:
-            logger.debug("[PrivateCompanion] 当前私聊没有活动对话,跳过框架式语音生成: %s", umo)
-            return ""
-        conv = await self.context.conversation_manager.get_conversation(umo, session_curr_cid)
+        conv = await self._get_current_conversation_safely(umo, label="voice_framework_read")
         if not conv:
             logger.debug("[PrivateCompanion] 未拿到当前私聊对话,跳过框架式语音生成: %s", umo)
             return ""
@@ -1457,12 +1482,17 @@ class ProactiveMessageMixin:
         )
         start = time.time()
         try:
-            result = await build_main_agent(
-                event=synthetic_event,
-                plugin_context=self.context,
-                config=build_cfg,
-                req=req,
-            )
+            framework_lock = getattr(self, "_framework_agent_lock", None)
+            if not isinstance(framework_lock, asyncio.Lock):
+                framework_lock = asyncio.Lock()
+                self._framework_agent_lock = framework_lock
+            async with framework_lock:
+                result = await build_main_agent(
+                    event=synthetic_event,
+                    plugin_context=self.context,
+                    config=build_cfg,
+                    req=req,
+                )
             if not result:
                 return ""
             runner = result.agent_runner
@@ -1521,9 +1551,46 @@ class ProactiveMessageMixin:
                 action_context=action_context,
             )
         cleaned = self._apply_proactive_style_variation(cleaned, user)
+        cleaned = self._collapse_multi_candidate_proactive_text(cleaned, user=user, name=name)
         if self._should_drop_vague_generic_proactive(user, reason=reason, action=action, action_context=action_context, text=cleaned):
             return ""
         return self._normalize_proactive_sentence_flow(cleaned)
+
+    def _collapse_multi_candidate_proactive_text(self, text: str, *, user: dict[str, Any], name: str = "") -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return ""
+        lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+        units: list[str] = []
+        for line in lines or [cleaned]:
+            units.extend(self._split_proactive_sentence_units(line))
+        units = [unit.strip() for unit in units if unit and unit.strip()]
+        if len(units) <= 2:
+            return cleaned
+
+        opener_tokens = [
+            _single_line(name, 16),
+            _single_line(user.get("nickname") if isinstance(user, dict) else "", 16),
+            _single_line(getattr(self, "default_nickname", ""), 16),
+        ]
+        first_opener = ""
+        match = re.match(r"^([\w\u4e00-\u9fffぁ-んァ-ヶー]{1,8})[，,、\s]", units[0])
+        if match:
+            first_opener = match.group(1)
+            opener_tokens.append(first_opener)
+        opener_tokens = [token for token in dict.fromkeys(opener_tokens) if token]
+
+        repeated_opener_index = 0
+        for index, unit in enumerate(units[1:], start=1):
+            if any(unit.startswith(token) and index >= 2 for token in opener_tokens):
+                repeated_opener_index = index
+                break
+        if repeated_opener_index:
+            units = units[:repeated_opener_index]
+
+        if self._private_user_role(user) == "friend" and len(units) > 2:
+            units = units[:2]
+        return "\n".join(units).strip() or cleaned
 
     def _should_drop_vague_generic_proactive(
         self,
@@ -3764,21 +3831,37 @@ class ProactiveMessageMixin:
         umo = str(user.get("umo") or "").strip()
         if not umo or not assistant_response:
             return
-        try:
-            conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
-            if not conv_id:
-                logger.debug("[PrivateCompanion] 当前私聊没有活动对话,跳过主动消息存档: %s", umo)
+        for attempt in range(4):
+            try:
+                user_msg_obj = UserMessageSegment(content=str(user_prompt or ""))
+                assistant_msg_obj = AssistantMessageSegment(content=str(assistant_response or ""))
+                async def _write():
+                    conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
+                    if not conv_id:
+                        return False
+                    await self.context.conversation_manager.add_message_pair(
+                        cid=conv_id,
+                        user_message=user_msg_obj,
+                        assistant_message=assistant_msg_obj,
+                    )
+                    return True
+
+                written = await self._conversation_db_operation("archive_proactive_message", _write)
+                if not written:
+                    logger.debug("[PrivateCompanion] 当前私聊没有活动对话,跳过主动消息存档: %s", umo)
+                    return
+                if attempt > 0:
+                    logger.info("[PrivateCompanion] 主动消息写入 AstrBot 会话历史成功: %s retry=%s", umo, attempt)
+                else:
+                    logger.info("[PrivateCompanion] 已将主动消息写入 AstrBot 会话历史: %s", umo)
                 return
-            user_msg_obj = UserMessageSegment(content=str(user_prompt or ""))
-            assistant_msg_obj = AssistantMessageSegment(content=str(assistant_response or ""))
-            await self.context.conversation_manager.add_message_pair(
-                cid=conv_id,
-                user_message=user_msg_obj,
-                assistant_message=assistant_msg_obj,
-            )
-            logger.info("[PrivateCompanion] 已将主动消息写入 AstrBot 会话历史: %s", umo)
-        except Exception as e:
-            logger.warning("[PrivateCompanion] 主动消息写入会话历史失败: %s", e)
+            except Exception as e:
+                text = str(e or "").lower()
+                if ("database is locked" in text or "sqlite3.operationalerror" in text) and attempt < 3:
+                    await asyncio.sleep(0.25 * (attempt + 1))
+                    continue
+                logger.warning("[PrivateCompanion] 主动消息写入会话历史失败: %s", e)
+                return
 
     def _format_story_plan_for_prompt(self) -> str:
         plan = self.data.get("daily_story_plan", {})

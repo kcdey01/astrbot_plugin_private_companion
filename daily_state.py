@@ -2498,6 +2498,125 @@ class DailyStateMixin:
             )
         return changed
 
+    def _detect_interaction_warmth_feedback(self, text: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
+        normalized = _single_line(text, 220)
+        if not normalized:
+            return {"is_warmth": False}
+        intimate = bool(re.search(r"摸摸|贴贴|抱抱|亲亲|揉揉|蹭蹭|摸头|抱一下|贴一下|rua", normalized, re.IGNORECASE))
+        comfort = bool(re.search(r"陪你|哄你|乖|不难过|别难过|没关系|辛苦了|抱一下|摸摸头", normalized))
+        positive = bool(re.search(r"开心|好耶|哈哈|笑死|可爱|喜欢|太好了|真好|想你|爱你|在呢|来了|陪我", normalized, re.IGNORECASE))
+        if not (intimate or comfort or positive):
+            return {"is_warmth": False}
+
+        relationship_score = _safe_int(user.get("relationship_score") if isinstance(user, dict) else 0, 0, 0)
+        episode_count = _safe_int(user.get("episode_message_count") if isinstance(user, dict) else 0, 0, 0)
+        state = self._compose_state_from_conditions(self.data.get("daily_weather", {}))
+        energy = _safe_int(state.get("energy"), 75, 0, 100)
+
+        is_sustained_positive = positive and episode_count >= 6 and relationship_score >= 18
+        if positive and not (intimate or comfort or is_sustained_positive):
+            return {"is_warmth": False}
+
+        base_delta = 2 if intimate or comfort else 1
+        if energy <= 45:
+            base_delta += 2
+        elif energy <= 62:
+            base_delta += 1
+        elif energy >= 86:
+            base_delta = max(1, base_delta - 1)
+        if relationship_score >= 120:
+            base_delta += 2
+        elif relationship_score >= 55:
+            base_delta += 1
+        if is_sustained_positive and episode_count >= 10:
+            base_delta += 1
+
+        max_delta = 8 if intimate or comfort else 4
+        delta = max(1, min(max_delta, base_delta))
+        if intimate:
+            source = "亲密互动回暖"
+            label = "被亲近安抚后,精神轻轻回暖"
+            mood = "柔和"
+            duration_hours = 4
+            intensity = 58
+            phase = "intimacy"
+        elif comfort:
+            source = "安慰互动回暖"
+            label = "被安慰后,紧绷感松开一点"
+            mood = "柔和"
+            duration_hours = 4
+            intensity = 54
+            phase = "comfort"
+        else:
+            source = "连续对话回暖"
+            label = "和熟悉的人连续聊了一会儿,精神被带起来一点"
+            mood = "轻快"
+            duration_hours = 3
+            intensity = 42
+            phase = "sustained_positive_chat"
+        return {
+            "is_warmth": True,
+            "source": source,
+            "label": label,
+            "mood": mood,
+            "energy_delta": delta,
+            "duration_hours": duration_hours,
+            "intensity": intensity,
+            "phase": phase,
+            "cause": _single_line(normalized, 80),
+            "max_delta": max_delta,
+        }
+
+    def _apply_interaction_warmth_to_state(self, text: str, user: dict[str, Any] | None = None) -> bool:
+        feedback = self._detect_interaction_warmth_feedback(text, user)
+        if not feedback.get("is_warmth"):
+            return False
+        now = _now_ts()
+        conditions = self.data.setdefault("state_conditions", [])
+        if not isinstance(conditions, list):
+            self.data["state_conditions"] = []
+            conditions = self.data["state_conditions"]
+        max_delta = _safe_int(feedback.get("max_delta"), 6, 1, 10)
+        active = next(
+            (
+                cond for cond in reversed(conditions)
+                if isinstance(cond, dict)
+                and str(cond.get("kind") or "") == "interaction_warmth"
+                and _safe_float(cond.get("end_ts"), 0) > now
+            ),
+            None,
+        )
+        if isinstance(active, dict):
+            current_delta = _safe_int(active.get("energy_delta"), 0, 0, 20)
+            incoming_delta = _safe_int(feedback.get("energy_delta"), 1, 1, 10)
+            active["energy_delta"] = min(max_delta, max(current_delta, incoming_delta) + 1)
+            active["end_ts"] = max(
+                _safe_float(active.get("end_ts"), now),
+                now + _safe_int(feedback.get("duration_hours"), 3, 1, 8) * 3600,
+            )
+            active["duration_hours"] = max(1, int((_safe_float(active.get("end_ts"), now) - now) / 3600))
+            active["label"] = _single_line(feedback.get("label"), 80)
+            active["mood"] = _single_line(feedback.get("mood"), 20) or active.get("mood") or "柔和"
+            active["cause"] = _single_line(feedback.get("cause"), 80)
+            active["phase"] = _single_line(feedback.get("phase"), 40)
+            active["intensity"] = max(_safe_int(active.get("intensity"), 40), _safe_int(feedback.get("intensity"), 40))
+        else:
+            conditions.append(
+                self._make_condition(
+                    kind="interaction_warmth",
+                    title=_single_line(feedback.get("source"), 40) or "互动回暖",
+                    label=_single_line(feedback.get("label"), 80),
+                    mood=_single_line(feedback.get("mood"), 20) or "柔和",
+                    energy_delta=_safe_int(feedback.get("energy_delta"), 2, 1, 10),
+                    duration_hours=_safe_int(feedback.get("duration_hours"), 3, 1, 8),
+                    intensity=_safe_int(feedback.get("intensity"), 45, 0, 100),
+                    cause=_single_line(feedback.get("cause"), 80),
+                    phase=_single_line(feedback.get("phase"), 40),
+                )
+            )
+        self.data["daily_state"] = self._compose_state_from_conditions(self.data.get("daily_weather", {}))
+        return True
+
     def _detect_food_feedback(self, text: str) -> dict[str, Any]:
         normalized = _single_line(text, 220)
         if not normalized:
@@ -3612,12 +3731,18 @@ class DailyStateMixin:
             if not umo:
                 continue
             try:
-                conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
-                if not conv_id:
-                    continue
-                conv = await self.context.conversation_manager.get_conversation(umo, conv_id)
+                getter = getattr(self, "_get_current_conversation_safely", None)
+                if callable(getter):
+                    conv = await getter(umo, label="yesterday_conversation_read")
+                else:
+                    conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
+                    if not conv_id:
+                        continue
+                    conv = await self.context.conversation_manager.get_conversation(umo, conv_id)
             except Exception as exc:
                 logger.debug("[PrivateCompanion] 读取昨日对话失败: user=%s err=%s", user_id, exc)
+                continue
+            if not conv:
                 continue
             history = self._load_conversation_history_items(conv)
             dated_lines: list[str] = []
@@ -4344,7 +4469,7 @@ class DailyStateMixin:
                 intensity="中",
                 scope="当前段、下一段、情绪底色",
             )
-        if re.search(r"摸摸|抱抱|亲亲|揉揉|陪你|哄你|乖|不难过|别难过|没关系|辛苦了|抱一下", normalized):
+        if re.search(r"摸摸|贴贴|抱抱|亲亲|揉揉|蹭蹭|摸头|陪你|哄你|乖|不难过|别难过|没关系|辛苦了|抱一下", normalized):
             return payload(
                 source="安慰互动",
                 note="用户刚刚在安慰或亲近；后续日程应保留一点被接住的余温,表达更软一些,不要继续单向累积负面情绪。",
@@ -5628,7 +5753,9 @@ class DailyStateMixin:
             user["planned_proactive_source"] = "timer"
             user["planned_proactive_motive"] = timer_event["motive"]
             user["planned_proactive_topic"] = topic
-            user["planned_event_chain"] = list(payload.get("chain") or []) if isinstance(payload.get("chain"), list) else []
+            user["planned_event_chain"] = [] if self._private_user_role(user) == "friend" else (
+                list(payload.get("chain") or []) if isinstance(payload.get("chain"), list) else []
+            )
             user["planned_opener_mode"] = ""
             user["planned_followup_kind"] = ""
             user["planned_proactive_quota_exempt"] = False
@@ -6343,6 +6470,9 @@ class DailyStateMixin:
                 if isinstance(user.get("planned_event_chain"), list)
                 else []
             )
+            friend_proactive_for_send = self._private_user_role(user) == "friend"
+            if friend_proactive_for_send:
+                planned_chain_for_send = []
             proactive_quote_message_id = self._planned_proactive_quote_message_id(user, str(user.get("umo") or ""))
             planned_opener_mode_for_send = str(user.get("planned_opener_mode") or "")
             planned_followup_kind_for_send = str(user.get("planned_followup_kind") or "")
@@ -6412,7 +6542,7 @@ class DailyStateMixin:
                     image_path,
                     extra_components=extra_components,
                     quote_message_id=proactive_quote_message_id,
-                    disable_segmenting=reason == "creative_share",
+                    disable_segmenting=reason == "creative_share" or friend_proactive_for_send,
                 )
                 logger.info(
                     "[PrivateCompanion] 主动发送完成: user=%s reason=%s action=%s",
@@ -6489,7 +6619,10 @@ class DailyStateMixin:
                 self._note_proactive_daypart_sent(current, current["last_sent"])
                 opener_mode = planned_opener_mode_for_send
                 followup_kind = planned_followup_kind_for_send
-                if opener_mode == "name_only":
+                if self._private_user_role(current) == "friend":
+                    current["pending_followup_event"] = {}
+                    current["suspended_proactive"] = {}
+                elif opener_mode == "name_only":
                     current["suspended_proactive"] = self._build_suspended_proactive_payload(
                         opener_text=text,
                         reason=reason,
@@ -6568,7 +6701,9 @@ class DailyStateMixin:
                         action_summary=action_summary,
                     )
                     existing_followup = current.get("pending_followup_event")
-                    if isinstance(existing_followup, dict) and existing_followup:
+                    if self._private_user_role(current) == "friend":
+                        current["pending_followup_event"] = {}
+                    elif isinstance(existing_followup, dict) and existing_followup:
                         current["pending_followup_event"] = existing_followup
                     elif followup_kind in {"suspended_opener", "chain_followup"} or opener_mode == "name_only":
                         current["pending_followup_event"] = {}
@@ -6605,7 +6740,9 @@ class DailyStateMixin:
                             umo=_single_line(next_timer.get("trigger_umo"), 160),
                             created_at=_safe_float(next_timer.get("trigger_ts"), 0),
                         )
-                        current["planned_event_chain"] = list(next_timer.get("chain") or []) if isinstance(next_timer.get("chain"), list) else []
+                        current["planned_event_chain"] = [] if self._private_user_role(current) == "friend" else (
+                            list(next_timer.get("chain") or []) if isinstance(next_timer.get("chain"), list) else []
+                        )
                         current["planned_opener_mode"] = ""
                         current["planned_followup_kind"] = ""
                         current["planned_proactive_quota_exempt"] = False
