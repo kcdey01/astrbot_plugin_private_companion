@@ -213,6 +213,14 @@ _SIMULATION_FALLBACK_EVENTS = [
 # 默认用户模板（无文本，无需修改）
 _DEFAULT_USER_TEMPLATE = {
     "enabled": True,
+    "relationship_role": "",
+    "proactive_daily_limit": -1,
+    "proactive_idle_minutes": -1,
+    "proactive_min_interval_minutes": -1,
+    "photo_daily_limit": -1,
+    "screen_peek_daily_limit": -1,
+    "poke_daily_limit": -1,
+    "proactive_boundary_note": "",
     "nickname": "",
     "style": "",
     "umo": "",

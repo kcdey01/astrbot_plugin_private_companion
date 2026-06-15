@@ -23,6 +23,7 @@ const state = {
   providerFilter: "",
   providerMode: "all",
   providerDraft: {},
+  proactiveCandidateFilter: "all",
   tokenView: "today",
   tokenDate: "",
 };
@@ -928,8 +929,8 @@ const featureSettingGroups = {
   enable_almanac_perception: ["environment_perception_timezone"],
   enable_yesterday_screen_diary_context: ["screen_diary_context_max_chars"],
   enable_group_companion: ["max_group_recent_messages", "max_group_slang_terms"],
-  enable_group_context_injection: ["enable_group_persona_denoise", "max_group_recent_messages", "group_scene_recent_limit"],
-  enable_group_persona_denoise: ["max_group_recent_messages", "group_scene_recent_limit"],
+  enable_group_context_injection: ["max_group_recent_messages", "group_scene_recent_limit"],
+  enable_group_persona_denoise: [],
   enable_forward_message_adaptation: ["forward_message_mode", "forward_message_max_messages", "forward_message_max_chars", "forward_message_parse_nested", "forward_message_image_vision", "forward_message_image_limit"],
   enable_group_scene_awareness: ["group_scene_recent_limit", "group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
   enable_group_wakeup_enhancement: ["group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_scene_recent_limit"],
@@ -1213,6 +1214,9 @@ const tokenTaskLabels = {
   yesterday_summary: "昨日摘要",
   full_test_detail: "完整测试细化",
   provider_test: "模型测试",
+  astrbot_private_reply: "非插件私聊主回复",
+  astrbot_group_reply: "非插件群聊主回复",
+  astrbot_reply: "非插件主回复",
   other: "其他调用",
 };
 
@@ -2068,6 +2072,8 @@ function renderTokens() {
   const calls = Number(totals.calls || 0);
   const errors = Number(totals.errors || 0);
   const estimatedRatio = Number(totals.estimated_ratio || 0);
+  const externalScope = externalTokenScopeData(stats, scope);
+  const externalTokens = Number(externalScope?.totals?.total_tokens || 0);
   const budget = stats.budget || {};
   const dailyLimit = Number(budget.limit || 0);
   const softLimit = Number(budget.soft_limit || 0);
@@ -2091,6 +2097,7 @@ function renderTokens() {
   ] : [];
   $("#tokenSummary").innerHTML = [
     miniStat(scope.label, formatNumber(totalTokens)),
+    miniStat(externalScope.label, formatNumber(externalTokens)),
     ...budgetCards,
     miniStat("调用次数", formatNumber(calls)),
     miniStat("平均 Token", formatNumber(Math.round(Number(totals.avg_tokens || 0)))),
@@ -2111,6 +2118,25 @@ function renderTokens() {
   renderTokenProviderTable(scope.providers || []);
   renderTokenTaskTable(scope.tasks || []);
   renderTokenRecentTable(scope.recent || []);
+}
+
+function externalTokenScopeData(stats, pluginScope) {
+  const external = stats.external || {};
+  const view = state.tokenView || "today";
+  const today = stats.budget?.day || todayKeyLocal();
+  if (view === "total") {
+    return {
+      label: "非插件累计",
+      totals: external.totals || {},
+    };
+  }
+  const selectedDay = pluginScope?.mode === "date" ? state.tokenDate : today;
+  const dayRows = external.by_day_detail || external.by_day || [];
+  const day = dayRows.find((item) => String(item.key || "") === selectedDay) || { key: selectedDay };
+  return {
+    label: selectedDay === today ? "非插件今日" : "非插件同日",
+    totals: day,
+  };
 }
 
 function tokenScopeData(stats) {
@@ -2438,7 +2464,7 @@ function renderUsers() {
     ? rows.map((user) => `
       <tr data-user-id="${escapeHtml(user.user_id)}" class="${user.user_id === state.selectedUserId ? "is-selected" : ""}">
         <td class="user-cell identity"><strong title="${escapeHtml(user.display_name || user.nickname || user.user_id)}">${escapeHtml(user.display_name || user.nickname || user.user_id)}</strong>${user.is_qq_user ? "" : ` <span class="badge off">非 QQ</span>`}${Array.isArray(user.alias_user_ids) && user.alias_user_ids.length ? ` <span class="badge ok" title="${escapeHtml(user.alias_user_ids.join("\\n"))}">已合并 ${escapeHtml(user.alias_user_ids.length)} 个身份</span>` : ""}<br><span class="user-id-line"><span class="muted mono" title="${escapeHtml(user.user_id)}">${escapeHtml(user.user_id)}</span><button type="button" class="copy-id-btn" data-copy-user-id="${escapeHtml(user.user_id)}">复制</button></span></td>
-        <td class="user-cell relation"><span class="badge ${user.enabled ? "" : "off"}">${escapeHtml(user.enabled ? "启用" : "停用")}</span> <span class="muted">${escapeHtml(user.relationship_stage || "未分层")}</span><br><span>分数 ${escapeHtml(user.relationship_score)}</span></td>
+        <td class="user-cell relation"><span class="badge ${user.enabled ? "" : "off"}">${escapeHtml(user.enabled ? "启用" : "停用")}</span> <span class="badge">${escapeHtml(user.relationship_role_label || "朋友")}</span> <span class="muted">${escapeHtml(user.relationship_stage || "未分层")}</span><br><span>分数 ${escapeHtml(user.relationship_score)}</span></td>
         <td class="user-cell compact">入站 ${escapeHtml(user.inbound_count)} · 回复 ${escapeHtml(user.reply_count)}<br><span class="muted">记忆 ${escapeHtml(user.memory_items)} 条</span></td>
         <td class="user-cell proactive"><span>今日 ${escapeHtml(user.sent_today)} · 总计 ${escapeHtml(user.proactive_sent_count)}</span><br><span class="muted truncate" title="${escapeHtml(user.next_proactive || "")}">${escapeHtml(user.next_proactive)}</span></td>
         <td class="user-cell recent">${escapeHtml(user.last_seen)}<br><span class="muted">上次主动 ${escapeHtml(user.last_sent)}</span></td>
@@ -2498,17 +2524,25 @@ async function renderUserDetail(forceFetch = false) {
     <form id="userEditForm" class="inline-form">
       <label>称呼 <input name="nickname" value="${escapeHtml(detail.nickname || "")}" placeholder="例如 主人 / 名字" /></label>
       <label>语气 <input name="style" value="${escapeHtml(detail.style || "")}" placeholder="温柔 / 活泼 / 工作" /></label>
+      <label>关系角色
+        <select name="relationship_role">
+          <option value="owner" ${detail.relationship_role === "owner" ? "selected" : ""}>主人</option>
+          <option value="friend" ${detail.relationship_role !== "owner" ? "selected" : ""}>朋友</option>
+        </select>
+      </label>
+      <label>每日主动 <input name="proactive_daily_limit" type="number" min="-1" max="30" step="1" value="${escapeHtml(detail.proactive_daily_limit ?? -1)}" /></label>
       <button type="submit">保存</button>
     </form>
     <div class="visual-strip">
       ${scoreGauge("关系分", detail.relationship_score || 0, -20, 40)}
-      ${scoreGauge("今日主动", detail.sent_today || 0, 0, Math.max(1, state.overview?.private?.max_daily_messages || 8))}
+      ${scoreGauge("今日主动", detail.sent_today || 0, 0, Math.max(1, detail.effective_daily_limit || state.overview?.private?.max_daily_messages || 8))}
       ${miniStat("片段", detail.dialogue_episode_count || (detail.dialogue_episodes || []).length)}
       ${miniStat("未完话头", detail.open_loop_count || (detail.open_loops || []).length)}
       ${miniStat("习惯", detail.habit_count || detail.behavior_habits?.items?.length || 0)}
     </div>
     <div class="detail-grid">
-      ${detailBlock("关系和主动", detail.formatted?.relationship || "", [["下次主动", detail.formatted?.next_proactive || detail.next_proactive], ["动作偏好", detail.formatted?.action_affinity || ""]])}
+      ${detailBlock("关系和主动", detail.formatted?.relationship || "", [["角色", detail.relationship_role_label || ""], ["有效主动上限", `${detail.effective_daily_limit ?? "-"} / 天`], ["下次主动", detail.formatted?.next_proactive || detail.next_proactive], ["动作偏好", detail.formatted?.action_affinity || ""]])}
+      ${userWorldbookBlock(detail.worldbook_member)}
       ${detailBlock("行为习惯", detail.behavior_habits?.updated_at ? `更新于 ${detail.behavior_habits.updated_at}` : "", userHabitPairs(detail.behavior_habits))}
       ${detailBlock("最近对话", "", [["用户消息", detail.last_user_message || ""], ["陪伴回复", detail.last_companion_message || ""]])}
       ${detailBlock("对话片段", "", (detail.dialogue_episodes || []).map((item, index) => [`#${index + 1}`, item.summary || item.title || JSON.stringify(item)]))}
@@ -2516,6 +2550,58 @@ async function renderUserDetail(forceFetch = false) {
     </div>
   `;
   bindUserActions(detail);
+}
+
+function userWorldbookBlock(item) {
+  if (!item) {
+    return `
+      <section class="detail-block user-worldbook-block">
+        <h2>关系网词条</h2>
+        <div class="empty small">暂无对应关系节点</div>
+      </section>
+    `;
+  }
+  const aliases = Array.isArray(item.aliases) ? item.aliases : [];
+  const observed = Array.isArray(item.observed_names) ? item.observed_names : [];
+  const memories = Array.isArray(item.important_memories) ? item.important_memories : [];
+  const chips = [
+    ...aliases.map((name) => `别名：${name}`),
+    ...observed.map((name) => `群名片：${name}`),
+    ...(Array.isArray(item.external_ids) ? item.external_ids.map((id) => `外部身份：${id}`) : []),
+  ].slice(0, 12);
+  const previewItems = worldbookMemberPreviewItems(item, memories);
+  return `
+    <section class="detail-block user-worldbook-block">
+      <div class="user-worldbook-head">
+        <div>
+          <h2>关系网词条</h2>
+          <p>${escapeHtml(item.name || item.user_id || "未命名成员")}</p>
+        </div>
+        <span class="badge ${item.enabled ? "ok" : "off"}">${escapeHtml(item.enabled ? "启用" : "停用")}</span>
+      </div>
+      <div class="worldbook-compact-meta">
+        <span>${escapeHtml(item.identity_type === "external" ? "外部身份" : "身份 QQ")} ${escapeHtml(item.user_id || "-")}</span>
+        <span>优先级 ${escapeHtml(item.priority ?? "-")}</span>
+        ${item.gender ? `<span>性别：${escapeHtml(item.gender)}</span>` : ""}
+        ${item.pending_observation_count ? `<span>${escapeHtml(item.pending_observation_count)} 条待确认观察</span>` : ""}
+      </div>
+      <div class="worldbook-chip-row">
+        ${chips.length ? chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("") : `<span>暂无别名记录</span>`}
+      </div>
+      ${previewItems.length ? `
+        <div class="worldbook-member-preview-list">
+          ${previewItems.map(([label, value]) => `<p><b>${escapeHtml(label)}</b><span>${escapeHtml(value)}</span></p>`).join("")}
+        </div>
+      ` : `<div class="empty small">暂无词条正文或记忆</div>`}
+      ${memories.length ? `
+        <div class="user-worldbook-memory-list">
+          ${memories.slice(0, 4).map((memory) => `
+            <p><b>${escapeHtml(memory.title || "重要记忆")}</b><span>${escapeHtml(memory.content || "")}</span></p>
+          `).join("")}
+        </div>
+      ` : ""}
+    </section>
+  `;
 }
 
 function userHabitPairs(habits) {
@@ -2532,10 +2618,13 @@ function bindUserActions(detail) {
   $("#userEditForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const selectedRole = form.get("relationship_role");
     await runAction(() => postJson("/user/update", {
       user_id: detail.user_id,
       nickname: form.get("nickname"),
       style: form.get("style"),
+      relationship_role: selectedRole,
+      proactive_daily_limit: Number(form.get("proactive_daily_limit") || -1),
     }), "已保存私聊对象", event.submitter);
   });
   document.querySelectorAll("[data-user-action]").forEach((button) => {
@@ -4315,35 +4404,47 @@ function renderCreativeBookReader(book, kindLabel, displayTitle, displayIntro, d
 
 function renderProactiveCandidates() {
   const data = state.overview?.proactive_candidates || {};
-  const counts = data.counts || {};
-  const items = data.items || [];
+  const users = data.users || [];
+  const selectedFilter = validProactiveCandidateFilter(data, state.proactiveCandidateFilter);
+  state.proactiveCandidateFilter = selectedFilter;
+  const allItems = data.items || [];
+  const items = selectedFilter === "all"
+    ? allItems
+    : allItems.filter((item) => String(item.user_id || "") === selectedFilter);
+  const counts = selectedFilter === "all" ? (data.counts || {}) : countProactiveCandidateItems(items, "status");
+  const sourceCounts = selectedFilter === "all" ? (data.source_counts || {}) : countProactiveCandidateItems(items, "source");
+  const total = selectedFilter === "all" ? (data.total || 0) : sumObjectValues(counts);
   $("#proactiveSummary").innerHTML = [
-    proactiveSummaryCard("候选总数", data.total || 0, `${data.visible_total || 0} 条合并记录`),
+    proactiveSummaryCard("候选总数", total, `${items.length || 0} 条合并记录`),
     proactiveSummaryCard("已进入计划", counts.accepted || 0, "当前或历史接受候选"),
     proactiveSummaryCard("已发送", counts.sent || 0, "实际发出的主动"),
     proactiveSummaryCard("被拦截", counts.blocked || 0, "同类拦截已合并计数"),
   ].join("");
-  $("#proactiveSourceChart").innerHTML = donutChart(data.source_counts || {});
+  $("#proactiveSourceChart").innerHTML = donutChart(sourceCounts);
   $("#proactiveStatusChart").innerHTML = donutChart(counts || {});
+  renderProactiveCandidateFilters(users, selectedFilter, data.total || allItems.length);
   if (!items.length) {
-    $("#proactiveCandidateList").innerHTML = `<div class="empty small">暂无主动候选</div>`;
+    $("#proactiveCandidateList").innerHTML = `<div class="empty small">暂无符合筛选的主动候选</div>`;
     return;
   }
   $("#proactiveCandidateList").innerHTML = items.map((item) => {
     const status = proactiveStatusLabel(item.status);
     const repeat = Number(item.repeat_count || 1);
+    const userLabel = item.user_label || item.user_id || "-";
+    const roleLabel = item.user_role_label || (item.user_role === "owner" ? "主人" : "朋友");
     return `
       <section class="proactive-candidate ${escapeHtml(item.status || "unknown")}">
         <div class="proactive-candidate-head">
           <div>
             <b>${escapeHtml(item.topic || item.reason || "未命名候选")}</b>
-            <span>${escapeHtml(item.source || "-")} · ${escapeHtml(item.reason || "-")} · ${escapeHtml(item.action || "message")}</span>
+            <span>${escapeHtml(userLabel)} · ${escapeHtml(roleLabel)} · ${escapeHtml(item.source || "-")} · ${escapeHtml(item.reason || "-")} · ${escapeHtml(item.action || "message")}</span>
           </div>
           <span class="badge">${escapeHtml(repeat > 1 ? `${status} x${repeat}` : status)}</span>
         </div>
         <p>${escapeHtml(item.motive || "暂无动机记录")}</p>
         <div class="proactive-meta">
-          <span>用户：${escapeHtml(item.user_id || "-")}</span>
+          <span>用户：${escapeHtml(userLabel)}</span>
+          <span>ID：${escapeHtml(item.user_id || "-")}</span>
           <span>计划：${escapeHtml(item.scheduled || "-")}</span>
           <span>创建：${escapeHtml(item.created || "-")}</span>
           ${repeat > 1 ? `<span>最近：${escapeHtml(item.last_seen || "-")}</span>` : ""}
@@ -4353,6 +4454,49 @@ function renderProactiveCandidates() {
       </section>
     `;
   }).join("");
+}
+
+function validProactiveCandidateFilter(data, value) {
+  const userIds = new Set((data.users || []).map((item) => String(item.user_id || "")));
+  const normalized = String(value || "all");
+  return normalized === "all" || userIds.has(normalized) ? normalized : "all";
+}
+
+function countProactiveCandidateItems(items, key) {
+  return (items || []).reduce((acc, item) => {
+    const name = String(item?.[key] || "unknown");
+    acc[name] = (acc[name] || 0) + Number(item?.repeat_count || 1);
+    return acc;
+  }, {});
+}
+
+function sumObjectValues(data) {
+  return Object.values(data || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+}
+
+function renderProactiveCandidateFilters(users, selected, visibleCount) {
+  const root = $("#proactiveCandidateFilters");
+  if (!root) return;
+  const options = [
+    `<option value="all" ${selected === "all" ? "selected" : ""}>全部用户 · ${escapeHtml(visibleCount || 0)}</option>`,
+    ...(users || []).map((user) => {
+      const label = `${user.label || user.user_id || "未知用户"} · ${user.role_label || "-"} · ${user.total || 0}`;
+      return `<option value="${escapeHtml(user.user_id || "")}" ${selected === String(user.user_id || "") ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }),
+  ].join("");
+  root.innerHTML = `
+    <label class="proactive-filter-select">
+      <span>私聊用户</span>
+      <select id="proactiveCandidateUserFilter">${options}</select>
+    </label>
+  `;
+  const select = $("#proactiveCandidateUserFilter");
+  if (select) {
+    select.addEventListener("change", () => {
+      state.proactiveCandidateFilter = select.value || "all";
+      renderProactiveCandidates();
+    });
+  }
 }
 
 function proactiveSummaryCard(label, value, note) {

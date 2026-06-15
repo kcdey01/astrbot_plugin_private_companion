@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import time
@@ -11,6 +11,15 @@ from .helpers import _now_ts, _safe_float, _safe_int, _single_line, _today_key
 
 class TokenBudgetMixin:
     """Methods split from main.PrivateCompanionPlugin."""
+
+    def _token_usage_now_dt(self) -> datetime:
+        now_getter = getattr(self, "_environment_now", None)
+        if callable(now_getter):
+            try:
+                return now_getter()
+            except Exception:
+                pass
+        return datetime.now()
 
     @staticmethod
     def _estimate_token_count(text: str) -> int:
@@ -121,7 +130,8 @@ class TokenBudgetMixin:
         usage = self._extract_llm_usage(resp, prompt, completion)
         now_ts = _now_ts()
         day = _today_key()
-        hour = datetime.now().strftime("%Y-%m-%d %H:00")
+        now_dt = self._token_usage_now_dt()
+        hour = now_dt.strftime("%Y-%m-%d %H:00")
         store = self.data.setdefault("token_usage", {})
         if not isinstance(store, dict):
             store = {}
@@ -181,7 +191,7 @@ class TokenBudgetMixin:
         recent.append(
             {
                 "ts": now_ts,
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "time": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
                 "provider": provider_key,
                 "task": task_key,
                 "success": success,
@@ -197,7 +207,7 @@ class TokenBudgetMixin:
             }
         )
         del recent[:-240]
-        store["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        store["updated_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
         last_save = _safe_float(getattr(self, "_token_usage_last_save_at", 0), 0)
         if now_ts - last_save >= 60:
             self._token_usage_last_save_at = now_ts
@@ -205,6 +215,128 @@ class TokenBudgetMixin:
                 self._save_data_sync()
             except Exception:
                 pass
+
+    def _record_external_llm_usage(
+        self,
+        *,
+        provider_id: str,
+        task: str,
+        prompt: str,
+        completion: str,
+        elapsed_ms: int,
+        success: bool,
+        error: str = "",
+        resp: Any = None,
+    ) -> None:
+        usage = self._extract_llm_usage(resp, prompt, completion)
+        now_ts = _now_ts()
+        day = _today_key()
+        now_dt = self._token_usage_now_dt()
+        hour = now_dt.strftime("%Y-%m-%d %H:00")
+        root = self.data.setdefault("token_usage", {})
+        if not isinstance(root, dict):
+            root = {}
+            self.data["token_usage"] = root
+        store = root.setdefault("external", {})
+        if not isinstance(store, dict):
+            store = {}
+            root["external"] = store
+        totals = store.setdefault("totals", {})
+        by_provider = store.setdefault("by_provider", {})
+        by_task = store.setdefault("by_task", {})
+        by_day = store.setdefault("by_day", {})
+        by_day_provider = store.setdefault("by_day_provider", {})
+        by_day_task = store.setdefault("by_day_task", {})
+        by_hour = store.setdefault("by_hour", {})
+        recent = store.setdefault("recent", [])
+        if not isinstance(recent, list):
+            recent = []
+            store["recent"] = recent
+        task_key = _single_line(task, 40) or "astrbot_reply"
+        provider_key = provider_id or "(default)"
+
+        def bump(bucket: dict[str, Any]) -> None:
+            bucket["calls"] = _safe_int(bucket.get("calls"), 0) + 1
+            bucket["success"] = _safe_int(bucket.get("success"), 0) + (1 if success else 0)
+            bucket["errors"] = _safe_int(bucket.get("errors"), 0) + (0 if success else 1)
+            bucket["prompt_tokens"] = _safe_int(bucket.get("prompt_tokens"), 0) + usage["prompt_tokens"]
+            bucket["completion_tokens"] = _safe_int(bucket.get("completion_tokens"), 0) + usage["completion_tokens"]
+            bucket["total_tokens"] = _safe_int(bucket.get("total_tokens"), 0) + usage["total_tokens"]
+            bucket["estimated_tokens"] = _safe_int(bucket.get("estimated_tokens"), 0) + (usage["total_tokens"] if usage["estimated"] else 0)
+            bucket["elapsed_ms"] = _safe_int(bucket.get("elapsed_ms"), 0) + max(0, elapsed_ms)
+            bucket["last_ts"] = now_ts
+
+        for target in (
+            totals,
+            by_provider.setdefault(provider_key, {}),
+            by_task.setdefault(task_key, {}),
+            by_day.setdefault(day, {}),
+            by_day_provider.setdefault(day, {}).setdefault(provider_key, {}),
+            by_day_task.setdefault(day, {}).setdefault(task_key, {}),
+            by_hour.setdefault(hour, {}),
+        ):
+            if isinstance(target, dict):
+                bump(target)
+        recent.append(
+            {
+                "ts": now_ts,
+                "time": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "provider": provider_key,
+                "task": task_key,
+                "success": success,
+                "prompt_tokens": usage["prompt_tokens"],
+                "completion_tokens": usage["completion_tokens"],
+                "total_tokens": usage["total_tokens"],
+                "estimated": usage["estimated"],
+                "elapsed_ms": max(0, elapsed_ms),
+                "prompt_chars": len(str(prompt or "")),
+                "completion_chars": len(str(completion or "")),
+                "error": _single_line(error, 160),
+                "external": True,
+            }
+        )
+        del recent[:-240]
+        store["updated_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        last_save = _safe_float(getattr(self, "_token_usage_last_save_at", 0), 0)
+        if now_ts - last_save >= 60:
+            self._token_usage_last_save_at = now_ts
+            try:
+                self._save_data_sync()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _provider_id_from_llm_response(resp: Any) -> str:
+        if resp is None:
+            return ""
+        for key in ("provider_id", "llm_provider_id", "chat_provider_id", "model"):
+            value = _single_line(getattr(resp, key, ""), 160)
+            if value:
+                return value
+        raw_response = getattr(resp, "raw_response", None)
+        if isinstance(raw_response, dict):
+            for key in ("provider_id", "llm_provider_id", "chat_provider_id", "model"):
+                value = _single_line(raw_response.get(key), 160)
+                if value:
+                    return value
+        return ""
+
+    def _remember_external_llm_request_for_token_stats(self, event: Any, req: Any) -> None:
+        if event is None or req is None:
+            return
+        if bool(getattr(event, "private_companion_skip_external_token_stats", False)):
+            return
+        parts = []
+        for attr in ("system_prompt", "prompt"):
+            value = getattr(req, attr, None)
+            if value:
+                parts.append(str(value))
+        prompt = "\n\n".join(parts).strip()
+        try:
+            setattr(event, "private_companion_external_token_prompt", prompt)
+            setattr(event, "private_companion_external_token_start", time.time())
+        except Exception:
+            pass
 
     @staticmethod
     def _is_llm_budget_exempt_task(task: str | None) -> bool:
@@ -307,6 +439,7 @@ class TokenBudgetMixin:
     ) -> None:
         now_ts = _now_ts()
         day = _today_key()
+        now_dt = self._token_usage_now_dt()
         store = self.data.setdefault("token_usage", {})
         if not isinstance(store, dict):
             store = {}
@@ -327,7 +460,7 @@ class TokenBudgetMixin:
         recent.append(
             {
                 "ts": now_ts,
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "time": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
                 "provider": provider_id or "(default)",
                 "task": task or "other",
                 "success": False,
@@ -342,7 +475,7 @@ class TokenBudgetMixin:
             }
         )
         del recent[:-240]
-        store["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        store["updated_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
         log_key = f"{day}:{error}"
         if getattr(self, "_token_budget_skip_logged_key", "") != log_key:
             self._token_budget_skip_logged_key = log_key

@@ -688,6 +688,8 @@ class CreativeMixin:
         for user_id, user in users.items():
             if not isinstance(user, dict) or not self._is_target_private_user(str(user_id), user) or not user.get("enabled", True) or not user.get("umo"):
                 continue
+            if not self._friend_can_receive_proactive_reason(user, "creative_share", "message"):
+                continue
             if now - _safe_float(user.get("last_seen"), 0) < max(self.idle_minutes, 75) * 60:
                 continue
             if str(user.get("last_creative_share_key") or "") == key:

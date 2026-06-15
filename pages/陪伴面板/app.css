@@ -1254,6 +1254,10 @@ input[type="search"] {
   align-items: end;
 }
 
+#userEditForm {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+}
+
 .stack-form {
   display: grid;
   gap: 10px;
@@ -5073,6 +5077,34 @@ input[type="search"] {
   margin-top: 12px;
 }
 
+.proactive-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.proactive-filter-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.proactive-filter-select select {
+  min-width: min(320px, 72vw);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+
 .proactive-candidate {
   display: grid;
   gap: 10px;
@@ -7625,6 +7657,47 @@ pre {
   margin-top: 12px;
 }
 
+.user-worldbook-block {
+  display: grid;
+  gap: 10px;
+}
+
+.user-worldbook-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.user-worldbook-head p {
+  margin-top: 4px;
+  color: var(--accent-strong);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.user-worldbook-memory-list {
+  display: grid;
+  gap: 8px;
+}
+
+.user-worldbook-memory-list p {
+  margin: 0;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 8px;
+}
+
+.user-worldbook-memory-list b,
+.user-worldbook-memory-list span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.user-worldbook-memory-list span {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
 .empty {
   padding: 24px;
   color: var(--muted);
@@ -7722,6 +7795,7 @@ pre {
   .memory-grid,
   .visual-strip,
   .inline-form,
+  #userEditForm,
   .form-grid,
   .access-summary,
   .access-quick-groups,

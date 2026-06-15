@@ -1342,8 +1342,8 @@ class PrivateImageMixin:
             "请把用户刚发的图片压缩成给聊天模型看的短摘要。先判断它更像表情包/贴纸/GIF,还是照片/截图/漫画/聊天记录。"
             "只输出下面 4 行,不要写标题、分析过程、帧列表或长篇描述。\n"
             "图片类型：<照片/截图/漫画/表情包/聊天记录/其他>\n"
-            "可见内容：<客观画面主体、文字、动作或最关键细节,45字内；若是照片/截图/漫画/聊天记录,请比普通表情包更细致地说明画面内容>\n"
-            "图像表达意图：<用户可能借图表达的情绪、态度、疑问、分享意图、动作变化或梗,45字内；若是表情包/贴纸/GIF,请比普通图片更充分分析情绪和梗>\n"
+            "可见内容：<客观画面主体、文字、动作或最关键细节,125字内；若是照片/截图/漫画/聊天记录,请比普通表情包更细致地说明画面内容>\n"
+            "图像表达意图：<用户可能借图表达的情绪、态度、疑问、分享意图、动作变化或梗,125字内；若是表情包/贴纸/GIF,请比普通图片更充分分析情绪和梗>\n"
             "图像归属判断：<当前角色自己/当前角色的表情包/当前角色的聊天截图/发图用户本人/用户发来的无关图片/无法判断>\n"
             "完整性规则：这是在原有基础上的增强,不是二选一。任何类型都要保留可见内容和表达意图；"
             "区别只是图片侧多给内容细节,表情包/GIF侧多给情绪、态度和梗点。"
@@ -1840,6 +1840,7 @@ class PrivateImageMixin:
                     logger.info("[PrivateCompanion] 私聊单图合成私聊事件创建失败,回退原事件: user=%s error=%s", user_id, _single_line(exc, 160))
             setattr(framework_event, "private_companion_deferred_private_image_only_ready", True)
             setattr(framework_event, "private_companion_deferred_private_image_only", False)
+            setattr(framework_event, "private_companion_skip_external_token_stats", True)
             setattr(framework_event, "private_companion_delayed_image_vision_text", vision_text)
             setattr(framework_event, "private_companion_delayed_image_sources", list(request_image_refs))
             buffered_image_mode = _single_line(buffer.get("image_mode"), 20)

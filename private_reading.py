@@ -269,6 +269,8 @@ class PrivateReadingMixin:
         return None
 
     def _jm_cosmos_read_available(self, user: dict[str, Any] | None = None) -> bool:
+        if isinstance(user, dict) and self._private_user_role(user) == "friend":
+            return False
         return bool(
             self.enable_jm_cosmos_integration
             and self.enable_jm_cosmos_boredom_read
@@ -276,6 +278,8 @@ class PrivateReadingMixin:
         )
 
     def _private_reading_recommendation_request_available(self, user: dict[str, Any] | None = None) -> bool:
+        if isinstance(user, dict) and self._private_user_role(user) == "friend":
+            return False
         return bool(
             self.enable_jm_cosmos_integration
             and self.enable_private_reading_ask_recommendation
@@ -544,7 +548,13 @@ class PrivateReadingMixin:
         profile["average_rating"] = round(sum(_safe_float(row.get("rating"), 0) for row in history if isinstance(row, dict)) / max(1, len(history)), 2)
         profile["rating_count"] = len(history)
 
-    def _format_private_reading_preference_influence_for_reply(self, inbound_text: str = "") -> str:
+    def _format_private_reading_preference_influence_for_reply(
+        self,
+        inbound_text: str = "",
+        user: dict[str, Any] | None = None,
+    ) -> str:
+        if isinstance(user, dict) and self._private_user_role(user) == "friend":
+            return ""
         if not getattr(self, "enable_private_reading_preference_influence", True):
             return ""
         state = self.data.get("jm_cosmos_integration") if isinstance(self.data.get("jm_cosmos_integration"), dict) else {}
@@ -926,7 +936,13 @@ class PrivateReadingMixin:
         self._save_data_sync()
         return _single_line(secret.get("password") or candidate, 12)
 
-    async def _format_bookshelf_secret_for_prompt(self, inbound_text: str = "") -> str:
+    async def _format_bookshelf_secret_for_prompt(
+        self,
+        inbound_text: str = "",
+        user: dict[str, Any] | None = None,
+    ) -> str:
+        if isinstance(user, dict) and self._private_user_role(user) == "friend":
+            return ""
         text = str(inbound_text or "")
         if not any(token in text for token in ("书柜", "夹层", "抽屉", "日记", "密码", "私密", "藏了什么")):
             return ""
@@ -1094,6 +1110,8 @@ class PrivateReadingMixin:
         return merged
 
     def _format_jm_cosmos_action_context(self, user: dict[str, Any]) -> str:
+        if not isinstance(user, dict) or self._private_user_role(user) == "friend":
+            return ""
         item = user.get("jm_cosmos_reading_context")
         if not isinstance(item, dict):
             return ""
@@ -1118,7 +1136,13 @@ class PrivateReadingMixin:
         ]
         return "\n".join(part for part in parts if part)
 
-    def _format_bookshelf_reading_context_for_reply(self, inbound_text: str) -> str:
+    def _format_bookshelf_reading_context_for_reply(
+        self,
+        inbound_text: str,
+        user: dict[str, Any] | None = None,
+    ) -> str:
+        if isinstance(user, dict) and self._private_user_role(user) == "friend":
+            return ""
         text = str(inbound_text or "")
         if not any(token in text for token in ("书柜", "看过", "读过", "最近在做什么", "最近干嘛", "本子", "漫画", "夹层")):
             return ""
@@ -1355,6 +1379,7 @@ class PrivateReadingMixin:
             and self._is_target_private_user(str(uid), item)
             and item.get("enabled", True)
             and item.get("umo")
+            and self._friend_can_receive_proactive_reason(item, "jm_cosmos_share", "jm_cosmos_read")
         ]
         user_id, user = random.choice(user_items) if user_items else ("", {})
         result = await self._run_jm_cosmos_read_action(user)
@@ -1419,6 +1444,7 @@ class PrivateReadingMixin:
             and self._is_target_private_user(str(uid), item)
             and item.get("enabled", True)
             and item.get("umo")
+            and self._friend_can_receive_proactive_reason(item, "jm_cosmos_recommendation_request", "message")
         ]
         if not user_items:
             self._save_data_sync()

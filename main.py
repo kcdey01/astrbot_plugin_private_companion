@@ -104,6 +104,7 @@ from .helpers import (
     _now_ts,
     _safe_float,
     _safe_int,
+    _set_today_key_timezone,
     _single_line,
     _strip_internal_message_blocks,
     _strip_outbound_control_blocks,
@@ -299,7 +300,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.7.1",
+    "3.8.0",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -425,7 +426,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         logger.info(
             "[PrivateCompanion] 已记录用户休息静默: user=%s until=%s reason=%s",
             user.get("user_id") or user.get("id") or "",
-            datetime.fromtimestamp(rest_until).strftime("%m-%d %H:%M"),
+            self._environment_fromtimestamp(rest_until).strftime("%m-%d %H:%M"),
             _single_line(text, 80),
         )
         return True
@@ -503,6 +504,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             timezone_default,
             "Asia/Shanghai",
         )
+        _set_today_key_timezone(self.environment_perception_timezone)
         self.enable_holiday_perception = self._cfg_bool(c, "enable_holiday_perception", True)
         self.holiday_country = self._cfg_str(c, "holiday_country", "CN", "CN").upper()
         self.enable_platform_perception = self._cfg_bool(c, "enable_platform_perception", True)
@@ -1631,6 +1633,21 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             lines.append("群里刚才较密集，回复要更像收口：集中一个重点，避免逐条点名回应。")
         return "\n".join(lines)
 
+    def _append_group_persona_denoise_to_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
+        if not bool(getattr(self, "enable_group_companion", True)):
+            return
+        group_id = self._extract_group_id_from_event(event)
+        if not group_id or not self._group_enabled_for_event(group_id):
+            return
+        denoise_text = self._format_group_persona_denoise_prompt(event)
+        if not denoise_text:
+            return
+        marker = "<!-- private_companion_group_persona_denoise_v1 -->"
+        current_prompt = req.system_prompt or ""
+        if marker in current_prompt:
+            return
+        req.system_prompt = f"{current_prompt}\n\n{marker}\n{denoise_text}".strip()
+
     def _append_non_target_private_identity_guard_to_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
         marker = "<!-- private_companion_non_target_private_guard_v1 -->"
         current_prompt = req.system_prompt or ""
@@ -1699,6 +1716,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return
         if not hasattr(req, "system_prompt"):
             return
+        self._remember_external_llm_request_for_token_stats(event, req)
         if (
             bool(getattr(event, "private_companion_deferred_private_image_only", False))
             and not bool(getattr(event, "private_companion_deferred_private_image_only_ready", False))
@@ -1717,6 +1735,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             await self._append_capability_boundary_to_request(event, req)
         if not is_private_chat:
             await self._mark_group_conversation_from_llm_request(event)
+            self._append_group_persona_denoise_to_request(event, req)
         else:
             self._append_non_target_private_identity_guard_to_request(event, req)
         if not self.inject_passive_states:
@@ -1773,9 +1792,6 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                             recall_context = self._format_recalled_messages_for_natural_query(event, limit=5)
                             if recall_context:
                                 extra = f"{extra}\n\n{recall_context}" if extra else f"\n\n{recall_context}"
-                        denoise_text = self._format_group_persona_denoise_prompt(event)
-                        if denoise_text:
-                            extra = f"{extra}\n\n{denoise_text}" if extra else f"\n\n{denoise_text}"
                         req.system_prompt = (
                             f"{current_prompt}\n\n{marker}\n{self._format_group_context_for_prompt(group, sender_id, str(event.message_str or ''))}{wakeup_state_text}{extra}"
                         ).strip()
@@ -2079,13 +2095,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             hidden_creative_context = self._format_hidden_creative_context_for_reply(inbound_text)
             if hidden_creative_context:
                 injection_parts.append(hidden_creative_context)
-            bookshelf_secret_context = await self._format_bookshelf_secret_for_prompt(inbound_text)
+            bookshelf_secret_context = await self._format_bookshelf_secret_for_prompt(inbound_text, current_user)
             if bookshelf_secret_context:
                 injection_parts.append(bookshelf_secret_context)
-            bookshelf_reading_context = self._format_bookshelf_reading_context_for_reply(inbound_text)
+            bookshelf_reading_context = self._format_bookshelf_reading_context_for_reply(inbound_text, current_user)
             if bookshelf_reading_context:
                 injection_parts.append(bookshelf_reading_context)
-            private_preference_context = self._format_private_reading_preference_influence_for_reply(inbound_text)
+            private_preference_context = self._format_private_reading_preference_influence_for_reply(inbound_text, current_user)
             if private_preference_context:
                 injection_parts.append(private_preference_context)
             news_context = self._format_recent_news_context_for_reply(inbound_text)
@@ -2151,6 +2167,33 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
     async def normalize_tts_enhancement_response(self, event: AstrMessageEvent, resp: LLMResponse):
         """规范化 TTS 标签错拼，避免 <ttts> 等内容漏到发送链路。"""
         await self.protect_tts_enhancement_response_blocks(event, resp)
+
+    @filter.on_llm_response()
+    async def record_external_llm_token_usage(self, event: AstrMessageEvent, resp: LLMResponse):
+        """统计非插件内部调用的 AstrBot 主回复 Token，单独展示且不计入插件限额。"""
+        if not self.enabled:
+            return
+        prompt = str(getattr(event, "private_companion_external_token_prompt", "") or "")
+        started = _safe_float(getattr(event, "private_companion_external_token_start", 0), 0)
+        completion = str(getattr(resp, "completion_text", "") or "")
+        if not prompt and not completion and resp is None:
+            return
+        try:
+            task = "astrbot_private_reply" if bool(getattr(event, "is_private_chat", lambda: False)()) else "astrbot_group_reply"
+        except Exception:
+            task = "astrbot_reply"
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        provider_id = self._provider_id_from_llm_response(resp) or self._default_chat_provider_id(umo)
+        self._record_external_llm_usage(
+            provider_id=provider_id,
+            task=task,
+            prompt=prompt,
+            completion=completion,
+            elapsed_ms=int(max(0.0, time.time() - started) * 1000) if started > 0 else 0,
+            success=bool(completion),
+            error="" if completion else "empty_response",
+            resp=resp,
+        )
 
     @filter.on_llm_response()
     async def capture_llm_timer_directive(self, event: AstrMessageEvent, resp: LLMResponse):
@@ -2224,7 +2267,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     stats = {}
                     current["postprocess_stats"] = stats
                 stats["rewritten"] = _safe_int(stats.get("rewritten"), 0, 0) + 1
-                stats["last_rewritten_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                stats["last_rewritten_at"] = self._environment_now().strftime("%Y-%m-%d %H:%M")
                 self._save_data_sync()
 
         async with self._data_lock:
@@ -2237,7 +2280,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         normalized = str(kind or "").strip().lower()
         await self._ensure_weather_context()
         if normalized in {"日程", "plan", "daily_plan"}:
-            return self._build_daily_plan_prompt(datetime.now().strftime("%Y-%m-%d %H:%M"))
+            return self._build_daily_plan_prompt(self._environment_now().strftime("%Y-%m-%d %H:%M"))
         if normalized in {"细化", "detail", "enhancement"}:
             plan = dict(self.data.get("daily_plan", {}))
             state = dict(self.data.get("daily_state", {}))
@@ -2249,7 +2292,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 current_item = self._get_current_plan_item(plan)
                 if not isinstance(current_item, dict):
                     return "当前没有可用于细化的日程段。先生成日程,并等到某个时间段临近,或让当天有当前日程项。"
-                start = self._parse_hhmm_to_minutes(current_item.get("time")) or (datetime.now().hour * 60 + datetime.now().minute)
+                start = self._parse_hhmm_to_minutes(current_item.get("time")) or self._environment_now_minutes()
                 segment = {
                     "start": start,
                     "end": min(24 * 60, start + 120),
@@ -2370,7 +2413,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         f"语气：{user.get('style') or self.default_style}\n",
                         f"日程：{plan_text}\n",
                         f"拟人状态：{state_text}\n",
-                        f"今日主动消息：{user.get('sent_today', 0)}/{self.max_daily_messages}\n",
+                        f"关系角色：{self._private_user_role_label(self._private_user_role(user, user_id))}\n",
+                        f"今日主动消息：{user.get('sent_today', 0)}/{self._effective_user_daily_limit(user)}\n",
                         f"今日软目标：约 {self._soft_daily_target(user):.1f} 条\n",
                         f"免打扰：{self.quiet_hours}\n",
                         f"上次活跃：{last_seen}\n",
@@ -2626,6 +2670,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         sender_display_name = _single_line(self._sender_display_name(event), 40)
         text = _single_line(event.message_str, 120)
         if text.startswith(("陪伴", "/陪伴", "私聊陪伴", "主动陪伴")):
+            return
+        receipt_text = _single_line(event.message_str, 800)
+        if receipt_text and await self._maybe_handle_atrelay_private_receipt_reply(event, user_id, sender_display_name, receipt_text):
             return
         forward_only_prompt = ""
         if self.enable_forward_message_adaptation and not text:

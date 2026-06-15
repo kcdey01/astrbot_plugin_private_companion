@@ -868,7 +868,7 @@ class ProactiveMessageMixin:
         return "\n".join(line for line in lines if line)
 
     def _current_time_period_label(self, now: datetime | None = None) -> tuple[str, str]:
-        current = now or datetime.now()
+        current = now or self._environment_now()
         minute = current.hour * 60 + current.minute
         periods = [
             (0, 5 * 60, "深夜", "除非已有失眠或夜聊上下文,不要显得精神过满。"),
@@ -1006,6 +1006,7 @@ class ProactiveMessageMixin:
         action_prompt_context = self._format_action_prompt_context(action, action_context)
         style_hint = " ".join(
             item for item in (
+                self._format_private_user_boundary_hint(user),
                 self._relationship_approach_hint(user),
                 self._action_style_hint(action, reason),
             ) if item
@@ -1024,7 +1025,7 @@ class ProactiveMessageMixin:
         compact_motive = _single_line(motive, 36) or "有一点想靠近对方"
         topic_hint = _single_line(user.get("planned_proactive_topic"), 40)
         unanswered_count = _safe_int(user.get("ignored_streak"), 0)
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+        current_time = self._environment_now().strftime("%Y-%m-%d %H:%M")
         prompt = self.proactive_prompt_template or self._default_proactive_prompt_template()
         worldview_adaptation = self._format_worldview_adaptation_prompt()
         if worldview_adaptation and "{{worldview_adaptation}}" not in prompt:
@@ -1277,6 +1278,7 @@ class ProactiveMessageMixin:
             message="[PrivateCompanion internal proactive wakeup: bot is about to initiate; user did not send this message]",
             sender_name=name or "PrivateCompanion",
         )
+        setattr(synthetic_event, "private_companion_skip_external_token_stats", True)
         cfg = self.context.get_config(umo=umo)
         provider_settings = cfg.get("provider_settings", {}) if isinstance(cfg, dict) else {}
         build_cfg = MainAgentBuildConfig(
@@ -1433,6 +1435,7 @@ class ProactiveMessageMixin:
             message="[PrivateCompanion internal proactive voice wakeup: bot is about to initiate; user did not send this message]",
             sender_name=name or "PrivateCompanion",
         )
+        setattr(synthetic_event, "private_companion_skip_external_token_stats", True)
         cfg = self.context.get_config(umo=umo)
         provider_settings = cfg.get("provider_settings", {}) if isinstance(cfg, dict) else {}
         build_cfg = MainAgentBuildConfig(
@@ -2119,7 +2122,9 @@ class ProactiveMessageMixin:
             return f"poke：失败,{e}"
 
     def _choose_poke_repeat_count(self, user: dict[str, Any], reason: str) -> int:
-        max_times = max(1, self.poke_action_max_times)
+        max_times = self._effective_user_poke_daily_limit(user)
+        if max_times <= 0:
+            return 0
         if max_times <= 1:
             return 1
         motive = _single_line(
@@ -2155,7 +2160,7 @@ class ProactiveMessageMixin:
         action: str = "message",
         motive: str = "",
     ) -> int:
-        if not self._poke_available():
+        if not self._poke_available() or self._effective_user_poke_daily_limit(user) <= 0:
             return 0
         profile = self._persona_action_profile()
         probability = 0.12
@@ -2834,6 +2839,18 @@ class ProactiveMessageMixin:
     async def _run_photo_text_action(self, user: dict[str, Any], name: str, reason: str) -> str:
         if not self.enable_photo_text_action:
             return "photo_text：未启用"
+        if self._private_user_role(user) == "friend":
+            image_path = self._recent_owner_generated_photo_path()
+            if not image_path:
+                return "photo_text：朋友用户不单独生图,且暂无可复用的主人图片"
+            return (
+                "photo_text：复用主人最近生成的真实图片\n"
+                f"图片类型：reused_owner_photo\n"
+                f"后端：reuse\n"
+                f"图片路径：{image_path}\n"
+                "画面：复用主人最近生成过的一张生活碎片图,不为朋友单独触发生图。\n"
+                "生图提示：复用既有图片,未调用生图后端"
+            )
         load_defer_note = self._photo_text_load_defer_note("photo_text", force_refresh=True)
         if load_defer_note:
             return f"photo_text：{load_defer_note},不能假装已经拍照"
@@ -3217,7 +3234,7 @@ class ProactiveMessageMixin:
         out_dir = Path(self.data_dir) / "generated_photos"
         out_dir.mkdir(parents=True, exist_ok=True)
         session_part = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(session_key or "private_companion"))[:60] or "private_companion"
-        file_path = out_dir / f"{session_part}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{safe_ext}"
+        file_path = out_dir / f"{session_part}_{self._environment_now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{safe_ext}"
         await asyncio.to_thread(file_path.write_bytes, image_bytes)
         return str(file_path)
 
@@ -3768,7 +3785,7 @@ class ProactiveMessageMixin:
         if not isinstance(plan, dict) or plan.get("date") != _today_key():
             return "（暂无）"
         lines = []
-        now_minutes = datetime.now().hour * 60 + datetime.now().minute
+        now_minutes = self._environment_now_minutes()
         events = plan.get("today_events", [])
         if isinstance(events, list) and events:
             nearby_events = [

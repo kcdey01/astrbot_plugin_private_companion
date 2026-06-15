@@ -621,6 +621,43 @@ class CoreStoreMixin:
             changed = True
         return changed
 
+    @staticmethod
+    def _normalize_private_user_role(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        mapping = {
+            "owner": "owner",
+            "master": "owner",
+            "main": "owner",
+            "target": "owner",
+            "主人": "owner",
+            "主用户": "owner",
+            "目标用户": "owner",
+            "friend": "friend",
+            "social": "friend",
+            "guest": "friend",
+            "朋友": "friend",
+            "好友": "friend",
+            "普通朋友": "friend",
+        }
+        return mapping.get(text, "")
+
+    @staticmethod
+    def _private_user_role_label(role: str) -> str:
+        return "主人" if role == "owner" else "朋友"
+
+    def _private_user_default_role(self, user_id: str, user: dict[str, Any] | None = None) -> str:
+        clean_id = self._canonical_private_user_id(str(user_id or "").strip())
+        if clean_id and clean_id in set(self._configured_target_ids()):
+            return "owner"
+        return "friend"
+
+    def _ensure_private_user_role(self, user_id: str, user: dict[str, Any]) -> str:
+        role = self._normalize_private_user_role(user.get("relationship_role"))
+        if not role:
+            role = self._private_user_default_role(user_id, user)
+            user["relationship_role"] = role
+        return role
+
     def _get_user(self, user_id: str) -> dict[str, Any]:
         original_user_id = str(user_id or "").strip()
         user_id = self._canonical_private_user_id(original_user_id)
@@ -641,6 +678,7 @@ class CoreStoreMixin:
         for key, default_value in _DEFAULT_USER_TEMPLATE.items():
             if key not in user:
                 user[key] = default_value
+        self._ensure_private_user_role(user_id, user)
         user.setdefault("manual_enabled", False)
         user.setdefault("manual_disabled", False)
         if (

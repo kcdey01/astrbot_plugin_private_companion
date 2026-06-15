@@ -649,7 +649,7 @@ class ForwardMessageMixin:
             ts = _safe_float(node.get("time") or node.get("timestamp") or node_data.get("time") or node_data.get("timestamp"), 0)
             if ts > 0:
                 try:
-                    sent_at = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
+                    sent_at = self._environment_fromtimestamp(ts).strftime("%m-%d %H:%M")
                 except Exception:
                     sent_at = ""
             content_chain = self._forward_node_content_chain(node)
@@ -875,7 +875,7 @@ class ForwardMessageMixin:
         image_count = len(original_sources) or len(sources)
         default_prompt = (
             "请按出现顺序把合并消息里的图片压缩成短摘要。每张图只写一行,不要写标题、分析过程或长篇描述。\n"
-            "格式：第N张：<图片类型>；内容=<可见文字/主体/动作/关键细节,50字内>；表达=<用户可能借图表达的情绪、态度、疑问、用途或梗,45字内>。\n"
+            "格式：第N张：<图片类型>；内容=<可见文字/主体/动作/关键细节,125字内>；表达=<用户可能借图表达的情绪、态度、疑问、用途或梗,125字内>。\n"
             "完整性规则：每张图都要同时保留客观内容和表达意图；这是在原有基础上的增强,不是二选一。"
             "若是照片/截图/漫画/聊天记录,内容描述更细一点；若是表情包/贴纸/GIF,表达意图和情绪梗分析更多一点。看不清就写看不清；不要猜测人物关系。"
             "若图中有游戏/作品/角色/活动/节日/日期等文字,必须尽量照抄可见原文；不能把同系列作品或相近活动名互换,不能用联网印象补全看不清的内容。"

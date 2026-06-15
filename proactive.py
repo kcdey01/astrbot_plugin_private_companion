@@ -261,6 +261,126 @@ class ProactiveMixin:
             return False
         return self._is_target_private_user(user_id, user)
 
+    def _private_user_role(self, user: dict[str, Any] | None, user_id: str = "") -> str:
+        if not isinstance(user, dict):
+            return "friend"
+        role_getter = getattr(self, "_ensure_private_user_role", None)
+        if callable(role_getter):
+            try:
+                return role_getter(str(user_id or user.get("user_id") or ""), user)
+            except Exception:
+                pass
+        normalizer = getattr(self, "_normalize_private_user_role", None)
+        role = normalizer(user.get("relationship_role")) if callable(normalizer) else str(user.get("relationship_role") or "")
+        return role if role in {"owner", "friend"} else "friend"
+
+    def _user_profile_override_int(self, user: dict[str, Any], key: str) -> int | None:
+        if not isinstance(user, dict):
+            return None
+        raw = user.get(key)
+        if raw in (None, ""):
+            return None
+        value = _safe_int(raw, -1)
+        return value if value >= 0 else None
+
+    def _effective_user_daily_limit(self, user: dict[str, Any]) -> int:
+        override = self._user_profile_override_int(user, "proactive_daily_limit")
+        if override is not None:
+            return override
+        if self._private_user_role(user) == "friend":
+            return min(self.max_daily_messages, 2) if self.max_daily_messages > 0 else 0
+        return max(0, self.max_daily_messages)
+
+    def _effective_user_idle_minutes(self, user: dict[str, Any]) -> int:
+        override = self._user_profile_override_int(user, "proactive_idle_minutes")
+        if override is not None:
+            return override
+        if self._private_user_role(user) == "friend":
+            return max(self.idle_minutes, 180)
+        return max(0, self.idle_minutes)
+
+    def _effective_user_greeting_idle_minutes(self, user: dict[str, Any]) -> int:
+        if self._private_user_role(user) == "friend":
+            return max(self.greeting_idle_minutes, 120)
+        return max(0, self.greeting_idle_minutes)
+
+    def _effective_user_min_interval_minutes(self, user: dict[str, Any]) -> int:
+        override = self._user_profile_override_int(user, "proactive_min_interval_minutes")
+        if override is not None:
+            return override
+        if self._private_user_role(user) == "friend":
+            return max(self.min_interval_minutes, 360)
+        return max(0, self.min_interval_minutes)
+
+    def _effective_user_photo_daily_limit(self, user: dict[str, Any] | None = None) -> int:
+        if isinstance(user, dict):
+            if self._private_user_role(user) == "friend":
+                return 0
+            override = self._user_profile_override_int(user, "photo_daily_limit")
+            if override is not None:
+                return override
+        return max(0, self.photo_action_max_daily)
+
+    def _effective_user_screen_peek_daily_limit(self, user: dict[str, Any] | None = None) -> int:
+        if isinstance(user, dict):
+            if self._private_user_role(user) == "friend":
+                return 0
+            override = self._user_profile_override_int(user, "screen_peek_daily_limit")
+            if override is not None:
+                return override
+        return max(0, self.screen_peek_max_daily)
+
+    def _effective_user_poke_daily_limit(self, user: dict[str, Any] | None = None) -> int:
+        if isinstance(user, dict):
+            override = self._user_profile_override_int(user, "poke_daily_limit")
+            if override is not None:
+                return override
+            if self._private_user_role(user) == "friend":
+                return 0
+        return max(0, self.poke_action_max_times)
+
+    def _format_private_user_boundary_hint(self, user: dict[str, Any]) -> str:
+        role = self._private_user_role(user)
+        labeler = getattr(self, "_private_user_role_label", None)
+        label = labeler(role) if callable(labeler) else ("主人" if role == "owner" else "朋友")
+        note = _single_line(user.get("proactive_boundary_note"), 180)
+        if role == "owner":
+            text = (
+                "【当前私聊关系角色】\n"
+                f"- 当前用户角色：{label}。\n"
+                "- 可以延续人格中对主人的亲近、依赖和日常陪伴动机，但仍要尊重用户休息、忙碌和拒绝信号。"
+            )
+        else:
+            text = (
+                "【当前私聊关系角色】\n"
+                f"- 当前用户角色：{label}。\n"
+                "- 对方不是主人/恋人/专属陪伴目标。主动联系应像普通朋友：少量、具体、不过度亲密，不使用主人专属称呼、占有欲、撒娇索取或暧昧承诺。\n"
+                "- 动机应以礼貌关心、共同话题、必要转告、轻分享为主；不要因为想贴近、想被哄、想确认对方在不在而频繁打扰。\n"
+                "- 不给朋友使用窥屏或单独生图能力；如果出现图片分享,只能是复用已有普通图片,不要声称为朋友专门拍照、生成或观察。"
+                "- 不对朋友发起本子/夹层阅读推荐、私密阅读分享、屏幕观察、群聊私下转述、私下创作分享或其他涉及隐私来源的主动。"
+            )
+        if note:
+            text += f"\n- 用户级边界备注：{note}"
+        return text
+
+    def _friend_sensitive_proactive_reason(self, reason: Any) -> bool:
+        normalized = str(reason or "").strip()
+        return normalized in {
+            "group_share",
+            "jm_cosmos_share",
+            "jm_cosmos_recommendation_request",
+            "creative_share",
+        }
+
+    def _friend_sensitive_proactive_action(self, action: Any) -> bool:
+        parts = {part.strip() for part in str(action or "").split("+") if part.strip()}
+        return bool(parts & {"screen_peek", "jm_cosmos_read"})
+
+    def _friend_can_receive_proactive_reason(self, user: dict[str, Any] | None, reason: Any, action: Any = "") -> bool:
+        if not isinstance(user, dict) or self._private_user_role(user) != "friend":
+            return True
+        return not (self._friend_sensitive_proactive_reason(reason) or self._friend_sensitive_proactive_action(action))
+
     def _sync_configured_targets(self):
         for user_id in self._configured_target_ids():
             user = self._get_user(user_id)
@@ -340,10 +460,11 @@ class ProactiveMixin:
     def _effective_min_interval_seconds(self, user: dict[str, Any]) -> int:
         ignored_streak = _safe_int(user.get("ignored_streak"), 0)
         multiplier = min(2.2, 1.0 + ignored_streak * 0.35)
-        return int(self.min_interval_minutes * 60 * multiplier)
+        return int(self._effective_user_min_interval_minutes(user) * 60 * multiplier)
 
     def _soft_daily_target(self, user: dict[str, Any]) -> float:
-        if self.max_daily_messages <= 0:
+        daily_limit = self._effective_user_daily_limit(user)
+        if daily_limit <= 0:
             return 0.0
         state = self.data.get("daily_state", {})
         important_dates = self._get_relevant_important_dates()
@@ -359,16 +480,17 @@ class ProactiveMixin:
         if important_dates:
             ratio += 0.1 if _safe_int(important_dates[0].get("_days_until"), 0) == 0 else 0.05
         ratio = max(0.45, min(0.95, ratio))
-        if self.max_daily_messages == 1:
+        if daily_limit == 1:
             ratio = max(ratio, 0.75)
-        return max(0.6, self.max_daily_messages * ratio)
+        return max(0.6, daily_limit * ratio)
 
     def _daily_intensity_factor(self, user: dict[str, Any]) -> float:
-        if self.max_daily_messages <= 0:
+        daily_limit = self._effective_user_daily_limit(user)
+        if daily_limit <= 0:
             return 0.0
         sent_today = _safe_int(user.get("sent_today"), 0)
         soft_target = self._soft_daily_target(user)
-        capacity_factor = min(1.35, 0.9 + self.max_daily_messages * 0.08)
+        capacity_factor = min(1.35, 0.9 + daily_limit * 0.08)
         if soft_target <= 0:
             return max(0.35, capacity_factor)
         usage = sent_today / soft_target
@@ -390,7 +512,7 @@ class ProactiveMixin:
         *,
         now: float | None = None,
     ) -> tuple[float, float]:
-        now_dt = datetime.fromtimestamp(now or _now_ts())
+        now_dt = self._environment_fromtimestamp(now or _now_ts())
         sent_today = _safe_int(user.get("sent_today"), 0)
         remaining_target = max(1, math.ceil(max(0.0, self._soft_daily_target(user) - sent_today)))
         counts = self._today_proactive_daypart_counts(user)
@@ -640,7 +762,7 @@ class ProactiveMixin:
         logger.info(
             "[PrivateCompanion] 已记录用户休息静默: user=%s until=%s reason=%s",
             user.get("user_id") or user.get("id") or "",
-            datetime.fromtimestamp(rest_until).strftime("%m-%d %H:%M"),
+            self._environment_fromtimestamp(rest_until).strftime("%m-%d %H:%M"),
             _single_line(text, 80),
         )
         return True

@@ -651,11 +651,45 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
                 return None
         return None
 
-    async def _tts_provider_text_chat(self, provider: Any, prompt: str, *, max_tokens: int = 700) -> Any:
+    async def _tts_provider_text_chat(self, provider: Any, prompt: str, *, max_tokens: int = 700, task: str = "tts_conversion") -> Any:
+        start = time.time()
+        provider_id = ""
+        provider_id_getter = getattr(self, "_provider_id_from_instance", None)
+        if callable(provider_id_getter):
+            try:
+                provider_id = provider_id_getter(provider)
+            except Exception:
+                provider_id = ""
+        record_usage = getattr(self, "_record_llm_usage", None)
         try:
-            return await provider.text_chat(prompt=prompt, max_tokens=max_tokens)
-        except TypeError:
-            return await provider.text_chat(prompt=prompt)
+            try:
+                resp = await provider.text_chat(prompt=prompt, max_tokens=max_tokens)
+            except TypeError:
+                resp = await provider.text_chat(prompt=prompt)
+            if callable(record_usage):
+                completion = str(getattr(resp, "completion_text", resp) or "")
+                record_usage(
+                    provider_id=provider_id,
+                    task=task,
+                    prompt=prompt,
+                    completion=completion,
+                    elapsed_ms=int((time.time() - start) * 1000),
+                    success=True,
+                    resp=resp,
+                )
+            return resp
+        except Exception as exc:
+            if callable(record_usage):
+                record_usage(
+                    provider_id=provider_id,
+                    task=task,
+                    prompt=prompt,
+                    completion="",
+                    elapsed_ms=int((time.time() - start) * 1000),
+                    success=False,
+                    error=str(exc),
+                )
+            raise
 
     def _open_tts_audio_file_local(self, audio_path: str) -> None:
         path = str(audio_path or "").strip()

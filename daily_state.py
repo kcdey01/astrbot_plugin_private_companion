@@ -256,7 +256,7 @@ class DailyStateMixin:
         segments = self._collect_detail_segments(plan, enhanced)
         if not segments:
             return None
-        now_dt = datetime.fromtimestamp(now or _now_ts())
+        now_dt = self._environment_fromtimestamp(now or _now_ts())
         now_minutes = self._effective_plan_now_minutes(str(plan.get("date") or ""))
         if now_minutes is None:
             return None
@@ -267,7 +267,7 @@ class DailyStateMixin:
             due_minute = max(0, start - lead)
             if due_minute <= now_minutes:
                 return 0.0
-            due_dt = datetime.combine(now_dt.date(), datetime.min.time()) + timedelta(minutes=due_minute)
+            due_dt = datetime.combine(now_dt.date(), datetime.min.time(), tzinfo=now_dt.tzinfo) + timedelta(minutes=due_minute)
             candidates.append(max(0.0, due_dt.timestamp() - (now or _now_ts())))
         if not candidates:
             return None
@@ -349,7 +349,7 @@ class DailyStateMixin:
             if not segments:
                 return None
             for segment in segments:
-                enhanced[segment["key"]] = {"status": "generating", "started_at": datetime.now().strftime("%H:%M")}
+                enhanced[segment["key"]] = {"status": "generating", "started_at": self._environment_now().strftime("%H:%M")}
             self._save_data_sync()
 
         last_detail = None
@@ -370,7 +370,7 @@ class DailyStateMixin:
                 enhanced = self.data.setdefault("detail_enhanced_segments", {})
                 enhanced[segment["key"]] = {
                     "status": "done",
-                    "updated_at": datetime.now().strftime("%H:%M"),
+                    "updated_at": self._environment_now().strftime("%H:%M"),
                     "summary": _single_line(detail.get("summary"), 120),
                     "today_events": detail.get("today_events", []),
                     "proactive_events": detail.get("proactive_events", []),
@@ -597,7 +597,7 @@ class DailyStateMixin:
         total = len(ordered)
         if total <= limit:
             return ordered
-        now_minutes = datetime.now().hour * 60 + datetime.now().minute
+        now_minutes = self._environment_now_minutes()
         selected: set[int] = {0, total - 1}
         closest_index = min(
             range(total),
@@ -644,7 +644,7 @@ class DailyStateMixin:
             if next_at <= 0:
                 self._schedule_next_proactive(user, now=now)
                 continue
-            dt = datetime.fromtimestamp(next_at)
+            dt = self._environment_fromtimestamp(next_at)
             seconds_today = dt.hour * 3600 + dt.minute * 60 + dt.second
             if not (start <= seconds_today <= end):
                 self._schedule_next_proactive(user, now=now)
@@ -738,7 +738,7 @@ class DailyStateMixin:
         diary_minutes = self._parse_hhmm_to_minutes(self.daily_diary_time)
         if diary_minutes is None:
             diary_minutes = 23 * 60 + 10
-        now = datetime.now()
+        now = self._environment_now()
         return now.hour * 60 + now.minute >= diary_minutes
 
     async def _generate_daily_diary(self) -> dict[str, Any]:
@@ -1019,7 +1019,7 @@ class DailyStateMixin:
             action = "photo_text" if self._photo_text_available() and random.random() < 0.16 else "message"
             events.append(
                 {
-                    "window": "14:40-18:40" if 12 <= datetime.now().hour < 18 else "19:20-21:40",
+                    "window": "14:40-18:40" if 12 <= self._environment_now().hour < 18 else "19:20-21:40",
                     "reason": "activity_share",
                     "action": action,
                     "why": "日常里冒出来的小念头不一定和天气有关,也可以自然成为一次主动分享。",
@@ -1364,7 +1364,7 @@ class DailyStateMixin:
         return events[:2]
 
     def _pick_weather_window(self, weather_kind: str) -> str:
-        hour = datetime.now().hour
+        hour = self._environment_now().hour
         if weather_kind == "rain":
             if 6 <= hour < 11:
                 return "08:20-10:40"
@@ -1437,7 +1437,7 @@ class DailyStateMixin:
     async def _generate_state_conditions(self, weather: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         intensity = self.humanized_state_intensity / 100
         persona_profile = self._persona_state_profile()
-        now_dt = datetime.now()
+        now_dt = self._environment_now()
         current_minute = now_dt.hour * 60 + now_dt.minute
 
         sleep_pool = [
@@ -1586,7 +1586,7 @@ class DailyStateMixin:
             return
         if any(str(cond.get("kind") or "") == "hunger" for cond in self._get_active_conditions()):
             return
-        now_dt = datetime.now()
+        now_dt = self._environment_now()
         minute = now_dt.hour * 60 + now_dt.minute
         windows = [
             ("breakfast", 7 * 60, 9 * 60 + 30, "早上胃里有点空,想找点热乎的东西垫一下", "柔软", -4, 2),
@@ -1734,7 +1734,7 @@ class DailyStateMixin:
             "mood": _single_line(dream_pick[1], 20) or "平稳",
             "energy_delta": _safe_int(dream_pick[2], 0, -30, 20),
             "duration_hours": _safe_int(dream_pick[3], 0, 0, 24),
-            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "generated_at": self._environment_now().strftime("%Y-%m-%d %H:%M"),
         }
 
     def _remembered_daily_dream_label(self) -> str:
@@ -2520,7 +2520,7 @@ class DailyStateMixin:
                 meal = label
                 break
         if not meal:
-            hour = datetime.now().hour
+            hour = self._environment_now().hour
             if 10 <= hour < 15:
                 meal = "午餐"
             elif 15 <= hour < 21:
@@ -2596,7 +2596,7 @@ class DailyStateMixin:
         for fmt in ("%Y-%m-%d", "%m-%d"):
             try:
                 parsed = datetime.strptime(text, fmt)
-                year = datetime.now().year if fmt == "%m-%d" else parsed.year
+                year = self._environment_now().year if fmt == "%m-%d" else parsed.year
                 return date(year, parsed.month, parsed.day)
             except ValueError:
                 continue
@@ -2606,7 +2606,7 @@ class DailyStateMixin:
         base = self._parse_date_value(entry.get("date"))
         if base is None:
             return None
-        today = datetime.now().date()
+        today = self._environment_now().date()
         if entry.get("repeat_yearly", True):
             try:
                 candidate = date(today.year, base.month, base.day)
@@ -2624,7 +2624,7 @@ class DailyStateMixin:
         entries = self.data.get("important_dates", [])
         if not isinstance(entries, list):
             return []
-        today = datetime.now().date()
+        today = self._environment_now().date()
         relevant = []
         for entry in entries:
             if not isinstance(entry, dict) or not entry.get("enabled", True):
@@ -2664,7 +2664,7 @@ class DailyStateMixin:
         return "\n".join(lines)
 
     def _format_calendar_context_for_prompt(self, now: datetime | None = None) -> str:
-        current = now or datetime.now()
+        current = now or self._environment_now()
         weekday_names = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
         weekday = weekday_names[current.weekday()]
         is_weekend = current.weekday() >= 5
@@ -2737,7 +2737,7 @@ class DailyStateMixin:
         return "\n".join(rules)
 
     def _calendar_day_flags(self, now: datetime | None = None) -> dict[str, bool]:
-        current = now or datetime.now()
+        current = now or self._environment_now()
         is_weekend = current.weekday() >= 5
         builtin_holidays = {"01-01", "05-01", "10-01"}
         month_day = current.strftime("%m-%d")
@@ -3037,7 +3037,7 @@ class DailyStateMixin:
                 sample.append(f"{time_text} {activity}".strip())
         entry = {
             "date": plan_date,
-            "generated_at": _single_line(plan.get("generated_at"), 20) or datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "generated_at": _single_line(plan.get("generated_at"), 20) or self._environment_now().strftime("%Y-%m-%d %H:%M"),
             "source": _single_line(plan.get("source"), 16),
             "signature": self._plan_signature(items),
             "sample": sample,
@@ -3090,7 +3090,7 @@ class DailyStateMixin:
             "repeat_yearly": repeat_yearly,
             "remind_days": self.important_date_lookahead_days,
             "priority": 50,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "created_at": self._environment_now().strftime("%Y-%m-%d %H:%M"),
         }
         self.data.setdefault("important_dates", []).append(entry)
         return True, f"已添加重要日期：{title}｜{date_text}"
@@ -3121,7 +3121,7 @@ class DailyStateMixin:
         if not isinstance(entries, list) or not entries:
             return "还没有重要日期。"
         lines = ["重要日期条目："]
-        today = datetime.now().date()
+        today = self._environment_now().date()
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
@@ -3184,7 +3184,7 @@ class DailyStateMixin:
                 cond["end_ts"] = end_ts
                 cond["duration_hours"] = max_hours
             if not cond.get("episode_key"):
-                cond["episode_key"] = f"body-cycle-{datetime.fromtimestamp(start_ts).strftime('%Y-%m-%d')}"
+                cond["episode_key"] = f"body-cycle-{self._environment_fromtimestamp(start_ts).strftime('%Y-%m-%d')}"
             last_cycle_end = max(last_cycle_end, end_ts)
             if start_ts <= now < end_ts:
                 active_cycles.append(cond)
@@ -3487,7 +3487,7 @@ class DailyStateMixin:
         plan_minutes = self._parse_hhmm_to_minutes(self.daily_plan_time)
         if plan_minutes is None:
             plan_minutes = 7 * 60 + 30
-        now = datetime.now()
+        now = self._environment_now()
         return now.hour * 60 + now.minute >= plan_minutes
 
     def _daily_plan_due_minutes(self) -> int:
@@ -3500,14 +3500,14 @@ class DailyStateMixin:
         plan_date = str(plan_date or "").strip()
         if not plan_date:
             return False
-        today = datetime.now().date()
+        today = self._environment_now().date()
         today_key = _date_key(today)
         if plan_date == today_key:
             return True
         yesterday_key = _date_key(today - timedelta(days=1))
         if plan_date != yesterday_key:
             return False
-        now_minutes = datetime.now().hour * 60 + datetime.now().minute
+        now_minutes = self._environment_now_minutes()
         return now_minutes < self._daily_plan_due_minutes()
 
     def _get_active_plan(self) -> dict[str, Any]:
@@ -3520,7 +3520,7 @@ class DailyStateMixin:
         plan_date = str(plan_date or "").strip()
         if not self._is_plan_date_active(plan_date):
             return None
-        now_minutes = datetime.now().hour * 60 + datetime.now().minute
+        now_minutes = self._environment_now_minutes()
         if plan_date == _today_key():
             return now_minutes
         return 24 * 60 + now_minutes
@@ -3600,8 +3600,9 @@ class DailyStateMixin:
         users = self.data.get("users", {})
         if not isinstance(users, dict):
             return ""
-        yesterday = date.today() - timedelta(days=1)
-        start = datetime.combine(yesterday, datetime.min.time()).timestamp()
+        now_dt = self._environment_now()
+        yesterday = now_dt.date() - timedelta(days=1)
+        start = datetime.combine(yesterday, datetime.min.time(), tzinfo=now_dt.tzinfo).timestamp()
         end = start + 24 * 3600
         blocks: list[str] = []
         for user_id, raw_user in users.items():
@@ -3680,7 +3681,7 @@ class DailyStateMixin:
         if not content:
             return ""
         ts = self._history_item_timestamp(item)
-        time_prefix = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") + " " if ts else ""
+        time_prefix = self._environment_fromtimestamp(ts).strftime("%m-%d %H:%M") + " " if ts else ""
         return f"{time_prefix}{speaker}: {content}"
 
     def _history_item_content_text(self, item: dict[str, Any]) -> str:
@@ -4486,7 +4487,7 @@ class DailyStateMixin:
             snapshot["interaction_updates"] = updates
         updates.append(
             {
-                "at": datetime.now().strftime("%H:%M"),
+                "at": self._environment_now().strftime("%H:%M"),
                 "source": _single_line(item.get("source"), 24),
                 "user_text": _single_line(item.get("user_text"), 80),
                 "intensity": _single_line(item.get("intensity"), 16),
@@ -4628,7 +4629,7 @@ class DailyStateMixin:
             return False
         state["location"] = location
         state["location_source"] = "detail" if isinstance(detail, dict) else "daily_plan"
-        state["location_updated_at"] = datetime.now().strftime("%H:%M")
+        state["location_updated_at"] = self._environment_now().strftime("%H:%M")
         return True
 
     def _current_location_state_text(self, state: dict[str, Any] | None = None) -> str:
@@ -5114,7 +5115,7 @@ class DailyStateMixin:
                 processed = [key for key in processed if str(key).startswith(day_key + "|")]
                 state["processed_schedule_keys"] = processed
                 state["last_settled_day"] = day_key
-            now_minutes = datetime.now().hour * 60 + datetime.now().minute
+            now_minutes = self._environment_now_minutes()
             skills = state.get("skills") if isinstance(state.get("skills"), dict) else {}
             changed = profile_changed
             for index, item in enumerate(items):
@@ -5437,7 +5438,7 @@ class DailyStateMixin:
         return 0.0
 
     def _infer_timer_reason(self, scheduled_ts: float, source_text: str = "") -> str:
-        dt = datetime.fromtimestamp(scheduled_ts)
+        dt = self._environment_fromtimestamp(scheduled_ts)
         minute = dt.hour * 60 + dt.minute
         lowered = str(source_text or "")
         if 8 * 60 <= minute <= 10 * 60 + 30:
@@ -5588,6 +5589,9 @@ class DailyStateMixin:
             action = _single_line(payload.get("action"), 24) or "message"
             if action not in {"message", "screen_peek", "photo_text", "voice", "jm_cosmos_read"}:
                 action = "message"
+            if not self._friend_can_receive_proactive_reason(user, reason, action):
+                reason = "check_in"
+                action = "message"
             topic = _single_line(payload.get("topic"), 60) or self._timer_default_topic(
                 reason,
                 user,
@@ -5638,7 +5642,7 @@ class DailyStateMixin:
         logger.info(
             "[PrivateCompanion] 已记录 LLM 自预约: user=%s time=%s reason=%s action=%s topic=%s",
             user_id,
-            datetime.fromtimestamp(scheduled_ts).strftime("%m-%d %H:%M:%S"),
+            self._environment_fromtimestamp(scheduled_ts).strftime("%m-%d %H:%M:%S"),
             reason,
             action,
             topic,
@@ -5658,7 +5662,7 @@ class DailyStateMixin:
         ts = _safe_float(start_ts, 0)
         if ts <= 0:
             return "未知"
-        dt = datetime.fromtimestamp(ts)
+        dt = self._environment_fromtimestamp(ts)
         elapsed = max(0.0, _now_ts() - ts)
         return f"{dt.strftime('%m-%d %H:%M')}（已持续 {self._format_duration_brief(elapsed)}）"
 
@@ -5679,7 +5683,7 @@ class DailyStateMixin:
         ts = _safe_float(start_ts, 0)
         if ts <= 0:
             return "未知"
-        dt = datetime.fromtimestamp(ts)
+        dt = self._environment_fromtimestamp(ts)
         elapsed = max(0.0, _now_ts() - ts)
         if elapsed < 3600:
             minutes = max(1, int(elapsed // 60))

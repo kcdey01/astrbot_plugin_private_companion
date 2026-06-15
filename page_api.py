@@ -16,7 +16,7 @@ from urllib.parse import quote
 from astrbot.api import logger
 from quart import request, send_file
 
-from .helpers import _strip_internal_message_blocks, _today_key
+from .helpers import _safe_int, _strip_internal_message_blocks, _today_key
 
 PLUGIN_NAME = "astrbot_plugin_private_companion"
 PAGE_API_PREFIX = f"/{PLUGIN_NAME}/page"
@@ -213,6 +213,7 @@ class PrivateCompanionPageApi:
         try:
             async with self.plugin._data_lock:
                 user = deepcopy((self.plugin.data.get("users") or {}).get(user_id))
+                worldbook_member = self._worldbook_member_for_private_user_locked(self.plugin.data, user_id, user if isinstance(user, dict) else {})
             if not isinstance(user, dict):
                 return self._error("用户不存在")
             detail = self._user_summary(user_id, user)
@@ -228,6 +229,7 @@ class PrivateCompanionPageApi:
                     "recent_reply_topics": self._limited_list(user.get("recent_reply_topics"), 16),
                     "last_user_message": self._display_message_text(user.get("last_user_message"), 500),
                     "last_companion_message": self._display_message_text(user.get("last_companion_message"), 500),
+                    "worldbook_member": worldbook_member,
                     "formatted": {
                         "relationship": self.plugin._format_relationship_summary(user),
                         "action_affinity": self.plugin._format_action_affinity_summary(user),
@@ -259,6 +261,36 @@ class PrivateCompanionPageApi:
                     user["nickname"] = self._single_line(payload.get("nickname"), 24)
                 if "style" in payload:
                     user["style"] = self._single_line(payload.get("style"), 24)
+                if "relationship_role" in payload:
+                    role = self.plugin._normalize_private_user_role(payload.get("relationship_role"))
+                    if role:
+                        user["relationship_role"] = role
+                if "proactive_daily_limit" in payload:
+                    user["proactive_daily_limit"] = max(-1, _safe_int(payload.get("proactive_daily_limit"), -1))
+                if any(key in payload for key in ("nickname", "style", "relationship_role", "proactive_daily_limit")):
+                    for key in (
+                        "proactive_idle_minutes",
+                        "proactive_min_interval_minutes",
+                        "photo_daily_limit",
+                        "screen_peek_daily_limit",
+                        "poke_daily_limit",
+                    ):
+                        user[key] = -1
+                    user["proactive_boundary_note"] = ""
+                if self.plugin._private_user_role(user, user_id) == "friend":
+                    user["photo_daily_limit"] = -1
+                    user["photo_sent_today"] = 0
+                    user["photo_sent_day"] = ""
+                    user["photo_generated_today"] = 0
+                    user["photo_generated_day"] = ""
+                    user["last_generated_photo_path"] = ""
+                    user["last_generated_photo_at"] = 0
+                    user["screen_peek_daily_limit"] = -1
+                    user["screen_peek_today"] = 0
+                    user["screen_peek_day"] = ""
+                    user["screen_peek_last_at"] = 0
+                if "proactive_boundary_note" in payload:
+                    user["proactive_boundary_note"] = self._single_line(payload.get("proactive_boundary_note"), 180)
                 if payload.get("reset_daily"):
                     user["sent_today"] = 0
                     user["sent_day"] = ""
@@ -1542,12 +1574,17 @@ class PrivateCompanionPageApi:
                 relationship_stage = "熟悉"
             else:
                 relationship_stage = "陌生"
+        role = self.plugin._private_user_role(user, user_id_text) if hasattr(self.plugin, "_private_user_role") else ""
+        role_labeler = getattr(self.plugin, "_private_user_role_label", None)
+        role_label = role_labeler(role) if callable(role_labeler) else ("主人" if role == "owner" else "朋友")
         return {
             "user_id": user_id_text,
             "display_name": display_name,
             "is_qq_user": is_qq_user,
             "source": source,
             "enabled": bool(user.get("enabled", True)),
+            "relationship_role": role,
+            "relationship_role_label": role_label,
             "nickname": user.get("nickname", ""),
             "style": user.get("style", ""),
             "umo": user.get("umo", ""),
@@ -1556,6 +1593,38 @@ class PrivateCompanionPageApi:
             "last_sent_ts": last_sent,
             "last_sent": self.plugin._format_timestamp_elapsed(last_sent),
             "sent_today": user.get("sent_today", 0),
+            "effective_daily_limit": (
+                self.plugin._effective_user_daily_limit(user)
+                if hasattr(self.plugin, "_effective_user_daily_limit")
+                else getattr(self.plugin, "max_daily_messages", 0)
+            ),
+            "effective_idle_minutes": (
+                self.plugin._effective_user_idle_minutes(user)
+                if hasattr(self.plugin, "_effective_user_idle_minutes")
+                else getattr(self.plugin, "idle_minutes", 0)
+            ),
+            "effective_min_interval_minutes": (
+                self.plugin._effective_user_min_interval_minutes(user)
+                if hasattr(self.plugin, "_effective_user_min_interval_minutes")
+                else getattr(self.plugin, "min_interval_minutes", 0)
+            ),
+            "effective_screen_peek_daily_limit": (
+                self.plugin._effective_user_screen_peek_daily_limit(user)
+                if hasattr(self.plugin, "_effective_user_screen_peek_daily_limit")
+                else getattr(self.plugin, "screen_peek_max_daily", 0)
+            ),
+            "effective_photo_daily_limit": (
+                self.plugin._effective_user_photo_daily_limit(user)
+                if hasattr(self.plugin, "_effective_user_photo_daily_limit")
+                else getattr(self.plugin, "photo_action_max_daily", 0)
+            ),
+            "proactive_daily_limit": user.get("proactive_daily_limit", -1),
+            "proactive_idle_minutes": user.get("proactive_idle_minutes", -1),
+            "proactive_min_interval_minutes": user.get("proactive_min_interval_minutes", -1),
+            "photo_daily_limit": user.get("photo_daily_limit", -1),
+            "screen_peek_daily_limit": user.get("screen_peek_daily_limit", -1),
+            "poke_daily_limit": user.get("poke_daily_limit", -1),
+            "proactive_boundary_note": user.get("proactive_boundary_note", ""),
             "inbound_count": user.get("inbound_count", 0),
             "reply_count": user.get("reply_count", 0),
             "proactive_sent_count": user.get("proactive_sent_count", 0),
@@ -1574,6 +1643,63 @@ class PrivateCompanionPageApi:
                 for item in (user.get("alias_user_ids") if isinstance(user.get("alias_user_ids"), list) else [])
                 if self._single_line(item, 80)
             ],
+        }
+
+    def _worldbook_member_for_private_user_locked(
+        self,
+        data: dict[str, Any],
+        user_id: str,
+        user: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        profiles = data.get("worldbook_member_profiles") if isinstance(data.get("worldbook_member_profiles"), dict) else {}
+        if not profiles:
+            return None
+        candidate_ids = [str(user_id)]
+        if isinstance(user, dict):
+            candidate_ids.extend(
+                self._single_line(item, 80)
+                for item in (user.get("alias_user_ids") if isinstance(user.get("alias_user_ids"), list) else [])
+                if self._single_line(item, 80)
+            )
+        for candidate_id in candidate_ids:
+            profile = profiles.get(candidate_id)
+            if isinstance(profile, dict):
+                return self._worldbook_member_profile_summary(candidate_id, profile)
+        for profile_id, profile in profiles.items():
+            if not isinstance(profile, dict):
+                continue
+            linked_id = self._single_line(profile.get("linked_qq_user_id") or profile.get("merged_into_user_id"), 80)
+            external_ids = profile.get("external_ids") if isinstance(profile.get("external_ids"), list) else []
+            external_id_set = {self._single_line(item, 80) for item in external_ids if self._single_line(item, 80)}
+            if linked_id in candidate_ids or any(candidate_id in external_id_set for candidate_id in candidate_ids):
+                return self._worldbook_member_profile_summary(str(profile_id), profile)
+        return None
+
+    def _worldbook_member_profile_summary(self, user_id: str, item: dict[str, Any]) -> dict[str, Any]:
+        aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
+        observed = item.get("observed_names") if isinstance(item.get("observed_names"), list) else []
+        external_ids = item.get("external_ids") if isinstance(item.get("external_ids"), list) else []
+        memories = self._normalize_important_memories(item.get("important_memories"))
+        pending = item.get("pending_observations") if isinstance(item.get("pending_observations"), list) else []
+        return {
+            "user_id": self._single_line(user_id, 40),
+            "identity_type": self._single_line(item.get("identity_type") or ("qq" if str(user_id).isdigit() else "external"), 20),
+            "name": self._single_line(item.get("name"), 60),
+            "gender": self._single_line(item.get("gender"), 40),
+            "enabled": bool(item.get("enabled", True)),
+            "priority": item.get("priority", 120),
+            "aliases": [self._single_line(alias, 40) for alias in aliases if self._single_line(alias, 40)],
+            "observed_names": [self._single_line(name, 40) for name in observed if self._single_line(name, 40)],
+            "external_ids": [self._single_line(ext, 80) for ext in external_ids if self._single_line(ext, 80)],
+            "linked_qq_user_id": self._single_line(item.get("linked_qq_user_id") or item.get("merged_into_user_id"), 40),
+            "linked_bili_profile_id": self._single_line(item.get("linked_bili_profile_id"), 80),
+            "content": self._single_line(item.get("content"), 260),
+            "identity_note": self._single_line(item.get("identity_note") or item.get("note") or item.get("content"), 500),
+            "boundary_note": self._single_line(item.get("boundary_note"), 500),
+            "important_memories": memories[:6],
+            "pending_observation_count": len(pending),
+            "source_entries": item.get("source_entries") if isinstance(item.get("source_entries"), list) else [],
+            "note": self._single_line(item.get("note"), 500),
         }
 
     def _behavior_habit_summary(self, user: dict[str, Any]) -> dict[str, Any]:
@@ -1935,6 +2061,7 @@ class PrivateCompanionPageApi:
             "enable_group_slang_learning",
             "enable_group_member_profiles",
             "enable_group_context_injection",
+            "enable_group_persona_denoise",
             "enable_forward_message_adaptation",
             "enable_group_scene_awareness",
             "enable_group_reality_promise_guard",
@@ -2309,11 +2436,6 @@ class PrivateCompanionPageApi:
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
             "enable_ai_daily_watch",
-            "ai_daily_sources",
-            "ai_daily_source_uid",
-            "ai_daily_check_window",
-            "ai_daily_check_interval_minutes",
-            "ai_daily_prefer_text_version",
             "enable_external_event_self_link",
             "news_min_interval_hours",
             "news_share_probability",
@@ -2902,11 +3024,6 @@ class PrivateCompanionPageApi:
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
             "enable_ai_daily_watch",
-            "ai_daily_sources",
-            "ai_daily_source_uid",
-            "ai_daily_check_window",
-            "ai_daily_check_interval_minutes",
-            "ai_daily_prefer_text_version",
             "enable_external_event_self_link",
             "enable_web_exploration",
             "enable_web_exploration_boredom_search",
@@ -4677,14 +4794,41 @@ class PrivateCompanionPageApi:
         buckets: list[dict[str, Any]] = []
         counts: dict[str, int] = {}
         source_counts: dict[str, int] = {}
+        user_counts: dict[str, dict[str, Any]] = {}
         total_attempts = 0
+
+        def candidate_user_meta(user_id: str, user: Any) -> dict[str, str]:
+            if not isinstance(user, dict):
+                return {"label": user_id or "未知用户", "role": "unknown", "role_label": "未知"}
+            role = self.plugin._private_user_role(user, user_id) if hasattr(self.plugin, "_private_user_role") else ""
+            role_labeler = getattr(self.plugin, "_private_user_role_label", None)
+            role_label = role_labeler(role) if callable(role_labeler) else ("主人" if role == "owner" else "朋友")
+            nickname = self._single_line(user.get("nickname"), 40)
+            generic_names = {"用户", "主人", "默认用户"}
+            if str(user_id).isdigit():
+                label = nickname if nickname and nickname not in generic_names else user_id
+            else:
+                label = f"临时会话 · {str(user_id)[:8]}"
+            return {"label": label or user_id or "未知用户", "role": role or "friend", "role_label": role_label}
+
         for item in raw[-240:]:
             if not isinstance(item, dict):
                 continue
             repeat_count = max(1, self._int(item.get("repeat_count")))
             status = self._single_line(item.get("status"), 24) or "unknown"
+            note = self._single_line(item.get("note"), 160)
+            if status == "blocked" and note == "朋友关系不接收敏感主动":
+                continue
             user_id = self._single_line(item.get("user_id"), 32)
             user = users.get(user_id) if isinstance(users, dict) else None
+            reason_raw = self._single_line(item.get("reason"), 40)
+            action_raw = self._single_line(item.get("action"), 40)
+            if (
+                isinstance(user, dict)
+                and hasattr(self.plugin, "_friend_can_receive_proactive_reason")
+                and not self.plugin._friend_can_receive_proactive_reason(user, reason_raw, action_raw)
+            ):
+                continue
             if status != "sent" and not bool(
                 isinstance(user, dict)
                 and getattr(self.plugin, "_user_enabled_for_proactive", lambda uid, profile: bool(profile and profile.get("enabled", True)))(
@@ -4694,6 +4838,24 @@ class PrivateCompanionPageApi:
             ):
                 continue
             total_attempts += repeat_count
+            user_meta = candidate_user_meta(user_id, user)
+            user_bucket = user_counts.setdefault(
+                user_id or "unknown",
+                {
+                    "user_id": user_id,
+                    "label": user_meta["label"],
+                    "role": user_meta["role"],
+                    "role_label": user_meta["role_label"],
+                    "total": 0,
+                    "counts": {},
+                },
+            )
+            user_bucket["total"] = self._int(user_bucket.get("total")) + repeat_count
+            bucket_counts = user_bucket.get("counts")
+            if not isinstance(bucket_counts, dict):
+                bucket_counts = {}
+                user_bucket["counts"] = bucket_counts
+            bucket_counts[status] = self._int(bucket_counts.get(status)) + repeat_count
             source = self._single_line(item.get("source"), 40) or "unknown"
             display_source = "bookshelf_reading" if source == "jm_cosmos" else source
             counts[status] = counts.get(status, 0) + repeat_count
@@ -4701,8 +4863,8 @@ class PrivateCompanionPageApi:
             scheduled = self._float(item.get("scheduled_ts"))
             created = self._float(item.get("created_ts"))
             last_seen = self._float(item.get("last_seen_ts")) or created
-            reason = self._single_line(item.get("reason"), 40)
-            action = self._single_line(item.get("action"), 40)
+            reason = reason_raw
+            action = action_raw
             if reason == "jm_cosmos_share":
                 reason = "bookshelf_reading_share"
             if reason == "jm_cosmos_recommendation_request":
@@ -4712,7 +4874,6 @@ class PrivateCompanionPageApi:
             signature = self._single_line(item.get("signature"), 120)
             topic = self._single_line(item.get("topic"), 100)
             motive = self._single_line(item.get("motive"), 180)
-            note = self._single_line(item.get("note"), 160)
             merged = None
             for existing in reversed(buckets):
                 if existing.get("status") != status:
@@ -4735,6 +4896,9 @@ class PrivateCompanionPageApi:
                     {
                         "id": self._single_line(item.get("id"), 20),
                         "user_id": user_id,
+                        "user_label": user_meta["label"],
+                        "user_role": user_meta["role"],
+                        "user_role_label": user_meta["role_label"],
                         "source": display_source,
                         "reason": reason,
                         "action": action,
@@ -4781,6 +4945,11 @@ class PrivateCompanionPageApi:
             "visible_total": len(items),
             "counts": counts,
             "source_counts": source_counts,
+            "users": sorted(
+                user_counts.values(),
+                key=lambda item: (self._int(item.get("total")), self._single_line(item.get("label"), 40)),
+                reverse=True,
+            ),
             "items": items[:60],
         }
 
@@ -4975,6 +5144,7 @@ class PrivateCompanionPageApi:
     def _token_stats_payload(self, usage: Any) -> dict[str, Any]:
         if not isinstance(usage, dict):
             usage = {}
+        external_usage = usage.get("external") if isinstance(usage.get("external"), dict) else {}
         totals = self._token_bucket(usage.get("totals"))
         by_provider = self._token_ranked_map(usage.get("by_provider"))
         by_task = self._token_ranked_map(usage.get("by_task"))
@@ -4997,10 +5167,21 @@ class PrivateCompanionPageApi:
         if today_exempt_tokens <= 0:
             today_tasks = by_day_task_raw.get(today_key, {}) if isinstance(by_day_task_raw, dict) else {}
             if isinstance(today_tasks, dict):
+                is_exempt_task = getattr(self.plugin, "_is_llm_budget_exempt_task", None)
                 today_exempt_tokens = sum(
                     self._int(bucket.get("total_tokens"))
                     for task, bucket in today_tasks.items()
-                    if str(task) in {"proactive_framework", "voice_framework"} and isinstance(bucket, dict)
+                    if (
+                        (
+                            callable(is_exempt_task)
+                            and is_exempt_task(task)
+                        )
+                        or (
+                            not callable(is_exempt_task)
+                            and str(task) in {"proactive_framework", "voice_framework"}
+                        )
+                    )
+                    and isinstance(bucket, dict)
                 )
         today_tokens = max(0, today_total_tokens - today_exempt_tokens)
         daily_limit = self._int(getattr(self.plugin, "daily_token_limit", 0))
@@ -5063,6 +5244,58 @@ class PrivateCompanionPageApi:
             "by_day_detail": by_day_detail,
             "by_hour": by_hour,
             "budget": budget,
+            "recent": recent,
+            "external": self._token_external_payload(external_usage),
+        }
+
+    def _token_external_payload(self, usage: Any) -> dict[str, Any]:
+        if not isinstance(usage, dict):
+            usage = {}
+        by_day = self._token_series_map(usage.get("by_day"), limit=30)
+        by_day_provider_raw = usage.get("by_day_provider") if isinstance(usage.get("by_day_provider"), dict) else {}
+        by_day_task_raw = usage.get("by_day_task") if isinstance(usage.get("by_day_task"), dict) else {}
+        by_day_detail = []
+        for item in by_day:
+            day_key = item.get("key", "")
+            by_day_detail.append(
+                {
+                    **item,
+                    "providers": self._token_ranked_map(by_day_provider_raw.get(day_key))[:5],
+                    "tasks": self._token_ranked_map(by_day_task_raw.get(day_key))[:6],
+                }
+            )
+        recent = []
+        recent_raw = usage.get("recent")
+        if isinstance(recent_raw, list):
+            for item in recent_raw[-80:][::-1]:
+                if not isinstance(item, dict):
+                    continue
+                recent.append(
+                    {
+                        "time": self._single_line(item.get("time"), 24),
+                        "ts": self._float(item.get("ts")),
+                        "provider": self._single_line(item.get("provider"), 80),
+                        "task": self._single_line(item.get("task"), 40),
+                        "success": bool(item.get("success", True)),
+                        "prompt_tokens": self._int(item.get("prompt_tokens")),
+                        "completion_tokens": self._int(item.get("completion_tokens")),
+                        "total_tokens": self._int(item.get("total_tokens")),
+                        "estimated": bool(item.get("estimated", False)),
+                        "elapsed_ms": self._int(item.get("elapsed_ms")),
+                        "prompt_chars": self._int(item.get("prompt_chars")),
+                        "completion_chars": self._int(item.get("completion_chars")),
+                        "error": self._single_line(item.get("error"), 160),
+                        "external": True,
+                    }
+                )
+        return {
+            "updated_at": self._single_line(usage.get("updated_at"), 24),
+            "totals": self._token_bucket(usage.get("totals")),
+            "by_provider": self._token_ranked_map(usage.get("by_provider")),
+            "by_task": self._token_ranked_map(usage.get("by_task")),
+            "by_day": by_day,
+            "by_day_detail": by_day_detail,
+            "by_hour": self._token_series_map(usage.get("by_hour"), limit=48),
             "recent": recent,
         }
 

@@ -178,6 +178,12 @@ class LlmToolActionsMixin:
         delay_until_seen = self._atrelay_bool_flag(
             kwargs.get("delay_until_recipient_seen", kwargs.get("delay", kwargs.get("wait_until_seen", False)))
         )
+        need_receipt = self._atrelay_bool_flag(
+            kwargs.get("need_receipt", kwargs.get("wait_for_reply", kwargs.get("receipt", kwargs.get("report_back", False))))
+        )
+        confirm_before_report = self._atrelay_bool_flag(
+            kwargs.get("confirm_before_report", kwargs.get("require_reply_confirmation", kwargs.get("confirm_reply", False)))
+        )
         at_recipient = self._atrelay_bool_flag(kwargs.get("at_recipient", kwargs.get("at", False)))
         expire_hours = kwargs.get("expire_hours", kwargs.get("ttl_hours", 24))
 
@@ -227,7 +233,15 @@ class LlmToolActionsMixin:
                 relay_mode=relay_mode,
                 sensitive_confirmed=sensitive_confirmed,
             )
-            return json.dumps({"status": "success" if result.startswith("消息已发送") else "error", "message": result}, ensure_ascii=False)
+            ok = result.startswith("消息已发送")
+            return json.dumps(
+                {
+                    "status": "success" if ok else "error",
+                    "message": result,
+                    "final_reply": "消息已发送。" if ok else "",
+                },
+                ensure_ascii=False,
+            )
 
         target_user = recipient
         if not target_user:
@@ -264,8 +278,19 @@ class LlmToolActionsMixin:
             message=text,
             relay_mode=relay_mode,
             sensitive_confirmed=sensitive_confirmed,
+            need_receipt=need_receipt,
+            confirm_before_report=confirm_before_report,
+            receipt_expire_hours=expire_hours,
         )
-        return json.dumps({"status": "success" if result.startswith("已向") else "error", "message": result}, ensure_ascii=False)
+        ok = result.startswith("已向")
+        return json.dumps(
+            {
+                "status": "success" if ok else "error",
+                "message": result,
+                "final_reply": "消息已发送，会等对方回复。" if ok and need_receipt else ("消息已发送。" if ok else ""),
+            },
+            ensure_ascii=False,
+        )
 
     async def _pc_send_to_group_impl(self, event: AstrMessageEvent, **kwargs) -> str:
         if not self.enable_atrelay_tools:
@@ -333,6 +358,13 @@ class LlmToolActionsMixin:
         message = kwargs.get("message") or kwargs.get("text") or kwargs.get("content") or kwargs.get("msg") or ""
         relay_mode = kwargs.get("relay_mode") or kwargs.get("mode") or ""
         sensitive_confirmed = kwargs.get("sensitive_confirmed", kwargs.get("confirmed", False))
+        need_receipt = self._atrelay_bool_flag(
+            kwargs.get("need_receipt", kwargs.get("wait_for_reply", kwargs.get("receipt", kwargs.get("report_back", False))))
+        )
+        confirm_before_report = self._atrelay_bool_flag(
+            kwargs.get("confirm_before_report", kwargs.get("require_reply_confirmation", kwargs.get("confirm_reply", False)))
+        )
+        receipt_expire_hours = kwargs.get("receipt_expire_hours", kwargs.get("expire_hours", kwargs.get("ttl_hours", 12)))
         target_user = _single_line(user_id, 40)
         text = _single_line(message, 800)
         relay_mode_normalized = self._normalize_atrelay_relay_mode(relay_mode)
@@ -360,8 +392,17 @@ class LlmToolActionsMixin:
         try:
             await self.context.send_message(f"{platform}:FriendMessage:{target_user}", MessageChain([Plain(text)]))
             self._note_atrelay_send("private", target_user, text)
+            if need_receipt:
+                self._note_atrelay_private_receipt_task(
+                    event,
+                    target_user=target_user,
+                    question=text,
+                    sent_text=text,
+                    confirm_before_report=confirm_before_report,
+                    expire_hours=receipt_expire_hours,
+                )
             self._save_data_sync()
-            return f"已向 {target_user} 发送私聊消息"
+            return f"已向 {target_user} 发送私聊消息" + ("，会等待对方回复后带回回执" if need_receipt else "")
         except Exception as exc:
             return f"私聊发送失败：{_single_line(exc, 160)}"
 

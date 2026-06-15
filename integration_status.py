@@ -726,12 +726,27 @@ class IntegrationStatusMixin:
             lines.append(f"模型环境：\n{model}")
         return "\n".join(lines)
 
-    def _environment_now(self) -> datetime:
+    def _environment_timezone(self) -> zoneinfo.ZoneInfo | None:
         timezone_name = _single_line(self.environment_perception_timezone, 64) or "Asia/Shanghai"
         try:
-            return datetime.now(zoneinfo.ZoneInfo(timezone_name))
+            return zoneinfo.ZoneInfo(timezone_name)
         except Exception:
-            return datetime.now()
+            return None
+
+    def _environment_now(self) -> datetime:
+        tz = self._environment_timezone()
+        return datetime.now(tz) if tz is not None else datetime.now()
+
+    def _environment_fromtimestamp(self, timestamp: float) -> datetime:
+        tz = self._environment_timezone()
+        return datetime.fromtimestamp(timestamp, tz) if tz is not None else datetime.fromtimestamp(timestamp)
+
+    def _environment_today_key(self) -> str:
+        return self._environment_now().strftime("%Y-%m-%d")
+
+    def _environment_now_minutes(self) -> int:
+        current = self._environment_now()
+        return current.hour * 60 + current.minute
 
     def _format_holiday_perception(self, current: datetime) -> str:
         if not self.enable_holiday_perception:

@@ -1689,8 +1689,7 @@
     "hint": "群聊回复时降低私聊腔、状态汇报和关系画像外溢，让 Bot 更贴当前群话题。",
     "default": true,
     "condition": {
-      "enable_group_companion": true,
-      "enable_group_context_injection": true
+      "enable_group_companion": true
     }
   },
   "enable_forward_message_adaptation": {

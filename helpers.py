@@ -4,15 +4,28 @@ from __future__ import annotations
 
 import re
 import time
+import zoneinfo
 from datetime import date, datetime
 from typing import Any
+
+_today_key_timezone = ""
 
 
 def _now_ts() -> float:
     return time.time()
 
 
+def _set_today_key_timezone(timezone_name: Any) -> None:
+    global _today_key_timezone
+    _today_key_timezone = str(timezone_name or "").strip()
+
+
 def _today_key() -> str:
+    if _today_key_timezone:
+        try:
+            return datetime.now(zoneinfo.ZoneInfo(_today_key_timezone)).strftime("%Y-%m-%d")
+        except Exception:
+            pass
     return datetime.now().strftime("%Y-%m-%d")
 
 

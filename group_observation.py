@@ -568,6 +568,8 @@ class GroupObservationMixin:
         for user_id, user in users.items():
             if not isinstance(user, dict) or not user.get("enabled", True) or not user.get("umo"):
                 continue
+            if not self._friend_can_receive_proactive_reason(user, "group_share", "message"):
+                continue
             target_id = str(user_id)
             if target_id == str(trigger_sender_id or ""):
                 continue

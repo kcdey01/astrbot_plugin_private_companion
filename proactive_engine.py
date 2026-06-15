@@ -359,6 +359,8 @@ class ProactiveEngineMixin:
         if not self._user_enabled_for_proactive(str(user_id), user):
             self._clear_pending_proactive_plan(user)
             return False
+        if not self._friend_can_receive_proactive_reason(user, candidate.get("reason"), candidate.get("action")):
+            return False
         timer_event = self._get_active_llm_timer(user)
         timer_scheduled = _safe_float(timer_event.get("scheduled_ts"), 0) if isinstance(timer_event, dict) else 0.0
         if timer_scheduled > now and scheduled < timer_scheduled:
@@ -374,6 +376,8 @@ class ProactiveEngineMixin:
             self._record_proactive_candidate(user_id, candidate, status="blocked", note="已有更早主动候选")
             return False
         action = _single_line(candidate.get("action"), 40) or "message"
+        if self._private_user_role(user, str(user_id)) == "friend" and self._action_has_photo_text(action):
+            action = self._fallback_action_for_unavailable(action, user)
         if not self._action_is_available(action, user):
             self._record_proactive_candidate(user_id, candidate, status="blocked", note="动作不可用或媒体额度不足")
             return False
@@ -555,7 +559,8 @@ class ProactiveEngineMixin:
             return False, "缺少私聊会话"
         if self._simulation_active(user):
             return self._should_send_simulation(user)
-        if self.max_daily_messages <= 0:
+        daily_limit = self._effective_user_daily_limit(user)
+        if daily_limit <= 0:
             return False, "每日上限为 0"
         now = _now_ts()
         due_timer_active = self._has_due_llm_timer(user, now=now)
@@ -603,15 +608,16 @@ class ProactiveEngineMixin:
             return False, "候选主动计划已过期,已重新安排"
 
         self._reset_daily_counter_if_needed(user)
-        if _safe_int(user.get("sent_today"), 0) >= self.max_daily_messages:
+        if _safe_int(user.get("sent_today"), 0) >= daily_limit:
             if not due_timer_active:
                 self._schedule_next_proactive(user, now=now, delay_hours=(8, 16))
             return False, "已达每日上限"
-        if not due_timer_active and now - _safe_float(user.get("last_seen"), 0) < self.idle_minutes * 60:
+        idle_minutes = self._effective_user_idle_minutes(user)
+        if not due_timer_active and now - _safe_float(user.get("last_seen"), 0) < idle_minutes * 60:
             idle_limit = (
-                self.greeting_idle_minutes * 60
+                self._effective_user_greeting_idle_minutes(user) * 60
                 if self._is_greeting_reason(planned_reason)
-                else self.idle_minutes * 60
+                else idle_minutes * 60
             )
             if now - _safe_float(user.get("last_seen"), 0) < idle_limit:
                 if self._is_sticky_greeting_reason(planned_reason):
@@ -624,6 +630,11 @@ class ProactiveEngineMixin:
             if self._is_sticky_greeting_reason(planned_reason):
                 self._reschedule_greeting_within_window(user, planned_reason, now=now)
             return False, "发送间隔不足"
+        planned_action = str(user.get("planned_proactive_action") or "message")
+        if not self._friend_can_receive_proactive_reason(user, planned_reason, planned_action):
+            self._clear_pending_proactive_plan(user)
+            self._schedule_next_proactive(user, now=now, delay_hours=(2, 6))
+            return False, "朋友关系不接收敏感主动"
         if due_timer_active:
             return True, "ok(timer)"
         if not self._is_reason_allowed_now(planned_reason):
@@ -632,7 +643,11 @@ class ProactiveEngineMixin:
                 return False, "问候仍在窗口内,稍后再试"
             self._schedule_next_proactive(user, now=now)
             return False, "计划动机不适合当前时间"
-        planned_action = str(user.get("planned_proactive_action") or "message")
+        if self._private_user_role(user) == "friend" and self._action_has_photo_text(planned_action):
+            fallback_action = self._fallback_action_for_unavailable(planned_action, user)
+            if fallback_action != planned_action:
+                planned_action = fallback_action
+                user["planned_proactive_action"] = planned_action
         if not self._action_is_available(planned_action, user):
             load_defer_note = self._photo_text_load_defer_note(planned_action)
             if load_defer_note:
@@ -691,7 +706,7 @@ class ProactiveEngineMixin:
         logger.warning(
             "[PrivateCompanion] 检测到残留的主动发送标记,已自动清理: user=%s started_at=%s",
             user.get("user_id") or user.get("id") or "unknown",
-            datetime.fromtimestamp(started_at).strftime("%m-%d %H:%M:%S") if started_at > 0 else "unknown",
+            self._environment_fromtimestamp(started_at).strftime("%m-%d %H:%M:%S") if started_at > 0 else "unknown",
         )
         return True
 
@@ -713,7 +728,7 @@ class ProactiveEngineMixin:
         next_at = _safe_float(probe.get("next_proactive_at"), 0)
         timer_event = self._get_active_llm_timer(probe)
         next_at_text = (
-            datetime.fromtimestamp(next_at).strftime("%m-%d %H:%M:%S")
+            self._environment_fromtimestamp(next_at).strftime("%m-%d %H:%M:%S")
             if next_at > 0
             else "未安排"
         )
@@ -729,9 +744,9 @@ class ProactiveEngineMixin:
         last_seen_gap = now - last_seen_at if last_seen_at > 0 else -1
         last_sent_gap = now - last_sent_at if last_sent_at > 0 else -1
         idle_limit = (
-            self.greeting_idle_minutes * 60
+            self._effective_user_greeting_idle_minutes(probe) * 60
             if self._is_greeting_reason(planned_reason)
-            else self.idle_minutes * 60
+            else self._effective_user_idle_minutes(probe) * 60
         )
         min_interval = self._effective_min_interval_seconds(probe)
         if self._is_greeting_reason(planned_reason):
@@ -753,7 +768,7 @@ class ProactiveEngineMixin:
             + (f"｜话题：{_single_line(probe.get('planned_proactive_topic'), 24)}" if _single_line(probe.get("planned_proactive_topic"), 24) else "")
             + (f"｜动机：{planned_motive}" if planned_motive else "")
             + (f"｜来源：模型预约" if isinstance(timer_event, dict) and _safe_float(timer_event.get("scheduled_ts"), 0) == next_at else ""),
-            f"今日已发：{sent_today}/{self.max_daily_messages}｜软目标约 {self._soft_daily_target(probe):.1f}",
+            f"今日已发：{sent_today}/{self._effective_user_daily_limit(probe)}｜软目标约 {self._soft_daily_target(probe):.1f}",
             f"今日问候：已发 {', '.join(str(item) for item in sent_greetings) or '无'}｜被用户消息跳过 {', '.join(str(item) for item in suppressed_greetings) or '无'}",
             f"免打扰：{'是' if self._is_quiet_time() else '否'}｜失眠特例：{'可用' if self._can_send_insomnia_night_message(probe) else '不可用'}",
             f"距用户上次活跃：{self._format_elapsed(max(0, last_seen_gap)) if last_seen_gap >= 0 else '从未'}｜要求至少 {self._format_elapsed(idle_limit)}",
@@ -984,7 +999,7 @@ class ProactiveEngineMixin:
             available.add("screen_peek")
         if self._photo_text_available(user):
             available.add("photo_text")
-        if self._poke_available():
+        if self._poke_available() and self._effective_user_poke_daily_limit(user) > 0:
             available.add("poke")
         if self._voice_available(user):
             available.add("voice")
@@ -1310,7 +1325,7 @@ class ProactiveEngineMixin:
             candidates.append(("photo_text", 1.05))
         if self._voice_available(user) and reason in {"quiet_care", "diary_share", "insomnia_night", "evening_greeting"}:
             candidates.append(("voice", 0.82))
-        if self._poke_available() and reason in {"check_in", "quiet_care", "morning_greeting", "evening_greeting"}:
+        if self._poke_available() and self._effective_user_poke_daily_limit(user) > 0 and reason in {"check_in", "quiet_care", "morning_greeting", "evening_greeting"}:
             candidates.append(("poke", 0.62))
         if not candidates:
             return "message"
@@ -1392,7 +1407,8 @@ class ProactiveEngineMixin:
         started = _safe_float(active_hunger.get("start_ts"), now)
         if now - started < 25 * 60:
             return None
-        minute = datetime.fromtimestamp(now).hour * 60 + datetime.fromtimestamp(now).minute
+        when = self._environment_fromtimestamp(now)
+        minute = when.hour * 60 + when.minute
         if not (10 * 60 + 30 <= minute <= 21 * 60 + 40):
             return None
         intensity = max(0.0, min(1.0, self.humanized_state_intensity / 100))
@@ -1662,7 +1678,7 @@ class ProactiveEngineMixin:
         if not isinstance(suppressed, list):
             suppressed = []
             user["greetings_suppressed_by_inbound"] = suppressed
-        now_dt = datetime.fromtimestamp(now or _now_ts())
+        now_dt = self._environment_fromtimestamp(now or _now_ts())
         minute = now_dt.hour * 60 + now_dt.minute
         anchors = [
             ("morning_greeting", "07:45-10:20", "早上醒来后想打个招呼"),
@@ -1679,8 +1695,8 @@ class ProactiveEngineMixin:
                 continue
             if minute >= end:
                 continue
-            start_dt = datetime.combine(today, datetime.min.time()) + timedelta(minutes=start)
-            end_dt = datetime.combine(today, datetime.min.time()) + timedelta(minutes=end)
+            start_dt = datetime.combine(today, datetime.min.time(), tzinfo=now_dt.tzinfo) + timedelta(minutes=start)
+            end_dt = datetime.combine(today, datetime.min.time(), tzinfo=now_dt.tzinfo) + timedelta(minutes=end)
             earliest = max(now_dt + timedelta(minutes=1), start_dt)
             if earliest >= end_dt:
                 continue
@@ -1784,14 +1800,14 @@ class ProactiveEngineMixin:
                 return ""
             minute = start
         else:
-            when = datetime.fromtimestamp(event_ts)
+            when = self._environment_fromtimestamp(event_ts)
             minute = when.hour * 60 + when.minute
         return self._proactive_daypart_bucket_for_minute(minute)
 
     def _proactive_daypart_bucket_for_timestamp(self, timestamp: float) -> str:
         if timestamp <= 0:
             return ""
-        when = datetime.fromtimestamp(timestamp)
+        when = self._environment_fromtimestamp(timestamp)
         return self._proactive_daypart_bucket_for_minute(when.hour * 60 + when.minute)
 
     def _planned_event_exceeds_daypart_cap(self, user: dict[str, Any], reason: str, scheduled_at: float) -> bool:
@@ -1820,7 +1836,7 @@ class ProactiveEngineMixin:
 
     def _note_proactive_daypart_sent(self, user: dict[str, Any], sent_at: float | None = None) -> None:
         self._reset_daily_counter_if_needed(user)
-        when = datetime.fromtimestamp(sent_at or _now_ts())
+        when = self._environment_fromtimestamp(sent_at or _now_ts())
         bucket = self._proactive_daypart_bucket_for_minute(when.hour * 60 + when.minute)
         raw = user.setdefault("proactive_daypart_counts", {})
         if not isinstance(raw, dict):
@@ -1833,7 +1849,7 @@ class ProactiveEngineMixin:
         if not isinstance(raw, dict):
             raw = {}
             user["action_reply_affinity"] = raw
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = _today_key()
         for part in [item.strip() for item in str(action or "message").split("+") if item.strip()]:
             if part == "message":
                 continue
@@ -1843,6 +1859,8 @@ class ProactiveEngineMixin:
                 raw[part] = stats
             stats["sent"] = _safe_int(stats.get("sent"), 0, 0) + 1
             if part == "photo_text":
+                if self._private_user_role(user) == "friend":
+                    continue
                 photo_sent_day = str(user.get("photo_sent_day") or "")
                 if photo_sent_day != today:
                     user["photo_sent_day"] = today
@@ -1892,7 +1910,7 @@ class ProactiveEngineMixin:
             stats["replied"] = _safe_int(stats.get("replied"), 0, 0) + 1
 
     def _maybe_make_followup_event(self, user: dict[str, Any], reason: str, action: str) -> dict[str, Any] | None:
-        if _safe_int(user.get("sent_today"), 0) >= max(0, self.max_daily_messages - 1):
+        if _safe_int(user.get("sent_today"), 0) >= max(0, self._effective_user_daily_limit(user) - 1):
             return None
         if action not in {"photo_text", "poke", "voice", "screen_peek"} and "+" not in action:
             return None
@@ -2006,7 +2024,7 @@ class ProactiveEngineMixin:
         }
 
     def _window_from_delay_minutes(self, delay_minutes: int, width_minutes: int = 24) -> str:
-        start_dt = datetime.fromtimestamp(_now_ts() + max(5, delay_minutes) * 60)
+        start_dt = self._environment_fromtimestamp(_now_ts() + max(5, delay_minutes) * 60)
         end_dt = start_dt + timedelta(minutes=max(12, width_minutes))
         return f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}"
 
@@ -2016,12 +2034,12 @@ class ProactiveEngineMixin:
             return scheduled_ts
         window = str(event.get("window") or "").strip()
         match = re.fullmatch(r"(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})", window)
-        now_dt = datetime.now()
+        now_dt = self._environment_now()
         today = now_dt.date()
         if match:
             sh, sm, eh, em = [int(part) for part in match.groups()]
-            start = datetime.combine(today, datetime.min.time()).replace(hour=sh % 24, minute=sm)
-            end = datetime.combine(today, datetime.min.time()).replace(hour=eh % 24, minute=em)
+            start = datetime.combine(today, datetime.min.time(), tzinfo=now_dt.tzinfo).replace(hour=sh % 24, minute=sm)
+            end = datetime.combine(today, datetime.min.time(), tzinfo=now_dt.tzinfo).replace(hour=eh % 24, minute=em)
             if end <= start:
                 end = end + timedelta(days=1)
             if now_dt >= end:
@@ -2118,14 +2136,14 @@ class ProactiveEngineMixin:
     ) -> bool:
         if not self._is_sticky_greeting_reason(reason):
             return False
-        now_dt = datetime.fromtimestamp(now or _now_ts())
+        now_dt = self._environment_fromtimestamp(now or _now_ts())
         windows = self._reason_windows(reason)
         if not windows:
             return False
         today = now_dt.date()
         for start, end in windows:
-            start_dt = datetime.combine(today, datetime.min.time()) + timedelta(minutes=start)
-            end_dt = datetime.combine(today, datetime.min.time()) + timedelta(minutes=end)
+            start_dt = datetime.combine(today, datetime.min.time(), tzinfo=now_dt.tzinfo) + timedelta(minutes=start)
+            end_dt = datetime.combine(today, datetime.min.time(), tzinfo=now_dt.tzinfo) + timedelta(minutes=end)
             if now_dt >= end_dt:
                 continue
             earliest = max(now_dt + timedelta(minutes=random.randint(6, 14)), start_dt)
@@ -2139,7 +2157,7 @@ class ProactiveEngineMixin:
     def _is_now_in_reason_window(self, reason: str, now: float | None = None) -> bool:
         if not reason:
             return False
-        now_dt = datetime.fromtimestamp(now or _now_ts())
+        now_dt = self._environment_fromtimestamp(now or _now_ts())
         minute_of_day = now_dt.hour * 60 + now_dt.minute
         for start, end in self._reason_windows(reason):
             if start <= minute_of_day <= end:
@@ -2149,7 +2167,7 @@ class ProactiveEngineMixin:
     def _inbound_satisfies_greeting(self, reason: str, *, now: float | None = None) -> bool:
         if not self._is_greeting_reason(reason):
             return False
-        now_dt = datetime.fromtimestamp(now or _now_ts())
+        now_dt = self._environment_fromtimestamp(now or _now_ts())
         minute_of_day = now_dt.hour * 60 + now_dt.minute
         lead_minutes = {
             "morning_greeting": 10,
@@ -2377,7 +2395,10 @@ class ProactiveEngineMixin:
     ) -> bool:
         if not self.enable_screen_glance_action:
             return False
-        if self.screen_peek_max_daily <= 0 and not ignore_daily_limit:
+        if isinstance(user, dict) and self._private_user_role(user) == "friend":
+            return False
+        daily_limit = self._effective_user_screen_peek_daily_limit(user)
+        if daily_limit <= 0 and not ignore_daily_limit:
             return False
         if isinstance(user, dict):
             today = _today_key()
@@ -2386,7 +2407,7 @@ class ProactiveEngineMixin:
                 if str(user.get("screen_peek_day") or "") == today
                 else 0
             )
-            if not ignore_daily_limit and used_today >= self.screen_peek_max_daily:
+            if not ignore_daily_limit and used_today >= daily_limit:
                 return False
             cooldown_seconds = max(0, self.screen_peek_cooldown_minutes) * 60
             last_at = _safe_float(user.get("screen_peek_last_at"), 0.0)
@@ -2529,6 +2550,8 @@ class ProactiveEngineMixin:
     def _photo_text_available(self, user: dict[str, Any] | None = None) -> bool:
         if not self.enable_photo_text_action:
             return False
+        if isinstance(user, dict) and self._private_user_role(user) == "friend":
+            return bool(self._recent_owner_generated_photo_path())
         if self._daily_token_soft_limit_should_defer("photo_prompt"):
             return False
         if self.photo_generation_backend == "comfyui":
@@ -2549,8 +2572,11 @@ class ProactiveEngineMixin:
             sdgen_available = self._sdgen_photo_available() and not self._local_photo_generation_busy_state()
             if not (comfyui_available or sdgen_available or self._external_photo_available()):
                 return False
-        if user and self.photo_action_max_daily > 0:
-            today = datetime.now().strftime("%Y-%m-%d")
+        photo_limit = self._effective_user_photo_daily_limit(user)
+        if user and photo_limit <= 0:
+            return False
+        if user and photo_limit > 0:
+            today = _today_key()
             photo_sent_day = str(user.get("photo_sent_day") or "")
             photo_sent_today = _safe_int(user.get("photo_sent_today"), 0)
             photo_generated_day = str(user.get("photo_generated_day") or "")
@@ -2559,9 +2585,32 @@ class ProactiveEngineMixin:
                 photo_sent_today if photo_sent_day == today else 0,
                 photo_generated_today if photo_generated_day == today else 0,
             )
-            if used_today >= self.photo_action_max_daily:
+            if used_today >= photo_limit:
                 return False
         return True
+
+    def _recent_owner_generated_photo_path(self, *, max_age_hours: float = 24.0) -> str:
+        users = self.data.get("users", {})
+        if not isinstance(users, dict):
+            return ""
+        now = _now_ts()
+        candidates: list[tuple[float, str]] = []
+        for user_id, user in users.items():
+            if not isinstance(user, dict):
+                continue
+            if self._private_user_role(user, str(user_id)) != "owner":
+                continue
+            image_path = _single_line(user.get("last_generated_photo_path"), 260)
+            if not image_path or not os.path.exists(image_path):
+                continue
+            generated_at = _safe_float(user.get("last_generated_photo_at"), 0)
+            if generated_at > 0 and now - generated_at > max(60.0, max_age_hours * 3600):
+                continue
+            candidates.append((generated_at, image_path))
+        if not candidates:
+            return ""
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
 
     def _poke_available(self) -> bool:
         if not self.enable_poke_action:
@@ -2605,6 +2654,8 @@ class ProactiveEngineMixin:
         normalized = str(action or "message").strip()
         if not normalized or normalized == "message":
             return True
+        if self._friend_sensitive_proactive_action(normalized) and isinstance(user, dict) and self._private_user_role(user) == "friend":
+            return False
         parts = [part.strip() for part in normalized.split("+") if part.strip()]
         if not parts:
             return True
@@ -2614,7 +2665,7 @@ class ProactiveEngineMixin:
                 return False
             if part == "photo_text" and not self._photo_text_available(user):
                 return False
-            if part == "poke" and not self._poke_available():
+            if part == "poke" and (not self._poke_available() or self._effective_user_poke_daily_limit(user) <= 0):
                 return False
             if part == "voice" and not self._voice_available(user):
                 return False
@@ -2663,7 +2714,7 @@ class ProactiveEngineMixin:
             if reason in {"activity_share", "diary_share"}:
                 weight += 0.05
             weighted.append(("photo_text", weight))
-        if self._poke_available() and reason in {"check_in", "quiet_care", "state_share", "important_date_share", "morning_greeting", "evening_greeting"}:
+        if self._poke_available() and self._effective_user_poke_daily_limit(user) > 0 and reason in {"check_in", "quiet_care", "state_share", "important_date_share", "morning_greeting", "evening_greeting"}:
             weight = 0.38 + motive_bias["poke"] + affinity_bias["poke"]
             if action_profile["playful"]:
                 weight += 0.22
@@ -2740,6 +2791,24 @@ class ProactiveEngineMixin:
             topic = _single_line(random.choice(can_do), 28)
         if not topic:
             topic = self._choose_proactive_topic(reason, user)
+        if self._private_user_role(user) == "friend":
+            if reason in {"quiet_care", "check_in", "state_share"}:
+                return random.choice([
+                    "作为朋友想起对方可能正忙,只轻轻问一句,不要求立刻回复",
+                    "朋友之间顺手关心一下近况,说完就把空间留给对方",
+                    "看到前面的话题还有一点余味,礼貌地补一句就停",
+                ])
+            if reason in {"morning_greeting", "noon_greeting", "evening_greeting"}:
+                return random.choice([
+                    "按朋友关系顺手打个招呼,语气轻一点,不显得黏人",
+                    "这个时间点刚好想起对方,只发一句普通问候",
+                ])
+            if reason in {"activity_share", "diary_share", "background_schedule"}:
+                if topic:
+                    return self._normalize_internal_motive_text(f"有个和“{topic}”有关的小片段,觉得可以像朋友一样顺手分享一下")
+                return "有个不太打扰人的小片段,想像朋友一样顺手分享一下"
+            if reason == "group_share":
+                return "共同群里有个和对方可能有关的小片段,只做轻量转告,不扩大解读"
         if impulse:
             return self._normalize_internal_motive_text(impulse)
         if scene or tone or event_hint or summary_hint:
@@ -3063,7 +3132,7 @@ class ProactiveEngineMixin:
         }.get(reason, [(9 * 60, 22 * 60)])
 
     def _is_reason_allowed_now(self, reason: str) -> bool:
-        now = datetime.now()
+        now = self._environment_now()
         minute = now.hour * 60 + now.minute
         for start, end in self._reason_windows(reason):
             if start <= minute < end:
@@ -3077,7 +3146,7 @@ class ProactiveEngineMixin:
         return False
 
     def _move_timestamp_into_reason_window(self, timestamp: float, reason: str) -> float:
-        dt = datetime.fromtimestamp(timestamp)
+        dt = self._environment_fromtimestamp(timestamp)
         minute = dt.hour * 60 + dt.minute
         windows = self._reason_windows(reason)
         for start, end in windows:
@@ -3088,7 +3157,7 @@ class ProactiveEngineMixin:
         if all(minute >= end for _, end in windows):
             target_date = target_date + timedelta(days=1)
         hour, minute_part = divmod(first_start, 60)
-        target = datetime.combine(target_date, datetime.min.time()).replace(
+        target = datetime.combine(target_date, datetime.min.time(), tzinfo=dt.tzinfo).replace(
             hour=hour % 24,
             minute=minute_part,
         )
@@ -3099,14 +3168,14 @@ class ProactiveEngineMixin:
             return False
         if not self._has_active_insomnia_state():
             return False
-        hour = datetime.now().hour
+        hour = self._environment_now().hour
         if not (0 <= hour <= 5 or hour >= 23):
             return False
-        if _safe_int(user.get("sent_today"), 0) >= max(1, self.max_daily_messages):
+        if _safe_int(user.get("sent_today"), 0) >= max(1, self._effective_user_daily_limit(user)):
             return False
         if _safe_float(user.get("last_sent"), 0) > 0:
             elapsed = _now_ts() - _safe_float(user.get("last_sent"), 0)
-            if elapsed < max(6 * 3600, self.min_interval_minutes * 60):
+            if elapsed < max(6 * 3600, self._effective_user_min_interval_minutes(user) * 60):
                 return False
         return random.random() < 0.35
 
@@ -3125,7 +3194,7 @@ class ProactiveEngineMixin:
         return False
 
     def _passes_proactive_moment(self, user: dict[str, Any]) -> bool:
-        hour = datetime.now().hour
+        hour = self._environment_now().hour
         state = self.data.get("daily_state", {})
         energy = _safe_int(state.get("energy") if isinstance(state, dict) else 70, 70, 0, 100)
         active_conditions = state.get("conditions", []) if isinstance(state, dict) else []
