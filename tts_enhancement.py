@@ -407,6 +407,76 @@ class TtsEnhancementMixin:
             return letters >= max(4, cjk)
         return bool(spoken)
 
+    def _tts_visible_text_has_chinese(self, text: str) -> bool:
+        cleaned = self._strip_any_tts_markup(text)
+        cleaned = re.sub(r"[\s\W_]+", "", cleaned, flags=re.UNICODE)
+        return bool(re.search(r"[\u4e00-\u9fff]{2,}", cleaned))
+
+    async def _translate_tts_spoken_to_chinese(self, text: str, event: Any, *, provider_kind: str) -> str:
+        spoken = self._normalize_tts_spoken_text(text, provider_kind=provider_kind)
+        if not spoken:
+            return ""
+        if self._tts_visible_text_has_chinese(spoken):
+            return spoken
+        provider = await self._get_tts_conversion_provider(event) if event is not None else None
+        prompt = f"""
+请把下面这句 TTS 朗读文本翻译成自然中文，只输出中文句子，不要解释，不要保留 <tts> 标签。
+要求：
+- 保留原本亲近、害羞、吐槽或撒娇的语气。
+- 不要添加原文没有的新信息。
+- 输出适合作为聊天里语音后的可见中文说明。
+
+TTS 朗读文本：
+{spoken}
+""".strip()
+        try:
+            if provider is not None:
+                resp = await self._tts_provider_text_chat(provider, prompt, max_tokens=240, task="tts_visible_translation")
+                translated = str(getattr(resp, "completion_text", resp) or "").strip()
+                translated = self._strip_any_tts_markup(translated)
+                translated = _single_line(translated, 300)
+                if self._tts_visible_text_has_chinese(translated):
+                    return translated
+        except Exception as exc:
+            logger.warning("[PrivateCompanion] TTS中文释义生成失败: %s", _single_line(exc, 120))
+        return ""
+
+    async def _ensure_tts_blocks_have_visible_chinese(self, text: str, event: Any, *, provider_kind: str) -> str:
+        normalized = self._normalize_tts_tags(text)
+        if getattr(self, "tts_voice_language", "ja") == "zh":
+            return normalized
+        matches = list(re.finditer(r"<tts>(.*?)</tts>", normalized, flags=re.IGNORECASE | re.DOTALL))
+        if not matches:
+            return normalized
+        pieces: list[str] = []
+        pos = 0
+        changed = False
+        for index, match in enumerate(matches):
+            pieces.append(normalized[pos:match.end()])
+            next_start = matches[index + 1].start() if index + 1 < len(matches) else len(normalized)
+            visible_after_this_block = normalized[match.end():next_start]
+            if not self._tts_visible_text_has_chinese(visible_after_this_block):
+                spoken = self._normalize_tts_spoken_text(match.group(1), provider_kind=provider_kind)
+                visible_translation = await self._translate_tts_spoken_to_chinese(spoken, event, provider_kind=provider_kind)
+                if visible_translation:
+                    separator = "\n" if not visible_after_this_block.startswith(("\n", "\r")) else ""
+                    pieces.append(f"{separator}{visible_translation}")
+                    changed = True
+                    logger.info(
+                        "[PrivateCompanion] TTS记录文本已补中文释义: 语音=%s 中文=%s",
+                        _single_line(spoken, 80),
+                        _single_line(visible_translation, 80),
+                    )
+                else:
+                    logger.warning(
+                        "[PrivateCompanion] TTS记录文本缺少中文释义且自动补充失败: 语音=%s",
+                        _single_line(spoken, 100),
+                    )
+            pieces.append(visible_after_this_block)
+            pos = next_start
+        pieces.append(normalized[pos:])
+        return "".join(pieces) if changed else normalized
+
     def _tts_text_needs_language_conversion(self, text: str, *, provider_kind: str) -> bool:
         spoken = self._normalize_tts_spoken_text(text, provider_kind=provider_kind)
         if not spoken:
@@ -435,7 +505,7 @@ class TtsEnhancementMixin:
         lang = self._tts_language_label()
         mode = getattr(self, "tts_generation_mode", "hybrid")
         bilingual_rule = (
-            f"当语音正文目标语种不是中文时，<tts>...</tts> 外必须保留或补上一句自然中文含义，优先放在语音块后面，方便用户看到语音对应中文；不要只输出一个外语语音块。"
+            f"当语音正文目标语种不是中文时，每个 <tts>...</tts> 语音块后面都必须紧跟一句自然中文含义，方便用户看到语音对应中文；不要只输出外语语音块，也不要只在语音块前放一句无关中文。"
             if getattr(self, "tts_voice_language", "ja") != "zh"
             else ""
         )
@@ -513,6 +583,14 @@ class TtsEnhancementMixin:
             return
         text = self._normalize_tts_tags(str(getattr(resp, "completion_text", "") or ""))
         if text:
+            if "<tts>" in text.lower() and "</tts>" in text.lower():
+                try:
+                    config = self.context.get_config(str(getattr(event, "unified_msg_origin", "") or "")) or {}
+                except Exception:
+                    config = getattr(self, "config", {}) or {}
+                provider_settings = dict((config or {}).get("provider_tts_settings", {}) or {})
+                provider_kind = self._tts_provider_kind(provider_settings=provider_settings)
+                text = await self._ensure_tts_blocks_have_visible_chinese(text, event, provider_kind=provider_kind)
             resp.completion_text = text
 
     async def apply_tts_enhancement_before_send(self, event: Any) -> None:
@@ -1110,7 +1188,8 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
         output: list[Any] = []
         record_failed = False
         pos = 0
-        for match in re.finditer(r"<tts>(.*?)</tts>", normalized, flags=re.IGNORECASE | re.DOTALL):
+        matches = list(re.finditer(r"<tts>(.*?)</tts>", normalized, flags=re.IGNORECASE | re.DOTALL))
+        for index, match in enumerate(matches):
             before = normalized[pos:match.start()]
             if before.strip():
                 output.append(Plain(before.strip()))
@@ -1137,6 +1216,27 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
             )
             if record is not None:
                 output.append(record)
+                if getattr(self, "tts_voice_language", "ja") != "zh":
+                    next_start = matches[index + 1].start() if index + 1 < len(matches) else len(normalized)
+                    visible_after_this_block = normalized[match.end():next_start]
+                    if not self._tts_visible_text_has_chinese(visible_after_this_block):
+                        visible_translation = (
+                            _single_line(fallback_plain, 300)
+                            if fallback_plain and self._tts_visible_text_has_chinese(fallback_plain)
+                            else await self._translate_tts_spoken_to_chinese(source_spoken, event, provider_kind=provider_kind)
+                        )
+                        if visible_translation:
+                            output.append(Plain(visible_translation))
+                            logger.info(
+                                "[PrivateCompanion] TTS语音块已补中文释义: 语音=%s 中文=%s",
+                                _single_line(spoken, 80),
+                                _single_line(visible_translation, 80),
+                            )
+                        else:
+                            logger.warning(
+                                "[PrivateCompanion] TTS语音块缺少中文释义且自动补充失败: 语音=%s",
+                                _single_line(spoken, 100),
+                            )
             else:
                 record_failed = True
                 if fallback_plain:

@@ -1617,21 +1617,25 @@ class PrivateImageMixin:
             log_sender = sender_id
         buffer_kind = _single_line(buffer.get("kind"), 40) or ("group_high_intensity" if force_consume else "text")
         initial_messages = buffer.get("messages") if isinstance(buffer.get("messages"), list) else []
+        deadline_ts = _safe_float(buffer.get("deadline_ts"), 0.0, 0.0)
         logger.info(
-            "[PrivateCompanion] 消息收口等待开始: kind=%s scope=%s sender=%s wait=%.1fs count=%s",
+            "[PrivateCompanion] 消息收口等待开始: kind=%s scope=%s sender=%s wait=%.1fs count=%s deadline=%s",
             buffer_kind,
             log_scope,
             log_sender,
             wait,
             len(initial_messages),
+            "fixed" if deadline_ts > 0 else "sliding",
         )
-        deadline_guard = _now_ts() + max(wait + 2.0, min(30.0, wait * 3.0 + 2.0))
+        deadline_guard = deadline_ts if deadline_ts > 0 else _now_ts() + max(wait + 2.0, min(30.0, wait * 3.0 + 2.0))
         while True:
             buffer = buffers.get(key)
             if not isinstance(buffer, dict):
                 return ""
             updated_ts = _safe_float(buffer.get("updated_ts"), buffer.get("first_ts"), _now_ts())
-            remaining = max(0.0, updated_ts + wait - _now_ts())
+            deadline_ts = _safe_float(buffer.get("deadline_ts"), deadline_ts, deadline_ts)
+            target_ts = deadline_ts if deadline_ts > 0 else updated_ts + wait
+            remaining = max(0.0, target_ts - _now_ts())
             if remaining <= 0:
                 break
             if _now_ts() + remaining > deadline_guard:

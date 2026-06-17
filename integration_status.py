@@ -399,6 +399,7 @@ class IntegrationStatusMixin:
             f"可把日程理解为：{terms['schedule']}；书柜理解为：{terms['bookshelf']}；隐藏夹层理解为：{terms['secret_drawer']}；群聊理解为：{terms['group_chat']}；私聊理解为：{terms['private_chat']}。",
             f"外部或整合动作可转译为世界内等价行为：看视频≈{terms['bored_watch']}；识屏≈观察{terms['screen']}；夹层阅读≈{terms['private_reading']}；空间动态≈公开生活札记/状态栏。",
             "如果人格/世界观与现代词冲突，优先使用世界内说法；但不要编造会改变功能结果的事实，也不要向用户解释后台实现。",
+            "未在人格、世界观、关系网、近期对话或用户输入中明确出现的人际关系不得凭空添加；家人、父母、兄弟姐妹、亲戚、室友、同学、老师、同事、朋友、邻居、前辈、后辈等关系只能在材料有依据时使用。",
         ]
         if custom:
             base.append(f"自定义适配：{custom}")

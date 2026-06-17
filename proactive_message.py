@@ -917,6 +917,7 @@ class ProactiveMessageMixin:
 16. 如果最近已经主动说过同一件小事,这次不要换壳复述。可以只留一点余味、换到新的具体细节,或者自然转开话题。
 17. 不要用“哈哈,我也觉得”“确实”“对吧”“是吧”这类附和式开头；主动消息不是在回复用户刚说的话,要直接说自己的观察或念头。
 18. 用正常的中文聊天标点把句子写完整。可以短,但不要整段都没有标点,也不要像几个关键词硬挤在一起。
+19. 不要凭空添加世界观、人格、关系网、近期对话或用户输入里没提到的人际关系。家人、父母、兄弟姐妹、亲戚、室友、同学、老师、同事、朋友、邻居、前辈、后辈等只能在材料明确出现时使用；没有依据时只说眼前事,或用“路人”“店员”“旁边的人”“群友”“别人”等弱关系。
 
 禁止事项：
 - 不要出现"系统任务""提示词""AI""模型""后台调度""工具调用"等字眼
@@ -978,6 +979,7 @@ class ProactiveMessageMixin:
 16. 如果最近已经主动说过同一件小事,这次不要换壳复述。可以只留一点余味、换到新的具体细节,或者自然转开话题。
 17. 不要用“哈哈,我也觉得”“确实”“对吧”“是吧”这类附和式开头；主动消息不是在回复用户刚说的话,要直接说自己的观察或念头。
 18. 用正常的中文聊天标点把句子写完整。可以短,但不要整段都没有标点,也不要像几个关键词硬挤在一起。
+19. 不要凭空添加世界观、人格、关系网、近期对话或用户输入里没提到的人际关系。家人、父母、兄弟姐妹、亲戚、室友、同学、老师、同事、朋友、邻居、前辈、后辈等只能在材料明确出现时使用；没有依据时只说眼前事,或用“路人”“店员”“旁边的人”“群友”“别人”等弱关系。
 
 【禁止事项】
 - 不要出现"系统任务""提示词""AI""模型""后台调度""工具调用"等字眼
@@ -1200,7 +1202,8 @@ class ProactiveMessageMixin:
 3. 如果没有明确格式要求，就写成适合私聊语音的一小句，不像朗读稿。
 4. 可以有一点嘴硬、黏人、藏着的想念，但不要把喜欢说满。
 5. 不要提 AI、模型、插件、TTS、语音合成这些词。
-{"6. 这次必须优先满足语音格式要求；如果有日语或 <tts> 规则，不要退回普通中文句子。" if strict_tts else ""}
+6. 不要凭空添加世界观、人格、关系网、近期对话或用户输入里没提到的人际关系；家人、同学、老师、朋友等只能在材料明确出现时使用。
+{"7. 这次必须优先满足语音格式要求；如果有日语或 <tts> 规则，不要退回普通中文句子。" if strict_tts else ""}
 """.strip()
 
     async def _capture_framework_send_message_calls(
@@ -1313,19 +1316,41 @@ class ProactiveMessageMixin:
             return
         session_key = self._framework_session_key_from_event(event)
         lock = self._framework_session_lock(session_key)
+        wait_started = time.time()
         if lock.locked():
+            owner_label = _single_line(getattr(lock, "_private_companion_owner_label", ""), 80)
+            owner_session = _single_line(getattr(lock, "_private_companion_owner_session", ""), 120)
+            owner_since = _safe_float(getattr(lock, "_private_companion_owner_since", 0), 0)
+            owner_age = max(0.0, wait_started - owner_since) if owner_since > 0 else 0.0
             logger.info(
-                "[PrivateCompanion] 同一会话已有主链请求在执行,本轮排队等待: label=%s session=%s private=%s",
+                "[PrivateCompanion] 同一会话已有主链请求在执行,本轮排队等待: label=%s session=%s private=%s owner=%s owner_age=%.1fs",
                 label,
                 _single_line(session_key, 120),
                 is_private_chat,
+                owner_label or owner_session or "unknown",
+                owner_age,
             )
         await lock.acquire()
         try:
+            waited = max(0.0, time.time() - wait_started)
             setattr(event, "private_companion_framework_session_lock_acquired", True)
             setattr(event, "private_companion_framework_session_lock", lock)
             setattr(event, "private_companion_framework_session_key", session_key)
             setattr(event, "private_companion_framework_session_lock_label", label)
+            setattr(event, "private_companion_framework_session_lock_acquired_at", time.time())
+            try:
+                setattr(lock, "_private_companion_owner_label", label)
+                setattr(lock, "_private_companion_owner_session", session_key)
+                setattr(lock, "_private_companion_owner_since", time.time())
+            except Exception:
+                pass
+            if waited >= 0.5:
+                logger.info(
+                    "[PrivateCompanion] 主链会话锁排队结束: label=%s session=%s waited=%.1fs",
+                    label,
+                    _single_line(session_key, 120),
+                    waited,
+                )
             watchdog = asyncio.create_task(
                 self._framework_session_lock_watchdog(event, lock, session_key, label)
             )
@@ -1352,10 +1377,19 @@ class ProactiveMessageMixin:
                 setattr(event, "private_companion_framework_session_lock_acquired", False)
                 setattr(event, "private_companion_framework_session_lock", None)
                 lock.release()
+                try:
+                    setattr(lock, "_private_companion_owner_label", "")
+                    setattr(lock, "_private_companion_owner_session", "")
+                    setattr(lock, "_private_companion_owner_since", 0.0)
+                except Exception:
+                    pass
+                acquired_at = _safe_float(getattr(event, "private_companion_framework_session_lock_acquired_at", 0), 0)
+                held = max(0.0, time.time() - acquired_at) if acquired_at > 0 else timeout_seconds
                 logger.warning(
-                    "[PrivateCompanion] 主链会话锁超时释放: label=%s session=%s",
+                    "[PrivateCompanion] 主链会话锁超时释放: label=%s session=%s held=%.1fs",
                     label,
                     _single_line(session_key, 120),
+                    held,
                 )
         except asyncio.CancelledError:
             return
@@ -1377,11 +1411,20 @@ class ProactiveMessageMixin:
         except Exception:
             pass
         if isinstance(lock, asyncio.Lock) and lock.locked():
+            acquired_at = _safe_float(getattr(event, "private_companion_framework_session_lock_acquired_at", 0), 0)
+            held = max(0.0, time.time() - acquired_at) if acquired_at > 0 else 0.0
             lock.release()
+            try:
+                setattr(lock, "_private_companion_owner_label", "")
+                setattr(lock, "_private_companion_owner_session", "")
+                setattr(lock, "_private_companion_owner_since", 0.0)
+            except Exception:
+                pass
             logger.debug(
-                "[PrivateCompanion] 已释放主链会话锁: label=%s session=%s",
+                "[PrivateCompanion] 已释放主链会话锁: label=%s session=%s held=%.1fs",
                 label,
                 _single_line(session_key, 120),
+                held,
             )
 
     def _release_framework_session_lock_later(

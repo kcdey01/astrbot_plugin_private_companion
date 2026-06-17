@@ -6350,6 +6350,133 @@ button:disabled {
   font-size: 12px;
 }
 
+.worldbook-livingmemory-panel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(47, 117, 102, 0.22);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(244, 250, 247, 0.86);
+}
+
+.worldbook-livingmemory-panel.error {
+  border-color: rgba(161, 95, 38, 0.35);
+  background: rgba(255, 248, 235, 0.72);
+}
+
+.worldbook-livingmemory-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.worldbook-livingmemory-head b {
+  display: block;
+  color: var(--accent-strong);
+}
+
+.worldbook-livingmemory-head span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.worldbook-livingmemory-head button {
+  min-height: 26px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 2px 8px;
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.worldbook-livingmemory-head button:hover {
+  color: var(--accent-strong);
+  border-color: rgba(47, 117, 102, 0.35);
+}
+
+.worldbook-livingmemory-tokens,
+.worldbook-livingmemory-tags,
+.worldbook-livingmemory-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.worldbook-livingmemory-tokens span,
+.worldbook-livingmemory-tags span,
+.worldbook-livingmemory-card-meta span {
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.worldbook-livingmemory-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.worldbook-livingmemory-tokens span.primary,
+.worldbook-livingmemory-tags.matched span {
+  background: rgba(47, 117, 102, 0.1);
+  color: var(--accent-strong);
+}
+
+.worldbook-livingmemory-list {
+  display: grid;
+  gap: 8px;
+}
+
+.worldbook-livingmemory-card {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 9px;
+  background: #fff;
+}
+
+.worldbook-livingmemory-card p,
+.worldbook-livingmemory-card ul {
+  margin: 0;
+}
+
+.worldbook-livingmemory-card li {
+  margin: 3px 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.worldbook-livingmemory-card details {
+  border-top: 1px dashed var(--line-soft);
+  padding-top: 6px;
+}
+
+.worldbook-livingmemory-card summary {
+  color: var(--accent-strong);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.worldbook-livingmemory-card pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 7px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .worldbook-groups {
   display: grid;
   gap: 10px;

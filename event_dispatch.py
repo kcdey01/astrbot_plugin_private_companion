@@ -1099,33 +1099,43 @@ class EventDispatchMixin:
         if isinstance(current, dict) and now - _safe_float(current.get("updated_ts"), current.get("first_ts"), 0) <= wait + 0.8:
             current["wait_seconds"] = wait
             current["kind"] = buffer_kind
+            if buffer_kind == "group_high_intensity" and _safe_float(current.get("deadline_ts"), 0) <= 0:
+                first_ts = _safe_float(current.get("first_ts"), now, now)
+                current["deadline_ts"] = first_ts + wait
             if smart_debounce:
                 current["smart_debounce"] = dict(smart_debounce)
             messages = current.setdefault("messages", [])
             if not isinstance(messages, list):
                 messages = []
                 current["messages"] = messages
+            appended = False
             if cleaned not in [_single_line(item.get("text"), 260) for item in messages if isinstance(item, dict)]:
                 messages.append({"ts": now, "text": cleaned, "sender_name": _single_line(sender_name, 40)})
-            current["updated_ts"] = now
+                appended = True
+            if appended:
+                current["updated_ts"] = now
             logger.info(
-                "[PrivateCompanion] 消息收口合并补话: kind=%s mode=%s scope=%s sender=%s wait=%.1fs count=%s text=%s",
+                "[PrivateCompanion] 消息收口合并补话: kind=%s mode=%s scope=%s sender=%s wait=%.1fs count=%s appended=%s text=%s",
                 buffer_kind,
                 debounce_mode,
                 scope,
                 sender_id,
                 wait,
                 len(messages),
+                appended,
                 _single_line(cleaned, 80),
             )
             return True
-        buffers[key] = {
+        buffer = {
             "first_ts": now,
             "updated_ts": now,
             "wait_seconds": wait,
             "kind": buffer_kind,
             "messages": [{"ts": now, "text": cleaned, "sender_name": _single_line(sender_name, 40)}],
         }
+        if buffer_kind == "group_high_intensity":
+            buffer["deadline_ts"] = now + wait
+        buffers[key] = buffer
         if smart_debounce:
             buffers[key]["smart_debounce"] = dict(smart_debounce)
         logger.info(
@@ -1330,6 +1340,25 @@ class EventDispatchMixin:
             return True
         return False
 
+    def _smart_message_debounce_fast_complete_reason(self, text: str) -> str:
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return "空文本"
+        compact = re.sub(r"\s+", "", cleaned)
+        if re.search(r"[?？。.!！]$", compact):
+            return "句末完整标点"
+        if re.search(r"^(其实)?我(是|叫|就是).{1,24}$", compact):
+            return "完整身份陈述"
+        if re.search(r"(吗|么|嘛|呢|呀|啊|谁|什么|怎么|咋|为何|为什么|哪[个里儿]?|多少|几|是不是|能不能|可不可以|行不行)[?？]?$", compact):
+            return "完整疑问句"
+        if re.search(r"(摸摸|贴贴|抱抱|亲亲|捏捏|早安|晚安|早上好|晚上好|你好|在吗|谢谢|好呀|好的|嗯嗯|哈哈|草|笑死)[~～。.!！]?$", compact):
+            return "短互动完整"
+        if len(compact) <= 8 and not self._smart_message_debounce_heuristic_incomplete(compact):
+            return "短句完整"
+        if not self._smart_message_debounce_heuristic_incomplete(compact):
+            return "未命中补话特征"
+        return ""
+
     def _parse_smart_message_debounce_decision(self, raw: str) -> tuple[str, float, str]:
         text = str(raw or "").strip()
         if not text:
@@ -1362,8 +1391,35 @@ class EventDispatchMixin:
         sender_name: str = "",
         private_chat: bool = True,
     ) -> float:
+        def _set_smart_result(
+            decision: str,
+            *,
+            wait_seconds: float = 0.0,
+            original_wait_seconds: float = 0.0,
+            elapsed_ms: int = 0,
+            source: str = "",
+            reason: str = "",
+        ) -> None:
+            try:
+                setattr(
+                    event,
+                    "private_companion_smart_message_debounce_result",
+                    {
+                        "decision": _single_line(decision, 40),
+                        "wait_seconds": max(0.0, float(wait_seconds or 0.0)),
+                        "original_wait_seconds": max(0.0, float(original_wait_seconds or 0.0)),
+                        "elapsed_ms": max(0, int(elapsed_ms or 0)),
+                        "source": _single_line(source, 40),
+                        "reason": _single_line(reason, 120),
+                    },
+                )
+            except Exception:
+                pass
+
         if not self._smart_message_debounce_enabled():
             return 0.0
+        started_at = time.perf_counter()
+        scope = key.rsplit(":", 1)[0]
         cleaned = _single_line(text, 260)
         if not cleaned:
             return 0.0
@@ -1374,7 +1430,7 @@ class EventDispatchMixin:
         existing = buffers.get(key) if isinstance(buffers, dict) else None
         if isinstance(existing, dict):
             self._record_smart_message_debounce_log(
-                scope=key.rsplit(":", 1)[0],
+                scope=scope,
                 sender_id=sender_id,
                 text=cleaned,
                 decision="incomplete",
@@ -1388,12 +1444,54 @@ class EventDispatchMixin:
             )
             logger.info(
                 "[PrivateCompanion] 智能防抖沿用等待缓冲: scope=%s sender=%s wait=%.1fs text=%s",
-                key.rsplit(":", 1)[0],
+                scope,
                 sender_id,
                 wait,
                 _single_line(cleaned, 80),
             )
+            _set_smart_result("incomplete", wait_seconds=wait, original_wait_seconds=wait, source="buffer", reason="已有收口缓冲")
             return wait
+        fast_complete_reason = self._smart_message_debounce_fast_complete_reason(cleaned)
+        if fast_complete_reason:
+            self._remember_smart_message_debounce_decision(
+                scope=scope,
+                sender_id=sender_id,
+                text=cleaned,
+                decision="complete",
+                confidence=1.0,
+                reason=fast_complete_reason,
+            )
+            self._record_smart_message_debounce_log(
+                scope=scope,
+                sender_id=sender_id,
+                text=cleaned,
+                decision="complete",
+                confidence=1.0,
+                reason=fast_complete_reason,
+                wait_seconds=0.0,
+                outcome="reply_now",
+                note="本地快判已确认完整,不调用小模型。",
+                source="fast_rule",
+                private_chat=private_chat,
+            )
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            _set_smart_result(
+                "complete",
+                wait_seconds=0.0,
+                original_wait_seconds=wait,
+                elapsed_ms=elapsed_ms,
+                source="fast_rule",
+                reason=fast_complete_reason,
+            )
+            logger.info(
+                "[PrivateCompanion] 智能防抖本地快判放行: scope=%s sender=%s elapsed=%sms reason=%s text=%s",
+                scope,
+                sender_id,
+                elapsed_ms,
+                _single_line(fast_complete_reason, 80),
+                _single_line(cleaned, 80),
+            )
+            return 0.0
         examples = self._smart_message_debounce_examples()
         example_lines = []
         for item in examples[-8:]:
@@ -1430,13 +1528,26 @@ class EventDispatchMixin:
 """.strip()
         raw = ""
         model_error = ""
+        timeout_seconds = max(0.2, min(5.0, _safe_float(getattr(self, "smart_message_debounce_model_timeout_seconds", 0.8), 0.8, 0.2)))
         try:
-            raw = await self._llm_call(
-                prompt,
-                max_tokens=80,
-                provider_id=getattr(self, "smart_message_debounce_provider_id", "") or None,
-                task="smart_message_debounce",
+            raw = await asyncio.wait_for(
+                self._llm_call(
+                    prompt,
+                    max_tokens=80,
+                    provider_id=getattr(self, "smart_message_debounce_provider_id", "") or None,
+                    task="smart_message_debounce",
+                ),
+                timeout=timeout_seconds,
             ) or ""
+        except asyncio.TimeoutError:
+            logger.info(
+                "[PrivateCompanion] 智能防抖模型判断超时,使用启发式: scope=%s sender=%s timeout=%.1fs text=%s",
+                scope,
+                sender_id,
+                timeout_seconds,
+                _single_line(cleaned, 80),
+            )
+            model_error = f"timeout>{timeout_seconds:.1f}s"
         except Exception as exc:
             logger.info("[PrivateCompanion] 智能防抖模型判断失败,使用启发式: %s", _single_line(exc, 120))
             model_error = _single_line(exc, 120)
@@ -1447,7 +1558,7 @@ class EventDispatchMixin:
             source = "heuristic"
         if decision != "incomplete":
             self._remember_smart_message_debounce_decision(
-                scope=key.rsplit(":", 1)[0],
+                scope=scope,
                 sender_id=sender_id,
                 text=cleaned,
                 decision="complete",
@@ -1455,7 +1566,7 @@ class EventDispatchMixin:
                 reason=reason,
             )
             self._record_smart_message_debounce_log(
-                scope=key.rsplit(":", 1)[0],
+                scope=scope,
                 sender_id=sender_id,
                 text=cleaned,
                 decision="complete",
@@ -1468,47 +1579,72 @@ class EventDispatchMixin:
                 raw=raw or model_error,
                 private_chat=private_chat,
             )
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            _set_smart_result(
+                "complete",
+                wait_seconds=0.0,
+                original_wait_seconds=wait,
+                elapsed_ms=elapsed_ms,
+                source=source,
+                reason=reason,
+            )
             logger.info(
-                "[PrivateCompanion] 智能防抖判定放行: scope=%s sender=%s confidence=%.2f reason=%s text=%s",
-                key.rsplit(":", 1)[0],
+                "[PrivateCompanion] 智能防抖判定放行: scope=%s sender=%s elapsed=%sms source=%s confidence=%.2f reason=%s text=%s",
+                scope,
                 sender_id,
+                elapsed_ms,
+                source,
                 confidence,
                 _single_line(reason, 80),
                 _single_line(cleaned, 80),
             )
             return 0.0
         self._remember_smart_message_debounce_decision(
-            scope=key.rsplit(":", 1)[0],
+            scope=scope,
             sender_id=sender_id,
             text=cleaned,
             decision="incomplete",
             confidence=confidence,
             reason=reason,
         )
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        elapsed_seconds = max(0.0, elapsed_ms / 1000.0)
+        remaining_wait = max(0.0, wait - elapsed_seconds)
         self._record_smart_message_debounce_log(
-            scope=key.rsplit(":", 1)[0],
+            scope=scope,
             sender_id=sender_id,
             text=cleaned,
             decision="incomplete",
             confidence=confidence,
             reason=reason,
-            wait_seconds=wait,
+            wait_seconds=remaining_wait,
             outcome="wait",
-            note="判定用户可能没说完,进入收口等待。",
+            note=f"判定用户可能没说完,判断耗时计入防抖,剩余等待 {remaining_wait:.1f}s。",
             source=source,
             raw=raw or model_error,
             private_chat=private_chat,
         )
+        _set_smart_result(
+            "incomplete",
+            wait_seconds=remaining_wait,
+            original_wait_seconds=wait,
+            elapsed_ms=elapsed_ms,
+            source=source,
+            reason=reason,
+        )
         logger.info(
-            "[PrivateCompanion] 智能防抖判定等待补话: scope=%s sender=%s wait=%.1fs confidence=%.2f reason=%s text=%s",
-            key.rsplit(":", 1)[0],
+            "[PrivateCompanion] 智能防抖判定等待补话: scope=%s sender=%s elapsed=%sms source=%s wait=%.1fs remaining=%.1fs confidence=%.2f reason=%s text=%s",
+            scope,
             sender_id,
+            elapsed_ms,
+            source,
             wait,
+            remaining_wait,
             confidence,
             _single_line(reason, 80),
             _single_line(cleaned, 80),
         )
-        return wait
+        return remaining_wait
 
     def _group_active_conversation(self, group: dict[str, Any]) -> dict[str, Any]:
         active = group.setdefault("active_bot_conversation", {})

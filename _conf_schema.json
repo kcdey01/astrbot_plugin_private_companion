@@ -436,21 +436,33 @@
   "enable_smart_message_debounce": {
     "description": "启用智能文本收口",
     "type": "bool",
-    "hint": "默认关闭。开启后会用轻量文本模型判断用户是否还没说完；只有疑似没说完时才短等补话，完整文本不再固定等待，并记录误判样本供下次判断参考。",
+    "hint": "默认关闭。开启后先用本地规则快速放行完整问题、问候、短互动和普通完整表达；只有疑似半句话时才短时调用轻量模型确认，并记录误判样本供下次判断参考。",
     "default": false,
     "condition": "enable_message_debounce"
   },
   "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID": {
     "description": "智能收口小模型 Provider ID",
     "type": "string",
-    "hint": "用于判断用户是否说完的轻量文本模型。留空时跟随插件主模型；建议选择便宜、响应快的小模型。",
+    "hint": "用于判断疑似没说完文本的轻量模型。完整问句、短互动和普通完整表达会先由本地快判直接放行，不会调用模型；留空时跟随插件主模型。",
     "default": "",
+    "condition": "enable_smart_message_debounce"
+  },
+  "smart_message_debounce_model_timeout_seconds": {
+    "description": "智能收口模型超时秒数",
+    "type": "float",
+    "hint": "只在本地规则判断像半句话时才调用小模型；超过该时间立刻使用本地启发式兜底，避免正常回复被模型判断拖慢。",
+    "slider": {
+      "min": 0.2,
+      "max": 5,
+      "step": 0.1
+    },
+    "default": 0.8,
     "condition": "enable_smart_message_debounce"
   },
   "smart_message_debounce_wait_seconds": {
     "description": "智能收口等待秒数",
     "type": "float",
-    "hint": "小模型判断用户还没说完时等待补充的秒数。完整发言不会额外等待。",
+    "hint": "本地规则或小模型判断用户还没说完时的总等待预算；小模型判断耗时会计入该秒数，而不是判断完成后再额外等待。完整发言不会额外等待。",
     "slider": {
       "min": 0,
       "max": 15,
@@ -1030,10 +1042,126 @@
   "enable_relationship_state_machine": {
     "description": "启用关系状态机",
     "type": "bool",
-    "hint": "根据用户的边界、亲近、低落、玩笑等消息，在 normal/careful/warming/backoff 状态间切换，影响主动和被动语气。",
+    "hint": "根据用户的边界、亲近、低落、玩笑等消息，在 normal/careful/warming/backoff 状态间切换，影响主动和被动语气。Bot 自身受伤/拒近等情绪余波由“情绪模拟”单独控制。",
     "default": true,
     "condition": {
       "enable_mai_style_integration": true
+    }
+  },
+  "enable_emotion_simulation": {
+    "description": "启用情绪模拟",
+    "type": "bool",
+    "hint": "维护 Bot 自身的短期情绪余波，例如受伤、拒近、恢复和亲近状态。会影响普通回复和主动行为；公开发泄行为需另开子项。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "emotional_gate_hurt_threshold": {
+    "description": "受伤触发阈值",
+    "type": "int",
+    "hint": "用户消息被判定为伤害性表达且强度达到该值时，Bot 会进入短期受伤/收敛状态。越高越不容易触发。",
+    "slider": {
+      "min": 10,
+      "max": 100,
+      "step": 5
+    },
+    "default": 55,
+    "condition": {
+      "enable_emotion_simulation": true
+    }
+  },
+  "emotional_gate_refuse_threshold": {
+    "description": "拒近触发阈值",
+    "type": "int",
+    "hint": "累计受伤分达到该值后，Bot 会进入更明显的拒近状态，回复更短并暂停主动贴近。",
+    "slider": {
+      "min": 20,
+      "max": 100,
+      "step": 5
+    },
+    "default": 80,
+    "condition": {
+      "enable_emotion_simulation": true
+    }
+  },
+  "emotional_gate_recovery_per_hour": {
+    "description": "情绪每小时恢复量",
+    "type": "int",
+    "hint": "受伤分会随时间自然回到 0；道歉、安抚、夸奖也会额外恢复。",
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 1
+    },
+    "default": 12,
+    "condition": {
+      "enable_emotion_simulation": true
+    }
+  },
+  "emotional_gate_max_hurt_minutes": {
+    "description": "最长受伤收敛分钟",
+    "type": "int",
+    "hint": "单次伤害事件造成的最长主动暂停/收敛时长。道歉或安抚可以提前恢复。",
+    "slider": {
+      "min": 10,
+      "max": 720,
+      "step": 10
+    },
+    "default": 180,
+    "condition": {
+      "enable_emotion_simulation": true
+    }
+  },
+  "enable_qzone_emotional_vent_publish": {
+    "description": "极端情绪发泄说说",
+    "type": "bool",
+    "hint": "情绪分达到极端拒近状态时，可在 QQ 空间动态层可用且冷却通过的情况下低频发布一条模糊心情说说。默认关闭，避免未经确认公开发布。",
+    "default": false,
+    "condition": {
+      "enable_emotion_simulation": true
+    }
+  },
+  "qzone_emotional_vent_threshold": {
+    "description": "发泄说说情绪阈值",
+    "type": "int",
+    "hint": "情绪分绝对值达到该值后，才可能触发极端情绪发泄说说。",
+    "slider": {
+      "min": 40,
+      "max": 100,
+      "step": 5
+    },
+    "default": 90,
+    "condition": {
+      "enable_qzone_emotional_vent_publish": true
+    }
+  },
+  "qzone_emotional_vent_cooldown_hours": {
+    "description": "发泄说说冷却小时",
+    "type": "int",
+    "hint": "两次极端情绪发泄说说之间的最小间隔。",
+    "slider": {
+      "min": 4,
+      "max": 336,
+      "step": 4
+    },
+    "default": 72,
+    "condition": {
+      "enable_qzone_emotional_vent_publish": true
+    }
+  },
+  "qzone_emotional_vent_probability": {
+    "description": "发泄说说触发概率",
+    "type": "float",
+    "hint": "达到极端情绪阈值并通过冷却后，实际尝试发布说说的概率。",
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "default": 0.35,
+    "condition": {
+      "enable_qzone_emotional_vent_publish": true
     }
   },
   "enable_response_self_review": {
@@ -3019,7 +3147,7 @@
   "enable_tts_enhancement": {
     "description": "TTS强化",
     "type": "bool",
-    "hint": "支持中文聊天文本搭配外语语音块：标签外保留中文显示，<tts> 内按配置语种朗读。统一处理生成路径、标签规范化、语种控制、发送前朗读文本清洗和主用户触发。需要当前会话已配置可用的 TTS provider。",
+    "hint": "支持中文聊天文本搭配外语语音块：标签外保留中文显示，<tts> 内按配置语种朗读；外语语音块后若缺少中文含义，会在发送前自动补中文释义。统一处理生成路径、标签规范化、语种控制、发送前朗读文本清洗和主用户触发。需要当前会话已配置可用的 TTS provider。",
     "default": false
   },
   "tts_generation_mode": {
@@ -3039,7 +3167,7 @@
     "default": "ja",
     "options": ["ja", "zh", "en"],
     "labels": ["日语", "中文", "英语"],
-    "hint": "控制 <tts> 标签内真正送入 TTS 的语种。可让标签外保留中文显示文本，标签内使用日语或英语朗读；日语模式会尽量避免把明显非日语文本直接送进 TTS。",
+    "hint": "控制 <tts> 标签内真正送入 TTS 的语种。可让标签外保留中文显示文本，标签内使用日语或英语朗读；日语模式会尽量避免把明显非日语文本直接送进 TTS，并会给缺少说明的外语语音块补中文释义。",
     "condition": {
       "enable_tts_enhancement": true
     }

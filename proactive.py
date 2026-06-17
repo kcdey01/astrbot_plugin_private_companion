@@ -621,6 +621,238 @@ class ProactiveMixin:
         max_hours = max(min_hours + 0.5, (end_dt - now_dt).total_seconds() / 3600)
         return (min_hours, max_hours)
 
+    def _current_emotion_gate_mode(self, user: dict[str, Any], *, now: float | None = None) -> str:
+        if not bool(getattr(self, "enable_emotion_simulation", True)):
+            return ""
+        rel_state = user.get("relationship_state")
+        if not isinstance(rel_state, dict):
+            return ""
+        check_now = _now_ts() if now is None else now
+        mode = str(rel_state.get("mode") or "")
+        if mode in {"hurt", "refusing"} and _safe_float(rel_state.get("hurt_until"), 0) <= check_now:
+            return ""
+        if mode in {"hurt", "refusing", "attached"}:
+            return mode
+        return ""
+
+    def _current_relationship_gate_mode(self, user: dict[str, Any], *, now: float | None = None) -> str:
+        rel_state = user.get("relationship_state")
+        if not isinstance(rel_state, dict):
+            return ""
+        check_now = _now_ts() if now is None else now
+        mode = str(rel_state.get("mode") or "")
+        if mode == "backoff" and bool(getattr(self, "enable_relationship_state_machine", True)):
+            return "backoff" if _safe_float(rel_state.get("backoff_until"), 0) > check_now else ""
+        if mode == "careful" and bool(getattr(self, "enable_relationship_state_machine", True)):
+            return "careful"
+        return ""
+
+    @staticmethod
+    def _proactive_reason_is_intimate(reason: str) -> bool:
+        return str(reason or "") in {
+            "insomnia_night",
+            "state_share",
+            "diary_share",
+            "evening_greeting",
+        }
+
+    @staticmethod
+    def _proactive_action_is_intimate(action: str) -> bool:
+        parts = {part.strip() for part in str(action or "").split("+") if part.strip()}
+        return bool(parts & {"poke", "voice", "photo_text", "screen_peek", "jm_cosmos_read"})
+
+    @staticmethod
+    def _proactive_text_is_intimate(*parts: Any) -> bool:
+        text = " ".join(_single_line(part, 120) for part in parts if _single_line(part, 120))
+        return bool(re.search(r"贴贴|抱抱|亲亲|摸摸|揉揉|蹭蹭|闹你|撒娇|想你|黏|贴近|靠近|坏心思|亲密|睡前|床|小屁股", text, re.I))
+
+    def _low_pressure_proactive_replacement(
+        self,
+        *,
+        mode: str,
+        reason: str,
+        action: str,
+        motive: str,
+        topic: str = "",
+    ) -> tuple[str, str, str, str]:
+        if mode == "careful":
+            return (
+                "quiet_care",
+                "message",
+                "感觉用户这会儿可能有点累或压力,只低压地问一句,不追问、不要求回复",
+                topic or "低压关心",
+            )
+        if mode in {"hurt", "refusing"}:
+            return (
+                "quiet_care",
+                "message",
+                "Bot 还在收敛情绪,只保留一条很短的低压关心；不贴近、不撒娇、不追问",
+                topic or "收敛后的低压关心",
+            )
+        return reason, action, motive, topic
+
+    def _apply_emotion_to_planned_proactive(
+        self,
+        user: dict[str, Any],
+        *,
+        reason: str,
+        action: str,
+        motive: str,
+        topic: str = "",
+        scheduled: float | None = None,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        check_now = _now_ts() if now is None else now
+        mode = self._current_emotion_gate_mode(user, now=check_now) or self._current_relationship_gate_mode(user, now=check_now)
+        result = {
+            "reason": reason,
+            "action": action,
+            "motive": motive,
+            "topic": topic,
+            "scheduled": scheduled,
+            "mode": mode,
+            "note": "",
+            "blocked": False,
+        }
+        intimate = (
+            self._proactive_reason_is_intimate(reason)
+            or self._proactive_action_is_intimate(action)
+            or self._proactive_text_is_intimate(reason, action, motive, topic)
+        )
+        if mode == "attached":
+            if reason in {"check_in", "quiet_care"} and random.random() < 0.28:
+                result["reason"] = "activity_share"
+                result["motive"] = motive or "刚刚有个轻轻的小念头,想自然分享一下"
+                result["topic"] = topic or "轻分享"
+                result["note"] = "情绪 attached: 提高轻分享倾向"
+            if action == "message" and reason in {"activity_share", "diary_share", "background_schedule"} and self._photo_text_available(user) and random.random() < 0.18:
+                result["action"] = self._fallback_action_for_unavailable("photo_text", user)
+                result["note"] = (result["note"] + "；" if result["note"] else "") + "情绪 attached: 轻分享可带图"
+            return result
+        if mode == "careful":
+            if action != "message" or reason not in {"quiet_care", "check_in"} or intimate:
+                new_reason, new_action, new_motive, new_topic = self._low_pressure_proactive_replacement(
+                    mode=mode,
+                    reason=reason,
+                    action=action,
+                    motive=motive,
+                    topic=topic,
+                )
+                result.update(reason=new_reason, action=new_action, motive=new_motive, topic=new_topic)
+                result["note"] = "关系 careful: 只保留低压关心"
+            return result
+        if mode in {"hurt", "refusing", "backoff"}:
+            if str(user.get("planned_proactive_source") or "") == "timer":
+                return result
+            delay = 2.5 * 3600 if mode == "hurt" else 5.5 * 3600
+            if scheduled and scheduled > 0:
+                result["scheduled"] = max(scheduled, check_now + random.uniform(delay, delay + 2.5 * 3600))
+            if intimate or action != "message" or mode in {"refusing", "backoff"}:
+                new_reason, new_action, new_motive, new_topic = self._low_pressure_proactive_replacement(
+                    mode="hurt" if mode == "hurt" else "refusing",
+                    reason=reason,
+                    action=action,
+                    motive=motive,
+                    topic=topic,
+                )
+                result.update(reason=new_reason, action=new_action, motive=new_motive, topic=new_topic)
+                result["note"] = f"情绪 {mode}: 延后并清理亲密主动候选"
+            elif mode == "hurt":
+                result["note"] = "情绪 hurt: 候选延后"
+            return result
+        return result
+
+    def _defer_or_clean_emotion_blocked_plan(self, user: dict[str, Any], *, now: float | None = None) -> str:
+        check_now = _now_ts() if now is None else now
+        mode = self._current_emotion_gate_mode(user, now=check_now) or self._current_relationship_gate_mode(user, now=check_now)
+        if mode not in {"hurt", "refusing", "backoff"}:
+            return "情绪/关系状态处于收敛期"
+        if str(user.get("planned_proactive_source") or "") == "timer":
+            return "情绪/关系状态处于收敛期,预约主动保留"
+        reason = str(user.get("planned_proactive_reason") or "")
+        action = str(user.get("planned_proactive_action") or "message")
+        motive = _single_line(user.get("planned_proactive_motive"), 140)
+        topic = _single_line(user.get("planned_proactive_topic"), 60)
+        intimate = (
+            self._proactive_reason_is_intimate(reason)
+            or self._proactive_action_is_intimate(action)
+            or self._proactive_text_is_intimate(reason, action, motive, topic)
+        )
+        rel_state = user.get("relationship_state") if isinstance(user.get("relationship_state"), dict) else {}
+        hurt_until = _safe_float(rel_state.get("hurt_until"), 0)
+        base_after = max(check_now + 90 * 60, hurt_until + random.uniform(15 * 60, 75 * 60))
+        if intimate or mode in {"refusing", "backoff"}:
+            self._mark_planned_candidate_status(user, "deferred", f"情绪 {mode}: 亲密主动候选已清理/延后")
+            self._clear_pending_proactive_plan(user)
+            if mode == "hurt":
+                user["next_proactive_at"] = base_after + random.uniform(20 * 60, 90 * 60)
+                user["planned_proactive_reason"] = "quiet_care"
+                user["planned_proactive_action"] = "message"
+                user["planned_proactive_source"] = "emotion_gate"
+                user["planned_proactive_motive"] = "Bot 还在收敛情绪,只留一条很短的低压关心,不贴近也不追问"
+                user["planned_proactive_topic"] = "情绪收敛后的低压关心"
+                item = self._record_proactive_candidate(
+                    str(user.get("user_id") or user.get("id") or ""),
+                    {
+                        "source": "emotion_gate",
+                        "reason": user["planned_proactive_reason"],
+                        "action": user["planned_proactive_action"],
+                        "scheduled_ts": user["next_proactive_at"],
+                        "topic": user["planned_proactive_topic"],
+                        "motive": user["planned_proactive_motive"],
+                        "score": 32,
+                    },
+                    status="accepted",
+                    note="情绪 hurt: 恢复后低压关心候选",
+                )
+                user["planned_candidate_id"] = item.get("id", "")
+                saver = getattr(self, "_schedule_data_save", None)
+                if callable(saver):
+                    saver()
+                return "情绪 hurt 收敛中,亲密主动候选已延后"
+            saver = getattr(self, "_schedule_data_save", None)
+            if callable(saver):
+                saver()
+            return f"情绪/关系 {mode} 收敛中,亲密主动候选已清理"
+        self._mark_planned_candidate_status(user, "deferred", f"情绪 {mode}: 主动候选延后")
+        user["next_proactive_at"] = max(_safe_float(user.get("next_proactive_at"), 0), base_after)
+        saver = getattr(self, "_schedule_data_save", None)
+        if callable(saver):
+            saver()
+        return f"情绪 {mode} 收敛中,主动候选已延后"
+
+    def _normalize_existing_plan_for_emotion(self, user: dict[str, Any], *, now: float | None = None) -> str:
+        check_now = _now_ts() if now is None else now
+        if str(user.get("planned_proactive_source") or "") == "timer":
+            return ""
+        reason = str(user.get("planned_proactive_reason") or "")
+        action = str(user.get("planned_proactive_action") or "message")
+        motive = _single_line(user.get("planned_proactive_motive"), 140)
+        topic = _single_line(user.get("planned_proactive_topic"), 60)
+        scheduled = _safe_float(user.get("next_proactive_at"), 0)
+        adjusted = self._apply_emotion_to_planned_proactive(
+            user,
+            reason=reason,
+            action=action,
+            motive=motive,
+            topic=topic,
+            scheduled=scheduled,
+            now=check_now,
+        )
+        note = _single_line(adjusted.get("note"), 160)
+        if not note:
+            return ""
+        user["planned_proactive_reason"] = str(adjusted.get("reason") or reason)
+        user["planned_proactive_action"] = str(adjusted.get("action") or action)
+        user["planned_proactive_motive"] = _single_line(adjusted.get("motive"), 140) or motive
+        user["planned_proactive_topic"] = _single_line(adjusted.get("topic"), 60) or topic
+        user["next_proactive_at"] = _safe_float(adjusted.get("scheduled"), scheduled)
+        self._mark_planned_candidate_status(user, "accepted", note)
+        saver = getattr(self, "_schedule_data_save", None)
+        if callable(saver):
+            saver()
+        return note
+
     def _friend_proactive_scheduled_too_early(
         self,
         user: dict[str, Any],
@@ -746,16 +978,31 @@ class ProactiveMixin:
                 return
         if rest_until > now and scheduled < rest_until:
             scheduled = rest_until + random.uniform(20 * 60, 90 * 60)
+        topic = (
+            _single_line(planned_event.get("topic"), 60)
+            if isinstance(planned_event, dict)
+            else self._choose_proactive_topic(reason, user)
+        )
+        emotion_adjustment = self._apply_emotion_to_planned_proactive(
+            user,
+            reason=reason,
+            action=action,
+            motive=motive,
+            topic=topic,
+            scheduled=scheduled,
+            now=now,
+        )
+        reason = str(emotion_adjustment.get("reason") or reason)
+        action = str(emotion_adjustment.get("action") or action)
+        motive = _single_line(emotion_adjustment.get("motive"), 140) or motive
+        topic = _single_line(emotion_adjustment.get("topic"), 60) or topic
+        scheduled = _safe_float(emotion_adjustment.get("scheduled"), scheduled)
         user["next_proactive_at"] = scheduled
         user["planned_proactive_reason"] = reason
         user["planned_proactive_action"] = action
         user["planned_proactive_source"] = "event" if planned_event else "random"
         user["planned_proactive_motive"] = motive
-        user["planned_proactive_topic"] = (
-            _single_line(planned_event.get("topic"), 60)
-            if isinstance(planned_event, dict)
-            else self._choose_proactive_topic(reason, user)
-        )
+        user["planned_proactive_topic"] = topic
         self._clear_planned_proactive_trigger(user)
         user["planned_event_chain"] = (
             []
@@ -787,7 +1034,7 @@ class ProactiveMixin:
                 "score": 60 if planned_event else 42,
             },
             status="accepted",
-            note="日程/随机调度",
+            note=_single_line(emotion_adjustment.get("note"), 160) or "日程/随机调度",
         )
         user["planned_candidate_id"] = item.get("id", "")
 

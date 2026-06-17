@@ -300,8 +300,13 @@ class ProactiveEngineMixin:
                 existing["repeat_count"] = _safe_int(existing.get("repeat_count"), 1, 1) + 1
                 existing["last_seen_ts"] = now
                 existing["scheduled_ts"] = max(_safe_float(existing.get("scheduled_ts"), scheduled), scheduled)
+                existing["source"] = source or _single_line(existing.get("source"), 40)
+                existing["reason"] = reason or _single_line(existing.get("reason"), 40)
+                existing["action"] = action or _single_line(existing.get("action"), 40)
                 existing["topic"] = topic or _single_line(existing.get("topic"), 80)
                 existing["motive"] = motive or _single_line(existing.get("motive"), 160)
+                if note:
+                    existing["note"] = _single_line(note, 160)
                 existing["score"] = max(_safe_int(existing.get("score"), 0, 0, 100), _safe_int(candidate.get("score"), 0, 0, 100))
                 return existing
         item = {
@@ -580,13 +585,33 @@ class ProactiveEngineMixin:
         if self._is_quiet_time() and not self._can_send_insomnia_night_message(user):
             return False, "免打扰时段"
         rel_state = user.get("relationship_state")
-        if (
+        relationship_blocked = (
             self.enable_relationship_state_machine
             and isinstance(rel_state, dict)
             and rel_state.get("mode") == "backoff"
             and _safe_float(rel_state.get("backoff_until"), 0) > _now_ts()
-        ):
-            return False, "关系状态处于收敛期"
+        )
+        emotion_blocked = (
+            bool(getattr(self, "enable_emotion_simulation", True))
+            and isinstance(rel_state, dict)
+            and rel_state.get("mode") in {"hurt", "refusing"}
+            and _safe_float(rel_state.get("hurt_until"), 0) > _now_ts()
+        )
+        if relationship_blocked or emotion_blocked:
+            adjuster = getattr(self, "_defer_or_clean_emotion_blocked_plan", None)
+            if callable(adjuster):
+                adjusted_reason = adjuster(user, now=now)
+            else:
+                adjusted_reason = "情绪/关系状态处于收敛期"
+            logger.info(
+                "[PrivateCompanion] 情绪/关系闸门拦截主动: user=%s mode=%s score=%s hurt_until=%s reason=%s",
+                _single_line(user.get("user_id") or user.get("umo") or user.get("nickname"), 80),
+                _single_line(rel_state.get("mode"), 24),
+                _safe_int(rel_state.get("mood_score"), 0, -100, 100),
+                int(_safe_float(rel_state.get("hurt_until"), 0)),
+                _single_line(rel_state.get("last_hurt_reason"), 80),
+            )
+            return False, adjusted_reason
 
         planned_reason = str(user.get("planned_proactive_reason") or "")
         if due_timer_active and str(user.get("planned_proactive_source") or "") != "timer":
@@ -638,6 +663,14 @@ class ProactiveEngineMixin:
                 self._reschedule_greeting_within_window(user, planned_reason, now=now)
             return False, "发送间隔不足"
         planned_action = str(user.get("planned_proactive_action") or "message")
+        normalizer = getattr(self, "_normalize_existing_plan_for_emotion", None)
+        if callable(normalizer):
+            emotion_note = normalizer(user, now=now)
+            if emotion_note:
+                planned_reason = str(user.get("planned_proactive_reason") or planned_reason)
+                planned_action = str(user.get("planned_proactive_action") or planned_action or "message")
+                if _safe_float(user.get("next_proactive_at"), 0) > now + 1:
+                    return False, emotion_note
         if not self._friend_can_receive_proactive_reason(user, planned_reason, planned_action):
             self._clear_pending_proactive_plan(user)
             self._schedule_next_proactive(user, now=now, delay_hours=(2, 6))

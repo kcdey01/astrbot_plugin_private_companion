@@ -914,3 +914,114 @@ class QzoneMixin:
         state["last_life_publish_text"] = _single_line(result.get("text") or text, 180)
         self._save_data_sync()
 
+    async def _maybe_publish_qzone_emotional_vent(
+        self,
+        *,
+        user_snapshot: dict[str, Any] | None = None,
+        relationship_state: dict[str, Any] | None = None,
+        intent: dict[str, Any] | None = None,
+    ) -> None:
+        if not (
+            self.enable_qzone_integration
+            and getattr(self, "enable_emotion_simulation", False)
+            and getattr(self, "enable_qzone_emotional_vent_publish", False)
+        ):
+            return
+        rel_state = relationship_state if isinstance(relationship_state, dict) else {}
+        mood_score = abs(_safe_int(rel_state.get("mood_score"), 0, -100, 100))
+        threshold = _safe_int(getattr(self, "qzone_emotional_vent_threshold", 90), 90, 40, 100)
+        if mood_score < threshold:
+            return
+        if isinstance(user_snapshot, dict):
+            role_getter = getattr(self, "_private_user_role", None)
+            try:
+                role = role_getter(user_snapshot, str(user_snapshot.get("user_id") or "")) if callable(role_getter) else ""
+            except Exception:
+                role = ""
+            if role != "owner":
+                logger.info(
+                    "[PrivateCompanion] 情绪发泄说说跳过: user_role=%s score=%s",
+                    role or "friend",
+                    mood_score,
+                )
+                return
+        now = _now_ts()
+        state = self.data.setdefault("qzone_integration", {})
+        if not isinstance(state, dict):
+            self.data["qzone_integration"] = {}
+            state = self.data["qzone_integration"]
+        cooldown = max(4, _safe_int(getattr(self, "qzone_emotional_vent_cooldown_hours", 72), 72, 4, 336)) * 3600
+        if now - _safe_float(state.get("last_emotional_vent_at"), 0) < cooldown:
+            logger.info("[PrivateCompanion] 情绪发泄说说跳过: cooldown score=%s", mood_score)
+            return
+        if now - _safe_float(state.get("last_emotional_vent_failed_at"), 0) < 15 * 60:
+            return
+        probability = max(0.0, min(1.0, _safe_float(getattr(self, "qzone_emotional_vent_probability", 0.35), 0.35)))
+        if random.random() > probability:
+            state["last_emotional_vent_status"] = "skipped:probability_miss"
+            state["last_emotional_vent_checked_at"] = now
+            self._save_data_sync()
+            return
+        try:
+            await self._qzone_get_cookies(None)
+        except Exception as exc:
+            state["last_emotional_vent_failed_at"] = now
+            state["last_emotional_vent_status"] = f"failed:{_single_line(exc, 80)}"
+            state["last_emotional_vent_checked_at"] = now
+            self._save_data_sync()
+            return
+        daily_state = self.data.get("daily_state", {})
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        reason = _single_line((rel_state or {}).get("last_hurt_reason") or (intent or {}).get("emotion_reason"), 80)
+        prompt = f"""
+请以当前 Bot 人格写一条 QQ 空间说说,表达一种模糊的低落、委屈或想透气的心情。
+只输出说说正文,不要解释,不要加标题。
+
+要求：
+- 20 到 80 字。
+- 像自然生活动态,不要像控诉、公告、任务汇报。
+- 不要 @ 用户,不要提到任何具体用户、私聊内容、聊天截图或“刚才谁说了什么”。
+- 不要出现“受伤分”“情绪分”“阈值”“插件”“模型”“Bot”“机器人”“/100”等内部词。
+- 可以写天气、夜色、窗边、散步、想安静一会儿这类公开可见的余味。
+
+【公开可写的状态余味】
+{self._qzone_public_state_hint(daily_state if isinstance(daily_state, dict) else {})}
+
+【当前/附近日程】
+{self._format_plan_item_for_prompt(current_item) or "无明确日程"}
+
+【内部触发原因，只能作为情绪方向，禁止复述】
+{reason or "情绪有点低落"}
+
+{self._format_worldview_adaptation_prompt()}
+""".strip()
+        try:
+            text = await self._llm_call(
+                prompt,
+                max_tokens=140,
+                provider_id=self._task_provider(self.mai_style_provider_id, self.llm_provider_id),
+                task="qzone_emotional_vent",
+            )
+            text = await self._sanitize_qzone_life_post_text(text, prompt=prompt)
+            state["last_emotional_vent_draft"] = _single_line(text, 240)
+            state["last_emotional_vent_draft_at"] = now
+            result = await self._publish_qzone_text(text)
+            if result.get("success"):
+                state["last_emotional_vent_at"] = now
+                state.pop("last_emotional_vent_failed_at", None)
+                state["last_emotional_vent_status"] = "published"
+                logger.info("[PrivateCompanion] 情绪发泄说说已发布: score=%s text=%s", mood_score, _single_line(result.get("text") or text, 120))
+            else:
+                state["last_emotional_vent_failed_at"] = now
+                state["last_emotional_vent_status"] = f"failed:{_single_line(result.get('message'), 80)}"
+                logger.warning("[PrivateCompanion] 情绪发泄说说发布失败: %s", _single_line(result.get("message"), 120))
+            state["last_emotional_vent_checked_at"] = now
+            state["last_emotional_vent_text"] = _single_line(result.get("text") or text, 180)
+            self._save_data_sync()
+        except Exception as exc:
+            state["last_emotional_vent_failed_at"] = now
+            state["last_emotional_vent_status"] = f"failed:{_single_line(exc, 80)}"
+            state["last_emotional_vent_checked_at"] = now
+            self._save_data_sync()
+            logger.warning("[PrivateCompanion] 情绪发泄说说异常: %s", _single_line(exc, 160), exc_info=True)
+

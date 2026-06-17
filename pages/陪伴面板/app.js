@@ -35,6 +35,8 @@ const state = {
   troubleshootingFilter: "all",
   tokenView: "today",
   tokenDate: "",
+  worldbookLivingMemory: {},
+  worldbookLivingMemoryRequestSeq: 0,
 };
 
 const hiddenCompatibilityConfigKeys = new Set([
@@ -99,6 +101,7 @@ const pluginIntegrationAvailabilityRules = {
   enable_bilibili_boredom_watch: () => Boolean(state.overview?.bilibili?.available),
   enable_qzone_integration: () => Boolean(state.overview?.qzone?.available),
   enable_qzone_life_publish: () => Boolean(state.overview?.qzone?.available),
+  enable_qzone_emotional_vent_publish: () => Boolean(state.overview?.qzone?.available && state.featureDraft?.enable_emotion_simulation),
 };
 
 function unavailablePluginIntegrationOwner(key) {
@@ -287,6 +290,7 @@ const featureMeta = {
   enable_llm_timer_scheduling: ["隐藏预约定时", "允许模型输出隐藏 <timer> 标签预约下一次主动开口；关闭后只保留 AstrBot 原生主动任务路径。"],
   enable_passive_topic_suppression: ["话题抑制", "避免短时间反复主动提同一个话题。"],
   enable_relationship_state_machine: ["关系状态机", "维护陌生、熟悉、亲近等关系阶段。"],
+  enable_emotion_simulation: ["情绪模拟", "维护 Bot 自身的受伤、拒近、恢复和亲近余波。"],
   enable_dialogue_episode_memory: ["私聊片段", "把连续对话整理成共同经历和可续话头。"],
   enable_open_loop_tracking: ["未完话头", "记录用户提到的待办、约定、之后再说的事。"],
   enable_user_habit_learning: ["用户习惯画像", "学习用户常在什么时段做什么、问什么，用于日程细化和主动理解。"],
@@ -296,7 +300,7 @@ const featureMeta = {
   enable_cycle_state: ["生理周期模拟", "允许符合人格的人类角色出现周期前、周期中和恢复期状态。"],
   enable_skill_growth_simulation: ["技能成长", "技能等级与能力边界。"],
   enable_message_debounce: ["消息收口防抖", "把文本、图片、转发后的补充说明合并进同一轮；旧版语义收口等待已并入文本补话等待。"],
-  enable_smart_message_debounce: ["智能文本收口", "用小模型判断文本消息是否还没说完，只在疑似没说完时等待。"],
+  enable_smart_message_debounce: ["智能文本收口", "先本地快判完整文本，只在疑似没说完时短时调用小模型。"],
   enable_recall_enhancement: ["撤回增强", "感知撤回事件，支持发送前取消回复、短期防撤回转述和违禁词自动撤回。"],
   enable_recall_cancel_reply: ["撤回取消回复", "撤回增强的子能力：触发/唤醒消息在 Bot 发出回复前被撤回时，静默取消本次回复和后续分段。"],
   enable_recall_message_cache: ["撤回消息缓存", "撤回增强的子能力：短期缓存消息摘要，撤回后可在过期前转述。"],
@@ -393,6 +397,13 @@ const featureGroups = [
     ],
   },
   {
+    title: "情绪模拟",
+    note: "Bot 自身短期情绪余波、受伤收敛和可选公开发泄行为。",
+    keys: [
+      "enable_emotion_simulation",
+    ],
+  },
+  {
     title: "群聊观察",
     note: "群氛围、黑话、话题线、插话和隐私边界。",
     keys: [
@@ -482,6 +493,9 @@ const embeddedFeatureParentByKey = {
   enable_lunar_perception: "enable_environment_perception",
   enable_solar_term_perception: "enable_environment_perception",
   enable_almanac_perception: "enable_environment_perception",
+  enable_group_context_injection: "enable_group_companion",
+  enable_group_persona_denoise: "enable_group_companion",
+  enable_group_reality_promise_guard: "enable_group_companion",
   enable_group_high_intensity_mode: "enable_group_wakeup_enhancement",
   enable_group_conversation_followup: "enable_group_scene_awareness",
   enable_group_slang_meanings: "enable_group_slang_learning",
@@ -493,6 +507,7 @@ const embeddedFeatureParentByKey = {
   enable_external_event_self_link: "enable_news_integration",
   enable_web_exploration_boredom_search: "enable_web_exploration",
   enable_qzone_life_publish: "enable_qzone_integration",
+  enable_qzone_emotional_vent_publish: "enable_emotion_simulation",
   enable_private_reading_boredom_read: "enable_private_reading_integration",
   enable_private_reading_ask_recommendation: "enable_private_reading_integration",
   enable_private_reading_preference_influence: "enable_private_reading_integration",
@@ -505,9 +520,23 @@ function visibleFeatureSwitchKey(key) {
   return visibleConfigKey(key) && !embeddedFeatureKeys.has(key);
 }
 
+function topLevelFeatureKey(key) {
+  let current = key;
+  const seen = new Set();
+  while (embeddedFeatureParentByKey[current] && !seen.has(current)) {
+    seen.add(current);
+    current = embeddedFeatureParentByKey[current];
+  }
+  return current;
+}
+
+function visibleTopLevelFeatureKeys(source = state.featureDraft || {}) {
+  return Object.keys(source || {}).filter(visibleFeatureSwitchKey);
+}
+
 function featureSearchText(key) {
   const childText = Object.entries(embeddedFeatureParentByKey)
-    .filter(([, parent]) => parent === key)
+    .filter(([childKey]) => topLevelFeatureKey(childKey) === key)
     .map(([childKey]) => `${childKey} ${featureLabel(childKey)} ${featureDescription(childKey)}`)
     .join(" ");
   return `${key} ${featureLabel(key)} ${featureDescription(key)} ${childText}`.toLowerCase();
@@ -564,6 +593,7 @@ const configLabels = {
   enable_message_debounce: "消息收口防抖",
   enable_smart_message_debounce: "智能文本收口",
   SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: "智能收口小模型",
+  smart_message_debounce_model_timeout_seconds: "模型超时秒数",
   smart_message_debounce_wait_seconds: "智能等待秒数",
   smart_message_debounce_learning_window_seconds: "误判学习窗口秒数",
   smart_message_debounce_examples_limit: "学习样本提示数量",
@@ -789,8 +819,8 @@ const configDescriptions = {
   timer_pre_silence_minutes: "已有明确自预约/定时主动时，距离预约时间不足该分钟数会暂停普通主动、链式追问和未回复补一句。若预约文本带有休息/睡觉/起床语义，会从预约创建起静默到到点。",
   max_daily_messages: "每个私聊对象每天最多收到多少条插件主动消息。",
   passive_topic_memory_hours: "记录最近被动回复主题的时间窗口，用来判断短时间内是否又在重复同类话题。",
-  tts_generation_mode: "hybrid：有 <tts> 就直接处理，没有时按自动语音规则转换；direct：只让主模型自己写 <tts>；convert：普通回复后统一交给转换模型生成 TTS 格式。适合实现“中文显示文本 + 外语语音块”。",
-  tts_voice_language: "控制真正送入 TTS 的语音正文语种。可让聊天文本保留中文，<tts> 内使用日语或英语朗读；日语模式会尽量避免明显非日语文本直接进入 TTS。",
+  tts_generation_mode: "hybrid：有 <tts> 就直接处理，没有时按自动语音规则转换；direct：只让主模型自己写 <tts>；convert：普通回复后统一交给转换模型生成 TTS 格式。适合实现“中文显示文本 + 外语语音块 + 语音后中文释义”。",
+  tts_voice_language: "控制真正送入 TTS 的语音正文语种。可让聊天文本保留中文，<tts> 内使用日语或英语朗读；日语模式会尽量避免明显非日语文本直接进入 TTS，并会给缺少说明的外语语音块补中文释义。",
   tts_conversion_provider_id: "用于 convert 路径、hybrid 自动语音和语种修正的文本模型，不是语音合成模型。留空时显式 <tts> 标签仍可直接由 AstrBot 当前会话 TTS provider 处理。",
   tts_extra_prompt: "只填写本人格或声线的额外要求。基础格式、语种和 provider 自适应规则会自动生成，留空最稳。",
   enable_tts_local_playback: "开启后，TTS 音频生成成功时会在运行 AstrBot 的电脑上直接播放。默认关闭，避免群聊自动语音频繁出声。",
@@ -812,9 +842,10 @@ const configDescriptions = {
   daily_token_soft_limit: "今日插件内部 LLM 消耗达到该值后进入软降载。0 表示关闭软限额，只保留每日硬限额。",
   inbound_message_debounce_seconds: "只用于去掉平台或适配器短时间重复上报的同一条消息；不是等待用户补话的时间。",
   enable_message_debounce: "消息收口总开关。开启后，文本、图片、合并转发会按各自等待秒数给用户留补充说明的时间。",
-  enable_smart_message_debounce: "开启后，普通文本先由小模型判断是否还没说完；只有疑似没说完时才等待，完整问候、短互动和完整问题会直接放行。默认关闭。",
-  SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: "用于判断“用户是否说完”的轻量文本 Provider。留空时跟随插件主模型；建议选便宜、响应快的小模型。",
-  smart_message_debounce_wait_seconds: "模型判断用户还没说完时，等待补充的秒数。正常完整发言不会额外等待。",
+  enable_smart_message_debounce: "开启后，普通文本先走本地快判：完整问候、短互动和完整问题会直接放行；只有疑似半句话才调用小模型。默认关闭。",
+  SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: "用于判断“疑似没说完”的轻量文本 Provider。完整文本不会调用模型；留空时跟随插件主模型。",
+  smart_message_debounce_model_timeout_seconds: "小模型判断的最长等待时间。超时后立刻使用本地启发式兜底，避免正常回复被拖慢。",
+  smart_message_debounce_wait_seconds: "判断用户还没说完时的总等待预算；小模型判断耗时会计入这个时间，不会判断完再额外等满。",
   smart_message_debounce_learning_window_seconds: "如果模型刚判断已说完，但用户在该窗口内继续补话，就记录为误判样本。",
   smart_message_debounce_examples_limit: "每次判断时带给小模型的近期误判样本数量。0 表示不注入历史样本。",
   enable_recall_enhancement: "撤回相关能力总开关。包括撤回触发消息时取消回复、短期缓存撤回消息用于转述、违禁词自动撤回。",
@@ -972,10 +1003,39 @@ const configDescriptions = {
   atrelay_sensitive_confirm: "敏感、私密或带情绪的转述是否先向用户确认。",
   atrelay_default_relay_style: "默认转述方式：persona 按人格改写，soft 委婉，original 原话。",
   atrelay_multi_target_limit: "一次转述最多允许几个目标，防止刷屏。",
+  emotional_gate_hurt_threshold: "用户消息触发受伤状态的强度阈值。",
+  emotional_gate_refuse_threshold: "累计受伤分进入拒近状态的阈值。",
+  emotional_gate_recovery_per_hour: "受伤情绪每小时自然恢复多少分。",
+  emotional_gate_max_hurt_minutes: "单次受伤事件最长收敛/暂停主动的分钟数。",
+  enable_qzone_emotional_vent_publish: "极端情绪下是否允许低频发布公开心情说说。",
+  qzone_emotional_vent_threshold: "触发发泄说说所需的情绪分绝对值。",
+  qzone_emotional_vent_cooldown_hours: "两次发泄说说之间的最小间隔。",
+  qzone_emotional_vent_probability: "达到条件后实际尝试发泄说说的概率。",
 };
 
 const featureSettingGroups = {
-  enable_mai_style_integration: ["default_style"],
+  enable_mai_style_integration: [
+    "default_style",
+    "enable_companion_memory",
+    "memory_refresh_interval_minutes",
+    "max_companion_memory_items",
+    "enable_expression_learning",
+    "max_learned_expression_items",
+    "enable_companion_reply_planner",
+    "enable_intent_emotion_analysis",
+    "enable_response_self_review",
+    "enable_passive_topic_suppression",
+    "passive_topic_memory_hours",
+    "enable_relationship_state_machine",
+    "enable_dialogue_episode_memory",
+    "episode_memory_refresh_messages",
+    "episode_memory_refresh_minutes",
+    "max_dialogue_episodes",
+    "enable_open_loop_tracking",
+    "enable_user_habit_learning",
+    "user_habit_min_count",
+    "user_habit_max_items",
+  ],
   enable_companion_memory: ["memory_refresh_interval_minutes", "max_companion_memory_items"],
   enable_expression_learning: ["max_learned_expression_items"],
   enable_companion_reply_planner: ["default_style"],
@@ -983,6 +1043,7 @@ const featureSettingGroups = {
   enable_response_self_review: [],
   enable_passive_topic_suppression: ["passive_topic_memory_hours"],
   enable_relationship_state_machine: ["default_style"],
+  enable_emotion_simulation: ["emotional_gate_hurt_threshold", "emotional_gate_refuse_threshold", "emotional_gate_recovery_per_hour", "emotional_gate_max_hurt_minutes", "enable_qzone_emotional_vent_publish", "qzone_emotional_vent_threshold", "qzone_emotional_vent_cooldown_hours", "qzone_emotional_vent_probability"],
   enable_dialogue_episode_memory: ["episode_memory_refresh_messages", "episode_memory_refresh_minutes", "max_dialogue_episodes"],
   enable_open_loop_tracking: ["max_dialogue_episodes"],
   enable_user_habit_learning: ["user_habit_min_count", "user_habit_max_items"],
@@ -991,7 +1052,7 @@ const featureSettingGroups = {
   inject_passive_states: ["humanized_state_intensity"],
   enable_cycle_state: ["humanized_state_intensity"],
   enable_skill_growth_simulation: ["skill_growth_rate", "skill_growth_custom_skills", "enable_skill_growth_schedule_influence", "skill_growth_schedule_influence_strength"],
-  enable_message_debounce: ["inbound_message_debounce_seconds", "text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds", "enable_smart_message_debounce", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds", "smart_message_debounce_examples_limit"],
+  enable_message_debounce: ["inbound_message_debounce_seconds", "text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds", "enable_smart_message_debounce", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "smart_message_debounce_model_timeout_seconds", "smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds", "smart_message_debounce_examples_limit"],
   enable_recall_enhancement: ["enable_recall_cancel_reply", "enable_recall_message_cache", "enable_recall_transcribe_command", "recall_message_cache_ttl_seconds", "recall_message_cache_max_items", "enable_forbidden_word_recall", "recall_forbidden_words", "recall_forbidden_scope", "recall_forbidden_word_case_sensitive"],
   enable_recall_cancel_reply: ["recall_message_cache_ttl_seconds"],
   enable_recall_message_cache: ["enable_recall_transcribe_command", "recall_message_cache_ttl_seconds", "recall_message_cache_max_items"],
@@ -1006,7 +1067,45 @@ const featureSettingGroups = {
   enable_solar_term_perception: ["environment_perception_timezone"],
   enable_almanac_perception: ["environment_perception_timezone"],
   enable_yesterday_screen_diary_context: ["screen_diary_context_max_chars"],
-  enable_group_companion: ["max_group_recent_messages", "max_group_slang_terms"],
+  enable_group_companion: [
+    "max_group_recent_messages",
+    "max_group_slang_terms",
+    "enable_group_context_injection",
+    "enable_group_persona_denoise",
+    "enable_group_scene_awareness",
+    "group_scene_recent_limit",
+    "enable_group_conversation_followup",
+    "group_conversation_followup_seconds",
+    "group_conversation_followup_max_turns",
+    "enable_group_reality_promise_guard",
+    "enable_group_wakeup_enhancement",
+    "group_wakeup_direct_words",
+    "group_wakeup_context_words",
+    "group_wakeup_interest_keywords",
+    "group_wakeup_interest_probability",
+    "group_wakeup_cooldown_seconds",
+    "group_wakeup_generated_keyword_limit",
+    "group_wakeup_topic_interest_max_boost",
+    "group_wakeup_debounce_pending_penalty",
+    "group_wakeup_fatigue_limit",
+    "group_wakeup_fatigue_decay_minutes",
+    "group_wakeup_log_limit",
+    "enable_group_high_intensity_mode",
+    "group_high_intensity_wakeup_window_seconds",
+    "group_high_intensity_wakeup_threshold",
+    "group_high_intensity_cooldown_seconds",
+    "group_high_intensity_merge_seconds",
+    "enable_group_slang_learning",
+    "enable_group_slang_meanings",
+    "enable_group_member_profiles",
+    "enable_group_topic_threads",
+    "enable_group_episode_memory",
+    "enable_group_relationship_graph",
+    "enable_group_interjection",
+    "enable_group_interjection_feedback",
+    "enable_group_repeat_follow",
+    "enable_group_privacy_guard",
+  ],
   enable_group_context_injection: ["max_group_recent_messages", "group_scene_recent_limit"],
   enable_group_persona_denoise: [],
   enable_forward_message_adaptation: ["forward_message_mode", "forward_message_max_messages", "forward_message_max_chars", "forward_message_parse_nested", "forward_message_image_vision", "forward_message_image_limit"],
@@ -1050,6 +1149,28 @@ const featureSettingGroups = {
 };
 
 const featureSettingSections = {
+  enable_mai_style_integration: [
+    {
+      title: "回复基座",
+      note: "控制陪伴风格注入和基础语气。",
+      keys: ["default_style"],
+    },
+    {
+      title: "记忆与表达",
+      note: "沉淀长期画像、表达习惯和共同经历。",
+      keys: ["enable_companion_memory", "memory_refresh_interval_minutes", "max_companion_memory_items", "enable_expression_learning", "max_learned_expression_items", "enable_dialogue_episode_memory", "episode_memory_refresh_messages", "episode_memory_refresh_minutes", "max_dialogue_episodes"],
+    },
+    {
+      title: "回复策略",
+      note: "意图画像、回复规划、自检和重复话题抑制。",
+      keys: ["enable_companion_reply_planner", "enable_intent_emotion_analysis", "enable_response_self_review", "enable_passive_topic_suppression", "passive_topic_memory_hours"],
+    },
+    {
+      title: "关系与习惯",
+      note: "关系距离、未完话头和用户时段习惯。Bot 自身受伤余波在“情绪模拟”里配置。",
+      keys: ["enable_relationship_state_machine", "enable_open_loop_tracking", "enable_user_habit_learning", "user_habit_min_count", "user_habit_max_items"],
+    },
+  ],
   enable_message_debounce: [
     {
       title: "重复上报去重",
@@ -1063,8 +1184,8 @@ const featureSettingSections = {
     },
     {
       title: "智能文本收口",
-      note: "用轻量模型判断文本是否真的没说完；开启后文本完整时不再固定等待。",
-      keys: ["enable_smart_message_debounce", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds", "smart_message_debounce_examples_limit"],
+      note: "先用本地快判放行完整文本；只有疑似半句话才短时调用轻量模型。",
+      keys: ["enable_smart_message_debounce", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "smart_message_debounce_model_timeout_seconds", "smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds", "smart_message_debounce_examples_limit"],
     },
   ],
   enable_recall_enhancement: [
@@ -1113,6 +1234,28 @@ const featureSettingSections = {
       keys: ["private_image_self_recognition_hint"],
     },
   ],
+  enable_group_companion: [
+    {
+      title: "基础群聊",
+      note: "控制群聊消息量、黑话容量和基础上下文。",
+      keys: ["max_group_recent_messages", "max_group_slang_terms", "enable_group_context_injection", "enable_group_persona_denoise", "enable_group_privacy_guard"],
+    },
+    {
+      title: "场景与续接",
+      note: "判断谁在对谁说话，并维持短时间连续对话。",
+      keys: ["enable_group_scene_awareness", "group_scene_recent_limit", "enable_group_conversation_followup", "group_conversation_followup_seconds", "group_conversation_followup_max_turns", "enable_group_reality_promise_guard"],
+    },
+    {
+      title: "唤醒与高强度",
+      note: "控制被叫到、兴趣关键词和连续唤醒后的收口。",
+      keys: ["enable_group_wakeup_enhancement", "group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds"],
+    },
+    {
+      title: "群记忆与互动",
+      note: "黑话、成员画像、话题线、群片段、插话和复读。",
+      keys: ["enable_group_slang_learning", "enable_group_slang_meanings", "enable_group_member_profiles", "enable_group_topic_threads", "enable_group_episode_memory", "enable_group_relationship_graph", "enable_group_interjection", "enable_group_interjection_feedback", "enable_group_repeat_follow"],
+    },
+  ],
   enable_news_integration: [
     {
       title: "读取来源",
@@ -1147,6 +1290,18 @@ const featureSettingSections = {
       title: "生活说说",
       note: "根据状态、日程和日记余味低频发布公开生活动态。",
       keys: ["enable_qzone_life_publish", "qzone_life_publish_min_interval_hours", "qzone_life_publish_probability"],
+    },
+  ],
+  enable_emotion_simulation: [
+    {
+      title: "情绪闸门",
+      note: "控制受伤、拒近、恢复和主动收敛的阈值。",
+      keys: ["emotional_gate_hurt_threshold", "emotional_gate_refuse_threshold", "emotional_gate_recovery_per_hour", "emotional_gate_max_hurt_minutes"],
+    },
+    {
+      title: "极端发泄",
+      note: "默认关闭；仅主人可触发，且必须同时满足 QZone 可用、冷却、阈值和概率。",
+      keys: ["enable_qzone_emotional_vent_publish", "qzone_emotional_vent_threshold", "qzone_emotional_vent_cooldown_hours", "qzone_emotional_vent_probability"],
     },
   ],
   enable_private_reading_integration: [
@@ -1618,7 +1773,7 @@ function renderStats() {
   const budget = state.tokenStats?.budget || {};
   const dailyUsed = Number(budget.used || 0);
   const dailyLimit = Number(budget.limit || 0);
-  const featureKeys = Object.keys(overview.features || {}).filter(visibleConfigKey);
+  const featureKeys = visibleTopLevelFeatureKeys(overview.features || {});
   const enabledFeatures = featureKeys.filter((key) => overview.features?.[key]).length;
   const energy = Number(daily.energy || 0);
   const mood = daily.mood_bias || daily.note || "暂无状态";
@@ -1626,7 +1781,7 @@ function renderStats() {
     statCard(`私聊 ${privateInfo.enabled_user_count || 0} · 群聊 ${groupInfo.enabled_group_count || 0}`, `总数：对象 ${privateInfo.user_count || 0} · 群聊 ${groupInfo.group_count || 0}`),
     statCard(dailyLimit > 0 ? `${formatCompactNumber(dailyUsed)} / ${formatCompactNumber(dailyLimit)}` : `${formatCompactNumber(dailyUsed)} / 不限`, "今日 Token 消耗 / 上限"),
     statCard(energy ? `${energy}/100` : "-", `心理能量 · ${mood}`),
-    statCard(`${enabledFeatures}/${featureKeys.length}`, "开启功能数 / 功能总数"),
+    statCard(`${enabledFeatures}/${featureKeys.length}`, "开启主开关 / 主开关总数"),
   ].join("");
 }
 
@@ -1983,10 +2138,10 @@ function renderUxReviewPanel() {
   const aiDaily = news.ai_daily || {};
   const cache = overview.cache || {};
   const imageCache = cache.private_image_vision || {};
-  const featureKeys = Object.keys(features).filter(visibleConfigKey);
+  const featureKeys = visibleTopLevelFeatureKeys(features);
   const enabledFeatureCount = featureKeys.filter((key) => features[key]).length;
   const activeFeatureGroupCount = featureGroups.filter((group) =>
-    group.keys.some((key) => visibleConfigKey(key) && features[key])
+    group.keys.some((key) => visibleFeatureSwitchKey(key) && features[key])
   ).length;
   const targetUsers = Array.isArray(settings.target_user_ids)
     ? settings.target_user_ids.filter(Boolean)
@@ -2040,7 +2195,7 @@ function renderUxReviewPanel() {
       level: featureKeys.length ? "ok" : "info",
       title: "功能开关已分组",
       text: featureKeys.length
-        ? `${enabledFeatureCount}/${featureKeys.length} 个功能开启，已归入 ${activeFeatureGroupCount}/${featureGroups.length} 个分类；具体参数进详情页查看`
+        ? `${enabledFeatureCount}/${featureKeys.length} 个主开关开启，已归入 ${activeFeatureGroupCount}/${featureGroups.length} 个分类；子开关和具体参数进详情页查看`
         : "等待功能开关数据",
       tab: "config",
     },
@@ -3225,6 +3380,7 @@ async function renderUserDetail(forceFetch = false) {
       <button data-user-action="toggle">${escapeHtml(detail.enabled ? "停用私聊陪伴" : "启用私聊陪伴")}</button>
       <button data-user-action="reset_daily">重置今日额度</button>
       <button data-user-action="clear_schedule">清空主动计划</button>
+      <button data-user-action="clear_emotion_state">重置情绪状态</button>
       <button data-user-action="clear_learning" class="danger">清空学习记忆</button>
     </div>
     <form id="userEditForm" class="inline-form">
@@ -3248,6 +3404,7 @@ async function renderUserDetail(forceFetch = false) {
     </div>
     <div class="detail-grid">
       ${detailBlock("关系和主动", detail.formatted?.relationship || "", [["角色", detail.relationship_role_label || ""], ["有效主动上限", `${detail.effective_daily_limit ?? "-"} / 天`], ["下次主动", detail.formatted?.next_proactive || detail.next_proactive], ["动作偏好", detail.formatted?.action_affinity || ""]])}
+      ${emotionGateBlock(detail)}
       ${userWorldbookBlock(detail.worldbook_member)}
       ${detailBlock("行为习惯", detail.behavior_habits?.updated_at ? `更新于 ${detail.behavior_habits.updated_at}` : "", userHabitPairs(detail.behavior_habits))}
       ${detailBlock("最近对话", "", [["用户消息", detail.last_user_message || ""], ["陪伴回复", detail.last_companion_message || ""]])}
@@ -3310,6 +3467,29 @@ function userWorldbookBlock(item) {
   `;
 }
 
+function emotionGateBlock(detail) {
+  const rel = detail.relationship_state && typeof detail.relationship_state === "object" ? detail.relationship_state : {};
+  const intent = detail.intent_profile && typeof detail.intent_profile === "object" ? detail.intent_profile : {};
+  const mode = rel.mode || "normal";
+  const moodScore = Number(rel.mood_score || 0);
+  const hurtUntil = Number(rel.hurt_until || 0);
+  const now = Math.floor(Date.now() / 1000);
+  const remaining = hurtUntil > now ? `${Math.ceil((hurtUntil - now) / 60)} 分钟` : "无";
+  const pairs = [
+    ["模式", mode],
+    ["情绪分", moodScore ? String(moodScore) : "0"],
+    ["收敛轮数", rel.silence_turns || 0],
+    ["剩余收敛", remaining],
+    ["上次事件", rel.last_emotion_event || intent.emotion_event || "neutral"],
+    ["对象", rel.last_emotion_target || intent.emotion_target || "-"],
+    ["规则", rel.last_emotion_rule || intent.emotion_rule || "-"],
+    ["强度", rel.last_emotion_intensity ?? intent.emotion_intensity ?? 0],
+    ["原因", rel.last_emotion_reason || intent.emotion_reason || rel.last_hurt_reason || ""],
+  ];
+  const preText = rel.last_hurt_text ? `最近触发文本：${rel.last_hurt_text}` : "";
+  return detailBlock("情绪闸门", preText, pairs);
+}
+
 function userHabitPairs(habits) {
   const items = Array.isArray(habits?.items) ? habits.items : [];
   return items.length
@@ -3340,6 +3520,10 @@ function bindUserActions(detail) {
       if (action === "toggle") body.enabled = !detail.enabled;
       if (action === "reset_daily") body.reset_daily = true;
       if (action === "clear_schedule") body.clear_schedule = true;
+      if (action === "clear_emotion_state") {
+        if (!requireSecondClick(button, `user-clear-emotion:${detail.user_id}`, "再次点击重置该用户的情绪状态", "再次点击重置")) return;
+        body.clear_emotion_state = true;
+      }
       if (action === "clear_learning") {
         if (!requireSecondClick(button, `user-clear:${detail.user_id}`, "再次点击清空该用户的学习记忆", "再次点击清空")) return;
         body.clear_learning = true;
@@ -3786,6 +3970,7 @@ function worldbookMemberCard(item) {
           <span>${identityLabel} ${escapeHtml(item.user_id || "-")} · 优先级 ${escapeHtml(item.priority ?? "-")}${bindLine}</span>
         </div>
         <div class="worldbook-card-actions">
+          <button type="button" data-worldbook-living-memory="${escapeHtml(item.user_id || "")}">长期记忆</button>
           <button type="button" data-worldbook-edit="${escapeHtml(detailId)}">编辑</button>
           <button type="button" data-worldbook-member="${escapeHtml(item.user_id || "")}" data-enabled="${item.enabled ? "0" : "1"}">
             ${escapeHtml(item.enabled ? "停用" : "启用")}
@@ -3809,6 +3994,9 @@ function worldbookMemberCard(item) {
           `).join("")}
         </div>
       ` : ""}
+      <div data-worldbook-living-memory-panel="${escapeHtml(item.user_id || "")}">
+        ${worldbookLivingMemoryPanel(item.user_id || "")}
+      </div>
       <details class="worldbook-editor" id="${escapeHtml(detailId)}">
         <summary>编辑关系节点</summary>
         <div class="worldbook-chip-row">
@@ -3906,9 +4094,136 @@ function worldbookMemoryCard(userId, memory, index) {
   `;
 }
 
+function worldbookLivingMemoryPanel(userId) {
+  const result = state.worldbookLivingMemory?.[userId];
+  if (!result) return "";
+  if (result.loading) {
+    return `
+      <section class="worldbook-livingmemory-panel">
+        <div class="worldbook-livingmemory-head">
+          <div>
+            <b>LivingMemory</b>
+            <span>正在检索对应记忆...</span>
+          </div>
+          <button type="button" data-worldbook-living-memory-close="${escapeHtml(userId)}" aria-label="收起 LivingMemory">收起</button>
+        </div>
+      </section>
+    `;
+  }
+  if (result.error) {
+    return `
+      <section class="worldbook-livingmemory-panel error">
+        <div class="worldbook-livingmemory-head">
+          <div>
+            <b>LivingMemory</b>
+            <span>${escapeHtml(result.error)}</span>
+          </div>
+          <button type="button" data-worldbook-living-memory-close="${escapeHtml(userId)}" aria-label="收起 LivingMemory">收起</button>
+        </div>
+      </section>
+    `;
+  }
+  const items = Array.isArray(result.items) ? result.items : [];
+  const tokens = Array.isArray(result.tokens) ? result.tokens : [];
+  const primaryTokens = Array.isArray(result.primary_tokens) ? result.primary_tokens : [];
+  return `
+    <section class="worldbook-livingmemory-panel">
+      <div class="worldbook-livingmemory-head">
+        <div>
+          <b>LivingMemory 相关记忆</b>
+          <span>${escapeHtml(result.available === false ? (result.message || "未找到 LivingMemory 数据库") : `${items.length} 条结果 · 严格匹配`)}</span>
+        </div>
+        <button type="button" data-worldbook-living-memory-close="${escapeHtml(userId)}" aria-label="收起 LivingMemory">收起</button>
+      </div>
+      ${result.filter_note ? `<p class="worldbook-livingmemory-note">${escapeHtml(result.filter_note)}</p>` : ""}
+      ${tokens.length ? `
+        <div class="worldbook-livingmemory-tokens">
+          ${tokens.slice(0, 12).map((token) => `<span class="${primaryTokens.includes(token) ? "primary" : ""}">${escapeHtml(token)}</span>`).join("")}
+        </div>
+      ` : ""}
+      <div class="worldbook-livingmemory-list">
+        ${items.length ? items.map(worldbookLivingMemoryCard).join("") : `<div class="empty small">没有检索到对应 LivingMemory 记忆</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function worldbookLivingMemoryCard(item) {
+  const tags = [
+    item.source_label || item.source,
+    item.persona_id,
+    item.session_id,
+    item.importance !== undefined && item.importance !== null ? `重要性 ${Number(item.importance).toFixed(2)}` : "",
+    item.confidence !== undefined && item.confidence !== null ? `置信 ${Number(item.confidence).toFixed(2)}` : "",
+    item.score !== undefined && item.score !== null ? `命中 ${Number(item.score).toFixed(1)}` : "",
+  ].filter(Boolean);
+  const topics = Array.isArray(item.topics) ? item.topics : [];
+  const keyFacts = Array.isArray(item.key_facts) ? item.key_facts : [];
+  const matchedTokens = Array.isArray(item.matched_tokens) ? item.matched_tokens : [];
+  const content = String(item.content || "");
+  const preview = item.preview || shortName(content, 260);
+  const canExpand = content && content !== preview;
+  return `
+    <article class="worldbook-livingmemory-card">
+      <div class="worldbook-livingmemory-card-meta">
+        ${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
+      </div>
+      ${matchedTokens.length ? `<div class="worldbook-livingmemory-tags matched">${matchedTokens.map((tag) => `<span>${escapeHtml(`命中：${tag}`)}</span>`).join("")}</div>` : ""}
+      <p>${escapeHtml(preview || "无内容")}</p>
+      ${topics.length ? `<div class="worldbook-livingmemory-tags">${topics.slice(0, 6).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+      ${keyFacts.length ? `<ul>${keyFacts.slice(0, 4).map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>` : ""}
+      ${canExpand ? `
+        <details>
+          <summary>展开片段</summary>
+          <pre>${escapeHtml(content)}</pre>
+        </details>
+      ` : ""}
+    </article>
+  `;
+}
+
 function getWorldbookMember(userId) {
   const members = state.overview?.worldbook?.members || [];
   return members.find((item) => item.user_id === userId);
+}
+
+function findWorldbookLivingMemoryPanel(userId) {
+  return Array.from(document.querySelectorAll("[data-worldbook-living-memory-panel]"))
+    .find((panel) => panel.dataset.worldbookLivingMemoryPanel === userId);
+}
+
+function closeWorldbookLivingMemory(userId) {
+  if (!userId) return;
+  delete state.worldbookLivingMemory[userId];
+  const panel = findWorldbookLivingMemoryPanel(userId);
+  if (panel) panel.innerHTML = "";
+}
+
+async function loadWorldbookLivingMemory(userId, button) {
+  if (!userId) return;
+  if (state.worldbookLivingMemory[userId] && !state.worldbookLivingMemory[userId].loading) {
+    closeWorldbookLivingMemory(userId);
+    return;
+  }
+  const panel = findWorldbookLivingMemoryPanel(userId);
+  const requestId = ++state.worldbookLivingMemoryRequestSeq;
+  state.worldbookLivingMemory[userId] = { loading: true, requestId };
+  if (panel) panel.innerHTML = worldbookLivingMemoryPanel(userId);
+  setActionBusy(button, true);
+  try {
+    const result = await fetchJson(`/worldbook/member/livingmemory?user_id=${encodeURIComponent(userId)}&limit=24`);
+    if (state.worldbookLivingMemory[userId]?.requestId !== requestId) return;
+    state.worldbookLivingMemory[userId] = result || { items: [] };
+    if (panel) panel.innerHTML = worldbookLivingMemoryPanel(userId);
+    showToast(result?.message || "LivingMemory 查询完成");
+  } catch (error) {
+    if (state.worldbookLivingMemory[userId]?.requestId !== requestId) return;
+    state.worldbookLivingMemory[userId] = { error: error.message || "查询失败", items: [] };
+    if (panel) panel.innerHTML = worldbookLivingMemoryPanel(userId);
+    showToast(`查询失败：${error.message}`, "error");
+  } finally {
+    setActionBusy(button, false);
+  }
 }
 
 async function handleWorldbookMemberAction(button) {
@@ -3919,6 +4234,14 @@ async function handleWorldbookMemberAction(button) {
       details.open = true;
       details.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
+    return;
+  }
+  if (button.dataset.worldbookLivingMemory !== undefined) {
+    await loadWorldbookLivingMemory(button.dataset.worldbookLivingMemory, button);
+    return;
+  }
+  if (button.dataset.worldbookLivingMemoryClose !== undefined) {
+    closeWorldbookLivingMemory(button.dataset.worldbookLivingMemoryClose);
     return;
   }
   if (button.dataset.worldbookMember !== undefined) {
@@ -7073,7 +7396,7 @@ function renderFeatureSwitches() {
   const groups = extraKeys.length
     ? [...featureGroups, { title: "其他", note: "来自配置但暂未归入固定分组的开关。", keys: extraKeys }]
     : featureGroups;
-  const visibleDraftKeys = Object.keys(state.featureDraft || {}).filter(visibleFeatureSwitchKey);
+  const visibleDraftKeys = visibleTopLevelFeatureKeys(state.featureDraft || {});
   const total = visibleDraftKeys.length;
   const enabled = visibleDraftKeys.filter((key) => state.featureDraft[key]).length;
   const riskyEnabled = ["enable_group_interjection", "enable_bilibili_boredom_watch", isPrivateReadingAvailable() ? "enable_private_reading_boredom_read" : "", isPrivateReadingAvailable() ? "enable_private_reading_ask_recommendation" : "", "enable_unanswered_screen_peek_followup"]
@@ -7082,7 +7405,7 @@ function renderFeatureSwitches() {
     <section class="feature-summary-card ok">
       <span>已开启</span>
       <b>${escapeHtml(enabled)} / ${escapeHtml(total)}</b>
-      <small>当前功能开关</small>
+      <small>当前主开关</small>
     </section>
     <section class="feature-summary-card">
       <span>基础安全项</span>
@@ -7163,7 +7486,7 @@ function featureSwitchItem(key) {
 }
 
 function featureGroupForKey(key) {
-  const parentKey = embeddedFeatureParentByKey[key] || key;
+  const parentKey = topLevelFeatureKey(key);
   const group = featureGroups.find((item) => item.keys.includes(parentKey));
   return group ? group.title : "其他";
 }
@@ -7296,12 +7619,13 @@ function featureDependencyLines(key) {
   const dependencies = [];
   if (key !== "enable_group_companion" && key.startsWith("enable_group_")) dependencies.push(["依赖", "群聊总开关"]);
   if (key === "enable_group_conversation_followup") dependencies.push(["依赖", "群聊场景感知"]);
-  if (["enable_companion_memory", "enable_expression_learning", "enable_companion_reply_planner", "enable_intent_emotion_analysis", "enable_response_self_review", "enable_passive_topic_suppression", "enable_relationship_state_machine", "enable_dialogue_episode_memory", "enable_open_loop_tracking"].includes(key)) {
+  if (["enable_companion_memory", "enable_expression_learning", "enable_companion_reply_planner", "enable_intent_emotion_analysis", "enable_response_self_review", "enable_passive_topic_suppression", "enable_relationship_state_machine", "enable_emotion_simulation", "enable_dialogue_episode_memory", "enable_open_loop_tracking"].includes(key)) {
     dependencies.push(["依赖", "陪伴风格整合"]);
   }
   if (["enable_bilibili_boredom_watch"].includes(key)) dependencies.push(["依赖", "B 站能力可用"]);
   if (["enable_web_exploration", "enable_web_exploration_boredom_search"].includes(key)) dependencies.push(["依赖", "AstrBot 网页搜索"]);
   if (["enable_qzone_life_publish"].includes(key)) dependencies.push(["依赖", "QQ 空间动态层"]);
+  if (key === "enable_qzone_emotional_vent_publish") dependencies.push(["依赖", "情绪模拟 + QQ 空间动态层"]);
   if (key === "enable_photo_text_action") dependencies.push(["依赖", "ComfyUI 或在线图片 API"]);
   if (key === "enable_tts_enhancement") dependencies.push(["依赖", "当前会话 TTS provider"]);
   if (key === "enable_yesterday_screen_diary_context") dependencies.push(["依赖", "screen_companion 昨日观察日记"]);
@@ -7333,9 +7657,9 @@ const featureDetailGuides = {
     disabled: "不会继续学习新口癖，回复会更少带用户个人语气痕迹。",
   },
   enable_tts_enhancement: {
-    summary: "支持聊天文本保留中文、<tts> 内生成外语语音，并把 TTS 生成路径、标签规范化、语种控制和发送前朗读文本清洗统一收口处理。",
+    summary: "支持聊天文本保留中文、<tts> 内生成外语语音，并把 TTS 生成路径、标签规范化、语种控制、语音后中文释义和发送前朗读文本清洗统一收口处理。",
     trigger: "LLM 请求、LLM 回复和发送前都会参与；hybrid/direct/convert 三种路径行为不同。",
-    enabled: "可处理标准或错拼 <tts> 标签，并按配置把纯文本短回复转换为语音。",
+    enabled: "可处理标准或错拼 <tts> 标签，外语语音块缺少中文含义时会自动补一句，并按配置把纯文本短回复转换为语音。",
     disabled: "只保留本插件原有主动 voice 行为，不额外改写普通回复。",
   },
   enable_companion_reply_planner: {
@@ -7345,10 +7669,10 @@ const featureDetailGuides = {
     disabled: "直接交给主模型回复，少一层陪伴策略判断。",
   },
   enable_intent_emotion_analysis: {
-    summary: "识别用户这句话背后的情绪和真实意图，用于关系状态、回复策略和主动边界。",
+    summary: "把用户这句话背后的情绪和真实意图整理成可注入的意图画像，用于回复策略和页面查看。",
     trigger: "私聊出现情绪、暗示、玩笑或不明确请求时。",
-    enabled: "Bot 更容易分清撒娇、抱怨、求助、玩梗和普通聊天。",
-    disabled: "仍会回复，但对隐含情绪和关系变化的理解会变弱。",
+    enabled: "Bot 更容易分清撒娇、抱怨、求助、玩梗和普通聊天，并把近期意图写入提示词。",
+    disabled: "不再向提示词注入意图画像；情绪模拟和关系状态机仍会使用轻量内部规则维护自己的状态。",
   },
   enable_response_self_review: {
     summary: "发送前检查回复是否生硬、越界、重复、太像系统提示或不符合人格。",
@@ -7364,9 +7688,15 @@ const featureDetailGuides = {
   },
   enable_relationship_state_machine: {
     summary: "维护陌生、熟悉、亲近、疏离等关系阶段，并把变化反馈给回复和主动行为。",
-    trigger: "私聊互动、情绪变化、长期未联系或重要事件后。",
+    trigger: "私聊互动、用户表达边界、长期未联系或重要事件后。",
     enabled: "Bot 会根据关系阶段调整距离感、称呼和主动程度。",
     disabled: "关系更像静态设定，变化感会弱一些。",
+  },
+  enable_emotion_simulation: {
+    summary: "维护 Bot 自身的短期情绪余波，例如受伤、拒近、恢复和正向亲近。",
+    trigger: "私聊出现伤害性表达、道歉、安抚、夸奖或亲密互动后；不强依赖意图画像开关。",
+    enabled: "Bot 会在极端受伤时短期收敛、暂停主动贴近；可选启用 QQ 空间发泄说说。",
+    disabled: "Bot 不维护自身情绪余波，关系状态机仍可处理边界和距离感。",
   },
   enable_dialogue_episode_memory: {
     summary: "把连续私聊整理成“共同经历”片段，方便之后自然接上以前聊过的事。",
@@ -7419,11 +7749,11 @@ const featureDetailGuides = {
   enable_message_debounce: {
     summary: "分别控制文本、图片和合并转发的补话等待；旧版语义收口等待已并入文本等待。",
     trigger: "私聊或群聊消息进入回复链前。",
-    enabled: "不同消息类型按各自秒数等待补充说明；智能文本收口开启后，文本只在小模型判断“用户还没说完”时短等。",
+    enabled: "不同消息类型按各自秒数等待补充说明；智能文本收口开启后，完整文本本地快判放行，疑似半句才短等。",
     disabled: "不等待用户补话，只保留重复上报去重。",
   },
   enable_smart_message_debounce: {
-    summary: "用小模型判断用户这句话是否还没说完，并把误判样本带给下次判断。",
+    summary: "先用本地规则快速放行完整文本，只把疑似半句话交给小模型短时确认，并把误判样本带给下次判断。",
     trigger: "目标私聊文本、群聊中明确对 Bot 说话的文本进入回复链前。",
     enabled: "疑似起手、转折、列举或停在半句话时会短等补充；完整问句、请求、贴贴和问候会直接回复。",
     disabled: "文本按固定补话等待秒数处理，不额外调用小模型判断。",
@@ -9087,7 +9417,7 @@ $("#groupFilter").addEventListener("input", renderGroups);
 $("#worldbookMemberFilter").addEventListener("input", renderWorldbook);
 $("#featureFilter").addEventListener("input", renderFeatureSwitches);
 $("#worldbookMembers").addEventListener("click", async (event) => {
-  const button = event.target instanceof Element ? event.target.closest("[data-worldbook-edit], [data-worldbook-member], [data-worldbook-save], [data-worldbook-memory-toggle], [data-worldbook-memory-delete], [data-worldbook-observation-accept], [data-worldbook-observation-reject], [data-worldbook-delete]") : null;
+  const button = event.target instanceof Element ? event.target.closest("[data-worldbook-living-memory], [data-worldbook-living-memory-close], [data-worldbook-edit], [data-worldbook-member], [data-worldbook-save], [data-worldbook-memory-toggle], [data-worldbook-memory-delete], [data-worldbook-observation-accept], [data-worldbook-observation-reject], [data-worldbook-delete]") : null;
   if (!button) return;
   event.preventDefault();
   await handleWorldbookMemberAction(button);

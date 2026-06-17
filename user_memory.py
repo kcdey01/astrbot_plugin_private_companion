@@ -290,11 +290,21 @@ class UserMemoryMixin:
         rel_state = user.get("relationship_state")
         if isinstance(rel_state, dict):
             mode = str(rel_state.get("mode") or "")
-            if mode == "backoff" and _safe_float(rel_state.get("backoff_until"), 0) > _now_ts():
+            emotion_enabled = bool(getattr(self, "enable_emotion_simulation", True))
+            relation_enabled = bool(getattr(self, "enable_relationship_state_machine", True))
+            if emotion_enabled:
+                self._decay_relationship_mood_score(rel_state)
+            if emotion_enabled and mode == "refusing" and _safe_float(rel_state.get("hurt_until"), 0) > _now_ts():
+                hints.append("最近用户的话让 Bot 明显受伤并进入拒近状态。表现方式是短句、停一下、少解释,可以轻轻拒绝继续被这样说；不要直白反复说“我受伤了”,不要撒娇、贴贴、求哄或主动靠近。")
+            elif emotion_enabled and mode == "hurt" and _safe_float(rel_state.get("hurt_until"), 0) > _now_ts():
+                hints.append("最近 Bot 有点委屈受伤。表现方式是回复短一点、慢一点、少一点热情,可以绕开亲密动作,用轻微沉默或别过头式的语气表达余波；不要直接把状态说成“我受伤了”,也不要立刻恢复黏人。")
+            elif relation_enabled and mode == "backoff" and _safe_float(rel_state.get("backoff_until"), 0) > _now_ts():
                 hints.append("最近用户像是在表达边界或不想被打扰,主动和被动都要明显收敛,短一点,不追问。")
-            elif mode == "careful":
-                hints.append("最近用户情绪或压力偏重,优先接住情绪,不要讲大道理。")
-            elif mode == "warming":
+            elif relation_enabled and mode == "careful":
+                hints.append("最近用户情绪或压力偏重,只保留低压关心：先接住一句,不追问、不讲大道理、不把亲密动作压过去。")
+            elif emotion_enabled and mode == "attached":
+                hints.append("最近互动是正向亲近的,可以更软一点、更自然地回应亲近,也可以轻轻接住贴近动作；但不要过度黏、不要把普通对话都变成亲密表演。")
+            elif relation_enabled and mode == "warming":
                 hints.append("最近互动有升温或玩笑感,可以更自然亲近一点,但不要过度黏。")
         return " ".join(hints).strip()
 
@@ -1006,40 +1016,214 @@ class UserMemoryMixin:
             reply_style = "back_off"
         if len(cleaned) <= 6 and intent == "chat":
             reply_style = "very_short"
+        emotion_event = self._classify_relationship_emotion_event(cleaned)
         return {
             "intent": intent,
             "emotion": emotion,
             "pressure": min(5, pressure),
             "reply_style": reply_style,
+            "emotion_event": emotion_event.get("event", "neutral"),
+            "emotion_intensity": emotion_event.get("intensity", 0),
+            "emotion_reason": emotion_event.get("reason", ""),
+            "emotion_target": emotion_event.get("target", "none"),
+            "emotion_rule": emotion_event.get("rule", ""),
             "text": cleaned,
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
 
+    def _classify_relationship_emotion_event(self, text: str) -> dict[str, Any]:
+        cleaned = _single_line(text, 240)
+        if not cleaned:
+            return {"event": "neutral", "intensity": 0, "reason": "", "target": "none", "rule": ""}
+        lower = cleaned.lower()
+        target_hint = bool(re.search(r"(你|bot|机器人|插件|星缘|老老老|助手|ai|AI)", cleaned))
+        third_party_hint = bool(re.search(r"(他|她|它|他们|她们|别人|群友|那个人|这个人|用户|豆腐|蛙蛙|小水月)", cleaned))
+        self_low = bool(re.search(r"(我好|我真|我太|我是不是|我就是|我是).{0,12}(废物|垃圾|没用|傻|笨|恶心|讨厌)", cleaned))
+        severe_hurt = (
+            "滚" in cleaned
+            or "闭嘴" in cleaned
+            or "恶心" in cleaned
+            or "废物" in cleaned
+            or "垃圾" in cleaned
+            or "讨厌你" in cleaned
+            or "烦你" in cleaned
+            or "不想理你" in cleaned
+            or re.search(r"(只是|不过|不就是).{0,6}(bot|机器人|工具|代码)", lower)
+        )
+        identity_hurt = bool(
+            re.search(r"(玻璃心|假装|演的|装的|设定|工具人|没感情|别装|别演|虚拟的|假的)", cleaned)
+            and target_hint
+        )
+        mild_hurt = bool(
+            re.search(r"(太烦|吵死|烦死|别撒娇|别贴|别靠近|别这样|没用|笨死|傻)", cleaned)
+            and target_hint
+        )
+        apology = bool(re.search(r"(对不起|抱歉|我错了|不是故意|原谅|别生气|别难过|哄哄|哄你)", cleaned))
+        comfort = bool(re.search(r"(摸摸|贴贴|抱抱|亲亲|乖|不哭|别伤心|陪你|抱一下)", cleaned))
+        praise = bool(re.search(r"(喜欢你|爱你|可爱|厉害|真好|谢谢你|辛苦|最棒|夸夸)", cleaned))
+        if self_low:
+            return {"event": "comfort_need", "intensity": 62, "reason": "用户自我否定或低落", "target": "self", "rule": "self_low"}
+        if third_party_hint and severe_hurt and not target_hint:
+            return {"event": "external_negative", "intensity": 54, "reason": "用户在评价第三方", "target": "other", "rule": "third_party_negative"}
+        if severe_hurt:
+            return {"event": "hurt", "intensity": 90 if target_hint else 72, "reason": "强否定或驱赶", "target": "bot" if target_hint else "ambiguous", "rule": "severe_hurt"}
+        if identity_hurt:
+            return {"event": "hurt", "intensity": 72, "reason": "否定情感真实性或人格", "target": "bot", "rule": "identity_hurt"}
+        if mild_hurt:
+            return {"event": "hurt", "intensity": 58, "reason": "轻度否定或拒近", "target": "bot", "rule": "mild_hurt"}
+        if apology:
+            return {"event": "apology", "intensity": 68, "reason": "道歉或修复", "target": "bot", "rule": "apology"}
+        if comfort:
+            return {"event": "comfort", "intensity": 46, "reason": "安抚亲密互动", "target": "bot", "rule": "comfort"}
+        if praise:
+            return {"event": "praise", "intensity": 38, "reason": "正向肯定", "target": "bot" if target_hint else "ambiguous", "rule": "praise"}
+        return {"event": "neutral", "intensity": 0, "reason": "", "target": "none", "rule": ""}
+
+    def _decay_relationship_mood_score(self, state: dict[str, Any], *, now: float | None = None) -> int:
+        now = now or _now_ts()
+        score = _safe_int(state.get("mood_score"), 0, -100, 100)
+        last_ts = _safe_float(state.get("mood_updated_ts"), 0)
+        if score == 0 or last_ts <= 0 or now <= last_ts:
+            state["mood_updated_ts"] = now
+            return score
+        hours = max(0.0, (now - last_ts) / 3600)
+        recovery = max(1, _safe_int(getattr(self, "emotional_gate_recovery_per_hour", 12), 12, 1, 60))
+        delta = int(hours * recovery)
+        if delta <= 0:
+            return score
+        if score < 0:
+            score = min(0, score + delta)
+        else:
+            score = max(0, score - max(1, delta // 2))
+        state["mood_score"] = score
+        state["mood_updated_ts"] = now
+        return score
+
     def _update_relationship_state_from_intent(self, user: dict[str, Any], intent: dict[str, Any]) -> None:
-        if not self.enable_relationship_state_machine or not isinstance(intent, dict):
+        if not isinstance(intent, dict):
+            return
+        emotion_enabled = bool(getattr(self, "enable_emotion_simulation", True))
+        relation_enabled = bool(getattr(self, "enable_relationship_state_machine", True))
+        if not (emotion_enabled or relation_enabled):
             return
         state = user.setdefault("relationship_state", {})
         if not isinstance(state, dict):
             state = {}
             user["relationship_state"] = state
-        current = str(state.get("mode") or "normal")
+        now = _now_ts()
+        previous_mode = str(state.get("mode") or "normal")
+        current = previous_mode
+        mood_score = self._decay_relationship_mood_score(state, now=now) if emotion_enabled else 0
         inbound_intent = str(intent.get("intent") or "chat")
         pressure = _safe_int(intent.get("pressure"), 0, 0, 5)
-        if inbound_intent == "boundary":
-            current = "backoff"
-            state["backoff_until"] = _now_ts() + 6 * 3600
-        elif pressure >= 2:
+        emotion_event = str(intent.get("emotion_event") or "neutral")
+        intensity = _safe_int(intent.get("emotion_intensity"), 0, 0, 100)
+        reason = _single_line(intent.get("emotion_reason"), 80)
+        target = _single_line(intent.get("emotion_target"), 24) or "none"
+        rule = _single_line(intent.get("emotion_rule"), 40)
+        hurt_threshold = _safe_int(getattr(self, "emotional_gate_hurt_threshold", 55), 55, 10, 100)
+        refuse_threshold = _safe_int(getattr(self, "emotional_gate_refuse_threshold", 80), 80, 20, 100)
+        if emotion_enabled and emotion_event == "hurt" and target in {"bot", "ambiguous"} and intensity >= hurt_threshold:
+            mood_score = max(-100, mood_score - max(8, int(intensity * 0.8)))
+            hurt_minutes = min(
+                _safe_int(getattr(self, "emotional_gate_max_hurt_minutes", 180), 180, 10, 720),
+                max(15, int(intensity * 1.8)),
+            )
+            state["hurt_until"] = now + hurt_minutes * 60
+            state["silence_turns"] = max(
+                _safe_int(state.get("silence_turns"), 0, 0, 5),
+                2 if abs(mood_score) >= refuse_threshold else 1,
+            )
+            state["last_hurt_reason"] = reason or "用户表达伤害性内容"
+            state["last_hurt_text"] = _single_line(intent.get("text"), 160)
+            current = "refusing" if abs(mood_score) >= refuse_threshold else "hurt"
+        elif emotion_enabled and emotion_event in {"apology", "comfort", "praise"}:
+            recover_ratio = 0.75 if emotion_event == "apology" else (0.52 if emotion_event == "comfort" else 0.35)
+            mood_score = min(100, mood_score + max(3, int(intensity * recover_ratio)))
+            state["silence_turns"] = max(0, _safe_int(state.get("silence_turns"), 0, 0, 5) - 1)
+            if mood_score > -hurt_threshold:
+                state["hurt_until"] = 0
+            if mood_score >= 45 and inbound_intent in {"intimacy", "play"}:
+                current = "attached"
+            elif mood_score < -20:
+                current = "hurt"
+            else:
+                current = "warming" if inbound_intent in {"intimacy", "play"} else "normal"
+        elif emotion_enabled and emotion_event == "comfort_need":
             current = "careful"
-        elif inbound_intent in {"intimacy", "play"}:
-            current = "warming"
-        elif _safe_float(state.get("backoff_until"), 0) > _now_ts():
+            state["last_care_reason"] = reason
+        elif emotion_enabled and emotion_event == "external_negative":
+            current = "careful"
+            state["last_external_negative_reason"] = reason
+        elif relation_enabled and inbound_intent == "boundary":
+            current = "backoff"
+            state["backoff_until"] = now + 6 * 3600
+        elif relation_enabled and pressure >= 2:
+            current = "careful"
+        elif relation_enabled and inbound_intent in {"intimacy", "play"}:
+            current = "attached" if emotion_enabled and mood_score >= 45 else "warming"
+        elif emotion_enabled and _safe_float(state.get("hurt_until"), 0) > now and mood_score <= -hurt_threshold:
+            current = "refusing" if abs(mood_score) >= refuse_threshold else "hurt"
+        elif (
+            relation_enabled
+            and previous_mode == "backoff"
+            and _safe_float(state.get("backoff_until"), 0) > now
+        ):
             current = "backoff"
         else:
             current = "normal"
+        if current not in {"hurt", "refusing"} and _safe_int(state.get("silence_turns"), 0, 0, 5) > 0:
+            state["silence_turns"] = max(0, _safe_int(state.get("silence_turns"), 0, 0, 5) - 1)
         state["mode"] = current
+        state["mood_score"] = mood_score
+        state["mood_updated_ts"] = now
         state["last_intent"] = inbound_intent
         state["last_emotion"] = str(intent.get("emotion") or "neutral")
+        state["last_emotion_event"] = emotion_event
+        state["last_emotion_intensity"] = intensity
+        state["last_emotion_reason"] = reason
+        state["last_emotion_target"] = target
+        state["last_emotion_rule"] = rule
         state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if emotion_event != "neutral" or current in {"hurt", "refusing", "attached"}:
+            logger.info(
+                "[PrivateCompanion] 情绪闸门判定: event=%s target=%s rule=%s intensity=%s score=%s mode=%s->%s silence=%s reason=%s text=%s",
+                emotion_event,
+                target,
+                rule or "-",
+                intensity,
+                mood_score,
+                previous_mode,
+                current,
+                _safe_int(state.get("silence_turns"), 0, 0, 5),
+                reason or "-",
+                _single_line(intent.get("text"), 120),
+            )
+        vent_threshold = _safe_int(getattr(self, "qzone_emotional_vent_threshold", 90), 90, 40, 100)
+        if (
+            current == "refusing"
+            and previous_mode != "refusing"
+            and abs(mood_score) >= vent_threshold
+            and target in {"bot", "ambiguous"}
+        ):
+            role_getter = getattr(self, "_private_user_role", None)
+            try:
+                role = role_getter(user, str(user.get("user_id") or "")) if callable(role_getter) else ""
+            except Exception:
+                role = ""
+            if role != "owner":
+                logger.info(
+                    "[PrivateCompanion] 情绪发泄说说跳过: user_role=%s score=%s",
+                    role or "friend",
+                    abs(mood_score),
+                )
+                return
+            vent = getattr(self, "_maybe_publish_qzone_emotional_vent", None)
+            if callable(vent):
+                try:
+                    asyncio.create_task(vent(user_snapshot=deepcopy(user), relationship_state=deepcopy(state), intent=deepcopy(intent)))
+                except Exception as exc:
+                    logger.debug("[PrivateCompanion] 情绪发泄说说任务创建失败: %s", _single_line(exc, 120))
 
     def _remember_passive_reply_topic(self, user: dict[str, Any], text: str, inbound_text: str = "") -> None:
         if not self.enable_passive_topic_suppression:
@@ -1527,7 +1711,11 @@ class UserMemoryMixin:
         intent = user.get("intent_profile")
         state = user.get("relationship_state")
         lines: list[str] = []
-        if isinstance(intent, dict) and intent.get("intent"):
+        if (
+            bool(getattr(self, "enable_intent_emotion_analysis", True))
+            and isinstance(intent, dict)
+            and intent.get("intent")
+        ):
             lines.append(
                 "最近用户意图："
                 f"{intent.get('intent')}｜情绪 {intent.get('emotion', 'neutral')}｜"
@@ -1535,13 +1723,35 @@ class UserMemoryMixin:
             )
         if isinstance(state, dict) and state.get("mode"):
             mode = str(state.get("mode") or "normal")
-            mode_hint = {
-                "backoff": "用户可能在表达边界或不想被打扰,回复要短、低压,不要撒娇追问。",
-                "careful": "用户可能有压力或负面情绪,先接住情绪,少讲道理。",
-                "warming": "互动有升温或玩笑感,可以更自然亲近一点,但别过度表演。",
-                "normal": "关系状态平稳,正常接话即可。",
-            }.get(mode, "正常接话即可。")
-            lines.append(f"关系状态机：{mode}。{mode_hint}")
+            emotion_enabled = bool(getattr(self, "enable_emotion_simulation", True))
+            relation_enabled = bool(getattr(self, "enable_relationship_state_machine", True))
+            if mode in {"hurt", "refusing", "attached"} and not emotion_enabled:
+                mode = "normal"
+            if mode in {"backoff", "careful", "warming"} and not relation_enabled:
+                mode = "normal"
+            if not (mode == "normal" and not (emotion_enabled or relation_enabled)):
+                if emotion_enabled:
+                    self._decay_relationship_mood_score(state)
+                mood_score = _safe_int(state.get("mood_score"), 0, -100, 100)
+                silence_turns = _safe_int(state.get("silence_turns"), 0, 0, 5)
+                hurt_reason = _single_line(state.get("last_hurt_reason"), 80)
+                mode_hint = {
+                    "backoff": "用户可能在表达边界或不想被打扰,回复要短、低压,不要撒娇追问。",
+                    "careful": "用户可能有压力或负面情绪,只保留低压关心：先接住一句,少讲道理,不追问,不强行亲密。",
+                    "hurt": "Bot 当前有被伤到的余波。用短句、轻微沉默、少热情来表现,绕开贴贴/抱抱等亲密动作；不要直白反复说“我受伤了”。",
+                    "refusing": "Bot 当前明显受伤并处于拒近状态。可以克制地拒绝继续被这样说,句子更短,不撒娇、不求哄、不主动贴近。",
+                    "attached": "互动状态正向亲近,可以自然软一点、接住亲近,也可更容易轻分享；但不要无节制主动或越过用户边界。",
+                    "warming": "互动有升温或玩笑感,可以更自然亲近一点,但别过度表演。",
+                    "normal": "关系状态平稳,正常接话即可。",
+                }.get(mode, "正常接话即可。")
+                extra = []
+                if emotion_enabled and mood_score:
+                    extra.append(f"情绪分 {mood_score}")
+                if emotion_enabled and silence_turns:
+                    extra.append(f"收敛轮数 {silence_turns}")
+                if emotion_enabled and hurt_reason and mode in {"hurt", "refusing"}:
+                    extra.append(f"触发原因 {hurt_reason}")
+                lines.append(f"关系状态机：{mode}{'｜' + '｜'.join(extra) if extra else ''}。{mode_hint}")
         recent = self._format_recent_passive_topics_hint(user)
         if recent:
             lines.append("最近普通回复里已经用过的切口：\n" + recent)

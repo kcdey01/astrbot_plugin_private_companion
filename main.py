@@ -301,7 +301,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.9.0",
+    "3.9.1",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -473,6 +473,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.enable_smart_message_debounce = self._cfg_bool(c, "enable_smart_message_debounce", False)
         self.smart_message_debounce_provider_id = self._cfg_str(c, "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "")
         self.smart_message_debounce_wait_seconds = self._cfg_float(c, "smart_message_debounce_wait_seconds", 3.0, 0.0)
+        self.smart_message_debounce_model_timeout_seconds = self._cfg_float(c, "smart_message_debounce_model_timeout_seconds", 0.8, 0.2)
         self.smart_message_debounce_learning_window_seconds = self._cfg_float(c, "smart_message_debounce_learning_window_seconds", 8.0, 1.0)
         self.smart_message_debounce_examples_limit = self._cfg_int(c, "smart_message_debounce_examples_limit", 8, 0, 30)
         legacy_semantic_debounce_seconds = self._cfg_float(c, "semantic_message_debounce_seconds", 8.0, 0.0)
@@ -701,6 +702,11 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.enable_response_self_review = self._cfg_bool(c, "enable_response_self_review", True)
         self.enable_passive_topic_suppression = self._cfg_bool(c, "enable_passive_topic_suppression", True)
         self.enable_relationship_state_machine = self._cfg_bool(c, "enable_relationship_state_machine", True)
+        self.enable_emotion_simulation = self._cfg_bool(c, "enable_emotion_simulation", True)
+        self.emotional_gate_hurt_threshold = self._cfg_int(c, "emotional_gate_hurt_threshold", 55, 10, 100)
+        self.emotional_gate_refuse_threshold = self._cfg_int(c, "emotional_gate_refuse_threshold", 80, 20, 100)
+        self.emotional_gate_recovery_per_hour = self._cfg_int(c, "emotional_gate_recovery_per_hour", 12, 1, 60)
+        self.emotional_gate_max_hurt_minutes = self._cfg_int(c, "emotional_gate_max_hurt_minutes", 180, 10, 720)
         self.enable_dialogue_episode_memory = self._cfg_bool(c, "enable_dialogue_episode_memory", True)
         self.enable_open_loop_tracking = self._cfg_bool(c, "enable_open_loop_tracking", True)
         self.enable_user_habit_learning = self._cfg_bool(c, "enable_user_habit_learning", True)
@@ -857,6 +863,10 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.enable_qzone_life_publish = self._cfg_bool(c, "enable_qzone_life_publish", False)
         self.qzone_life_publish_min_interval_hours = self._cfg_int(c, "qzone_life_publish_min_interval_hours", 24, 4, 168)
         self.qzone_life_publish_probability = min(1.0, self._cfg_float(c, "qzone_life_publish_probability", 0.18, 0.0))
+        self.enable_qzone_emotional_vent_publish = self._cfg_bool(c, "enable_qzone_emotional_vent_publish", False)
+        self.qzone_emotional_vent_threshold = self._cfg_int(c, "qzone_emotional_vent_threshold", 90, 40, 100)
+        self.qzone_emotional_vent_cooldown_hours = self._cfg_int(c, "qzone_emotional_vent_cooldown_hours", 72, 4, 336)
+        self.qzone_emotional_vent_probability = min(1.0, self._cfg_float(c, "qzone_emotional_vent_probability", 0.35, 0.0))
         self.enable_jm_cosmos_integration = self._cfg_bool(
             c,
             "enable_private_reading_integration",
@@ -3084,18 +3094,21 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         sender_name=sender_display_name,
                         private_chat=True,
                     )
-                    wait_seconds = smart_wait if smart_wait > 0 else self._message_debounce_seconds("text")
+                    smart_result = getattr(event, "private_companion_smart_message_debounce_result", None)
+                    smart_decision = str(smart_result.get("decision") or "") if isinstance(smart_result, dict) else ""
+                    smart_handled = smart_decision in {"complete", "incomplete"}
+                    wait_seconds = smart_wait if smart_handled else self._message_debounce_seconds("text")
                     if self._note_semantic_message_buffer(
                         key,
                         text,
                         wait_seconds=wait_seconds,
-                        smart_debounce={"enabled": smart_wait > 0, "decision": "incomplete" if smart_wait > 0 else "fixed"},
+                        smart_debounce={"enabled": smart_handled, "decision": smart_decision or "fixed"},
                         kind="text",
                     ):
                         self._schedule_data_save()
                         event.stop_event()
                         return
-                    if smart_wait > 0:
+                    if smart_handled:
                         self._schedule_data_save()
             user["umo"] = event.unified_msg_origin
             self._note_private_display_name_observation(user, user_id, sender_display_name, now=received_ts)
@@ -3146,9 +3159,14 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 self._update_open_loops_from_message(user, text)
                 self._update_action_preferences_from_message(user, text)
                 self._update_user_behavior_habits_from_message(user, text)
-                if self.enable_intent_emotion_analysis:
+                if (
+                    self.enable_intent_emotion_analysis
+                    or self.enable_relationship_state_machine
+                    or self.enable_emotion_simulation
+                ):
                     intent_profile = self._analyze_inbound_intent(text)
-                    user["intent_profile"] = intent_profile
+                    if self.enable_intent_emotion_analysis:
+                        user["intent_profile"] = intent_profile
                     self._update_relationship_state_from_intent(user, intent_profile)
                 if is_target_user and self._cancel_inbound_conflicting_greeting(user, now=_now_ts()):
                     logger.info("[PrivateCompanion] 用户已在当前问候时段自然来聊,已取消冲突问候候选: %s", user_id)
@@ -3501,6 +3519,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     sender_name=sender_name,
                     private_chat=False,
                 )
+            group_smart_result = getattr(event, "private_companion_smart_message_debounce_result", None)
+            group_smart_decision = str(group_smart_result.get("decision") or "") if isinstance(group_smart_result, dict) else ""
+            group_smart_handled = group_smart_decision in {"complete", "incomplete"}
             if (
                 talking_to_bot
                 and not high_intensity_state.get("active")
@@ -3508,8 +3529,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     group_buffer_key,
                     text,
                     sender_name=sender_name,
-                    wait_seconds=group_smart_wait if group_smart_wait > 0 else None,
-                    smart_debounce={"enabled": group_smart_wait > 0, "decision": "incomplete" if group_smart_wait > 0 else "fixed"},
+                    wait_seconds=group_smart_wait if group_smart_handled else None,
+                    smart_debounce={"enabled": group_smart_handled, "decision": group_smart_decision or "fixed"},
                     kind="group_text",
                 )
             ):

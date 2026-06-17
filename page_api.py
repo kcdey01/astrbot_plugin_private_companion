@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import re
 import shutil
@@ -58,6 +59,7 @@ class PrivateCompanionPageApi:
             ("/bookshelf/tags", self.update_bookshelf_item_tags, ["POST"], "Private Companion Page update bookshelf item tags"),
             ("/bookshelf/comments/update", self.update_bookshelf_item_comments, ["POST"], "Private Companion Page update bookshelf item comments"),
             ("/worldbook/import", self.import_worldbook, ["POST"], "Private Companion Page import worldbook"),
+            ("/worldbook/member/livingmemory", self.get_worldbook_member_livingmemory, ["GET"], "Private Companion Page worldbook member LivingMemory"),
             ("/worldbook/member/update", self.update_worldbook_member, ["POST"], "Private Companion Page update worldbook member"),
             ("/worldbook/observations/clear", self.clear_worldbook_pending_observations, ["POST"], "Private Companion Page clear worldbook pending observations"),
             ("/worldbook/group/update", self.update_worldbook_group, ["POST"], "Private Companion Page update worldbook group"),
@@ -511,6 +513,9 @@ class PrivateCompanionPageApi:
                     user["screen_peek_today"] = 0
                 if payload.get("clear_schedule"):
                     self.plugin._clear_pending_proactive_plan(user)
+                if payload.get("clear_emotion_state"):
+                    user["intent_profile"] = {}
+                    user["relationship_state"] = {}
                 if payload.get("clear_learning"):
                     for key, empty in (
                         ("companion_memory", {}),
@@ -1980,6 +1985,54 @@ class PrivateCompanionPageApi:
             logger.error(f"[PrivateCompanionPage] 更新关系节点失败: {exc}", exc_info=True)
             return self._error(str(exc))
 
+    async def get_worldbook_member_livingmemory(self) -> dict[str, Any]:
+        user_id = self._normalize_worldbook_member_id(self._single_line(request.args.get("user_id"), 80))
+        if not user_id:
+            return self._error("缺少 user_id")
+        limit = self._query_int("limit", 20, 1, 60)
+        try:
+            async with self.plugin._data_lock:
+                profiles = self.plugin.data.get("worldbook_member_profiles") if isinstance(self.plugin.data.get("worldbook_member_profiles"), dict) else {}
+                profile = profiles.get(user_id)
+                if not isinstance(profile, dict):
+                    return self._error("没有找到对应关系节点")
+                profile_copy = deepcopy(profile)
+            token_bundle = self._worldbook_member_livingmemory_tokens(user_id, profile_copy)
+            tokens = token_bundle.get("tokens", [])
+            db_path = self._livingmemory_db_path()
+            if not db_path:
+                return self._ok(
+                    {
+                        "available": False,
+                        "user_id": user_id,
+                        "tokens": tokens,
+                        "items": [],
+                        "total": 0,
+                        "message": "未找到 LivingMemory 数据库",
+                    }
+                )
+            items = await asyncio.to_thread(self._query_livingmemory_for_tokens, db_path, token_bundle, limit)
+            return self._ok(
+                {
+                    "available": True,
+                    "db_path": str(db_path),
+                    "user_id": user_id,
+                    "tokens": tokens,
+                    "primary_tokens": token_bundle.get("primary_tokens", []),
+                    "support_tokens": token_bundle.get("support_tokens", []),
+                    "items": items,
+                    "total": len(items),
+                    "filter_note": "默认仅召回命中 QQ/绑定身份/关系节点名称的记忆；别名和群名片只用于加分。",
+                    "message": f"已找到 {len(items)} 条 LivingMemory 相关记忆",
+                }
+            )
+        except sqlite3.OperationalError as exc:
+            logger.warning(f"[PrivateCompanionPage] 查询 LivingMemory 失败: {exc}")
+            return self._error(f"LivingMemory 数据库暂时不可读：{exc}")
+        except Exception as exc:
+            logger.error(f"[PrivateCompanionPage] 查询关系节点 LivingMemory 失败: {exc}", exc_info=True)
+            return self._error(str(exc))
+
     async def clear_worldbook_pending_observations(self) -> dict[str, Any]:
         payload = await request.get_json(silent=True) or {}
         user_id = self._single_line(payload.get("user_id"), 40)
@@ -2761,6 +2814,7 @@ class PrivateCompanionPageApi:
             "enable_llm_timer_scheduling",
             "enable_passive_topic_suppression",
             "enable_relationship_state_machine",
+            "enable_emotion_simulation",
             "enable_dialogue_episode_memory",
             "enable_open_loop_tracking",
             "enable_user_habit_learning",
@@ -2821,6 +2875,7 @@ class PrivateCompanionPageApi:
             "enable_web_exploration_boredom_search",
             "enable_qzone_integration",
             "enable_qzone_life_publish",
+            "enable_qzone_emotional_vent_publish",
             "enable_private_reading_integration",
             "enable_private_reading_boredom_read",
             "enable_private_reading_ask_recommendation",
@@ -2857,6 +2912,11 @@ class PrivateCompanionPageApi:
         values["enable_bilibili_boredom_watch"] = bool(bilibili_available and getattr(self.plugin, "enable_bilibili_boredom_watch", False))
         values["enable_qzone_integration"] = bool(qzone_available and getattr(self.plugin, "enable_qzone_integration", False))
         values["enable_qzone_life_publish"] = bool(qzone_available and getattr(self.plugin, "enable_qzone_life_publish", False))
+        values["enable_qzone_emotional_vent_publish"] = bool(
+            qzone_available
+            and getattr(self.plugin, "enable_emotion_simulation", False)
+            and getattr(self.plugin, "enable_qzone_emotional_vent_publish", False)
+        )
         values["enable_yesterday_screen_diary_context"] = bool(screen_companion_available and getattr(self.plugin, "enable_yesterday_screen_diary_context", False))
         values["enable_private_reading_integration"] = bool(private_reading_available and getattr(self.plugin, "enable_jm_cosmos_integration", False))
         values["enable_private_reading_boredom_read"] = bool(private_reading_available and getattr(self.plugin, "enable_jm_cosmos_boredom_read", False))
@@ -3160,6 +3220,10 @@ class PrivateCompanionPageApi:
             "max_dialogue_episodes",
             "user_habit_min_count",
             "user_habit_max_items",
+            "emotional_gate_hurt_threshold",
+            "emotional_gate_refuse_threshold",
+            "emotional_gate_recovery_per_hour",
+            "emotional_gate_max_hurt_minutes",
             "enable_skill_growth_simulation",
             "skill_growth_rate",
             "skill_growth_custom_skills",
@@ -3194,6 +3258,10 @@ class PrivateCompanionPageApi:
             "enable_qzone_life_publish",
             "qzone_life_publish_min_interval_hours",
             "qzone_life_publish_probability",
+            "enable_qzone_emotional_vent_publish",
+            "qzone_emotional_vent_threshold",
+            "qzone_emotional_vent_cooldown_hours",
+            "qzone_emotional_vent_probability",
             "enable_private_reading_integration",
             "enable_private_reading_boredom_read",
             "enable_private_reading_ask_recommendation",
@@ -3842,6 +3910,7 @@ class PrivateCompanionPageApi:
             "enable_llm_timer_scheduling",
             "enable_passive_topic_suppression",
             "enable_relationship_state_machine",
+            "enable_emotion_simulation",
             "enable_dialogue_episode_memory",
             "enable_open_loop_tracking",
             "enable_user_habit_learning",
@@ -3903,6 +3972,7 @@ class PrivateCompanionPageApi:
             "enable_web_exploration_boredom_search",
             "enable_qzone_integration",
             "enable_qzone_life_publish",
+            "enable_qzone_emotional_vent_publish",
             "enable_private_reading_integration",
             "enable_private_reading_boredom_read",
             "enable_private_reading_ask_recommendation",
@@ -4103,6 +4173,10 @@ class PrivateCompanionPageApi:
             "max_dialogue_episodes",
             "user_habit_min_count",
             "user_habit_max_items",
+            "emotional_gate_hurt_threshold",
+            "emotional_gate_refuse_threshold",
+            "emotional_gate_recovery_per_hour",
+            "emotional_gate_max_hurt_minutes",
             "enable_skill_growth_simulation",
             "skill_growth_rate",
             "skill_growth_custom_skills",
@@ -4138,6 +4212,10 @@ class PrivateCompanionPageApi:
             "enable_qzone_life_publish",
             "qzone_life_publish_min_interval_hours",
             "qzone_life_publish_probability",
+            "enable_qzone_emotional_vent_publish",
+            "qzone_emotional_vent_threshold",
+            "qzone_emotional_vent_cooldown_hours",
+            "qzone_emotional_vent_probability",
             "enable_private_reading_integration",
             "enable_private_reading_boredom_read",
             "enable_private_reading_ask_recommendation",
@@ -4393,6 +4471,10 @@ class PrivateCompanionPageApi:
             "max_dialogue_episodes",
             "user_habit_min_count",
             "user_habit_max_items",
+            "emotional_gate_hurt_threshold",
+            "emotional_gate_refuse_threshold",
+            "emotional_gate_recovery_per_hour",
+            "emotional_gate_max_hurt_minutes",
             "bilibili_boredom_min_interval_hours",
             "bilibili_share_min_score",
             "news_min_interval_hours",
@@ -4403,6 +4485,8 @@ class PrivateCompanionPageApi:
             "web_exploration_min_interval_hours",
             "web_exploration_max_results",
             "qzone_life_publish_min_interval_hours",
+            "qzone_emotional_vent_threshold",
+            "qzone_emotional_vent_cooldown_hours",
             "private_reading_min_interval_hours",
             "private_reading_max_photo_count",
             "private_reading_preference_min_ratings",
@@ -4482,6 +4566,7 @@ class PrivateCompanionPageApi:
             "external_event_self_link_probability",
             "web_exploration_share_probability",
             "qzone_life_publish_probability",
+            "qzone_emotional_vent_probability",
             "private_reading_share_probability",
             "private_reading_ask_probability",
             "creative_inspiration_probability",
@@ -4523,6 +4608,7 @@ class PrivateCompanionPageApi:
             "enable_web_exploration_boredom_search",
             "enable_qzone_integration",
             "enable_qzone_life_publish",
+            "enable_qzone_emotional_vent_publish",
             "enable_private_reading_integration",
             "enable_private_reading_boredom_read",
             "enable_private_reading_ask_recommendation",
@@ -5278,10 +5364,18 @@ class PrivateCompanionPageApi:
         return {
             "enabled": bool(available and getattr(self.plugin, "enable_qzone_integration", False)),
             "life_publish_enabled": bool(available and getattr(self.plugin, "enable_qzone_life_publish", False)),
+            "emotional_vent_enabled": bool(
+                available
+                and getattr(self.plugin, "enable_emotion_simulation", False)
+                and getattr(self.plugin, "enable_qzone_emotional_vent_publish", False)
+            ),
             "available": available,
             "last_life_publish_at": self.plugin._format_timestamp_elapsed(state.get("last_life_publish_at", 0)),
             "last_status": state.get("last_life_publish_status", ""),
             "last_text": state.get("last_life_publish_text", ""),
+            "last_emotional_vent_at": self.plugin._format_timestamp_elapsed(state.get("last_emotional_vent_at", 0)),
+            "last_emotional_vent_status": state.get("last_emotional_vent_status", ""),
+            "last_emotional_vent_text": state.get("last_emotional_vent_text", ""),
         }
 
     def _jm_cosmos_summary(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -6585,6 +6679,314 @@ class PrivateCompanionPageApi:
             elif value:
                 count += 1
         return count
+
+    def _livingmemory_db_path(self) -> Path | None:
+        candidates: list[Path] = []
+        data_dir = Path(str(getattr(self.plugin, "data_dir", "") or "")).resolve()
+        if data_dir:
+            candidates.append(data_dir.parent / "astrbot_plugin_livingmemory" / "livingmemory.db")
+            candidates.append(data_dir.parent / "astrbot_plugin_livingmemory" / "livingmemory_graph_documents.db")
+        candidates.append(Path.home() / ".astrbot" / "data" / "plugin_data" / "astrbot_plugin_livingmemory" / "livingmemory.db")
+        for path in candidates:
+            try:
+                if path.exists() and path.is_file():
+                    return path
+            except OSError:
+                continue
+        return None
+
+    def _worldbook_member_livingmemory_tokens(self, user_id: str, profile: dict[str, Any]) -> dict[str, list[str]]:
+        primary_raw: list[Any] = [
+            user_id,
+            profile.get("linked_qq_user_id"),
+            profile.get("merged_into_user_id"),
+            profile.get("linked_bili_profile_id"),
+            profile.get("name"),
+        ]
+        external_ids = profile.get("external_ids")
+        if isinstance(external_ids, list):
+            primary_raw.extend(external_ids)
+        support_raw: list[Any] = []
+        for key in ("aliases", "observed_names"):
+            value = profile.get(key)
+            if isinstance(value, list):
+                support_raw.extend(value)
+
+        def normalize(raw_items: list[Any], seen: set[str]) -> list[str]:
+            tokens: list[str] = []
+            for raw in raw_items:
+                text = self._single_line(raw, 80)
+                if not text or text in seen:
+                    continue
+                if text.isdigit():
+                    if len(text) < 5:
+                        continue
+                elif len(text) < 2:
+                    continue
+                seen.add(text)
+                tokens.append(text)
+            return tokens
+
+        def stable_support(raw_items: list[Any]) -> list[Any]:
+            stable: list[Any] = []
+            for raw in raw_items:
+                text = self._single_line(raw, 40)
+                if not text or len(text) > 16:
+                    continue
+                if any(mark in text for mark in ("，", ",", "。", "！", "？", " ", "：", ":", "|", "\n")):
+                    continue
+                stable.append(text)
+            return stable
+
+        seen_tokens: set[str] = set()
+        primary_tokens = normalize(primary_raw, seen_tokens)
+        support_tokens = normalize(stable_support(support_raw), seen_tokens)
+        tokens = [*primary_tokens, *support_tokens]
+        return {
+            "tokens": tokens[:18],
+            "primary_tokens": primary_tokens[:8],
+            "support_tokens": support_tokens[:12],
+        }
+
+    @staticmethod
+    def _sqlite_like_pattern(token: str) -> str:
+        escaped = str(token).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{escaped}%"
+
+    @staticmethod
+    def _json_dict(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if not isinstance(value, str) or not value.strip():
+            return {}
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _json_list(value: Any) -> list[Any]:
+        if isinstance(value, list):
+            return value
+        if not isinstance(value, str) or not value.strip():
+            return []
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return []
+        return parsed if isinstance(parsed, list) else []
+
+    @staticmethod
+    def _coerce_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _livingmemory_match_info(self, content: str, metadata_text: str, token_bundle: dict[str, list[str]]) -> dict[str, Any]:
+        haystack = f"{content}\n{metadata_text}".lower()
+        score = 0.0
+        primary_tokens = token_bundle.get("primary_tokens", [])
+        support_tokens = token_bundle.get("support_tokens", [])
+        matched_primary: list[str] = []
+        matched_support: list[str] = []
+        for token in primary_tokens:
+            text = token.lower()
+            if not text or text not in haystack:
+                continue
+            count = max(1, haystack.count(text))
+            if token.isdigit():
+                score += 9.0 + min(count, 4)
+            else:
+                score += min(8.0, 3.5 + len(token) * 0.65) + min(count - 1, 3) * 0.7
+            matched_primary.append(token)
+        for token in support_tokens:
+            text = token.lower()
+            if not text or text not in haystack:
+                continue
+            count = max(1, haystack.count(text))
+            score += min(3.0, 0.8 + len(token) * 0.25) + min(count - 1, 2) * 0.25
+            matched_support.append(token)
+        accepted = bool(matched_primary) or (not primary_tokens and len(matched_support) >= 2)
+        return {
+            "accepted": accepted,
+            "score": round(score, 3),
+            "matched_tokens": [*matched_primary, *matched_support][:8],
+            "primary_hits": len(matched_primary),
+            "support_hits": len(matched_support),
+        }
+
+    def _livingmemory_item_from_document(self, row: sqlite3.Row, token_bundle: dict[str, list[str]]) -> dict[str, Any] | None:
+        metadata = self._json_dict(row["metadata"])
+        content = str(row["text"] or "").strip()
+        match = self._livingmemory_match_info(content, str(row["metadata"] or ""), token_bundle)
+        if not match.get("accepted"):
+            return None
+        create_time = self._coerce_float(metadata.get("create_time"))
+        last_access = self._coerce_float(metadata.get("last_access_time"))
+        topics = metadata.get("topics") if isinstance(metadata.get("topics"), list) else []
+        key_facts = metadata.get("key_facts") if isinstance(metadata.get("key_facts"), list) else []
+        return {
+            "source": "documents",
+            "source_label": "长期记忆文档",
+            "id": row["doc_id"] or row["id"],
+            "score": match.get("score"),
+            "matched_tokens": match.get("matched_tokens", []),
+            "primary_hits": match.get("primary_hits", 0),
+            "support_hits": match.get("support_hits", 0),
+            "session_id": self._single_line(metadata.get("session_id"), 80),
+            "persona_id": self._single_line(metadata.get("persona_id"), 80),
+            "importance": metadata.get("importance"),
+            "created_at": str(row["created_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+            "create_time": create_time,
+            "last_access_time": last_access,
+            "topics": [self._single_line(item, 40) for item in topics[:8] if self._single_line(item, 40)],
+            "key_facts": [self._single_line(item, 120) for item in key_facts[:8] if self._single_line(item, 120)],
+            "preview": self._single_line(metadata.get("canonical_summary") or content, 260),
+            "content": content[:1800],
+        }
+
+    def _livingmemory_item_from_atom(self, row: sqlite3.Row, token_bundle: dict[str, list[str]]) -> dict[str, Any] | None:
+        content = str(row["content"] or "").strip()
+        entities = self._json_list(row["entities"])
+        metadata = self._json_dict(row["metadata"])
+        metadata_text = " ".join([str(row["entities"] or ""), str(row["metadata"] or "")])
+        match = self._livingmemory_match_info(content, metadata_text, token_bundle)
+        if not match.get("accepted"):
+            return None
+        return {
+            "source": "atoms",
+            "source_label": "原子记忆",
+            "id": row["id"],
+            "parent_memory_id": row["parent_memory_id"],
+            "score": match.get("score"),
+            "matched_tokens": match.get("matched_tokens", []),
+            "primary_hits": match.get("primary_hits", 0),
+            "support_hits": match.get("support_hits", 0),
+            "session_id": self._single_line(row["session_id"], 80),
+            "persona_id": self._single_line(row["persona_id"], 80),
+            "importance": row["importance"],
+            "confidence": row["confidence"],
+            "created_at": str(row["created_at"] or ""),
+            "create_time": self._coerce_float(row["created_at"]),
+            "last_access_time": self._coerce_float(row["last_accessed_at"]),
+            "topics": [self._single_line(item, 40) for item in entities[:8] if self._single_line(item, 40)],
+            "key_facts": [self._single_line(item, 120) for item in metadata.get("key_facts", [])[:6]] if isinstance(metadata.get("key_facts"), list) else [],
+            "preview": self._single_line(content, 260),
+            "content": content[:1200],
+        }
+
+    def _livingmemory_item_from_graph_entry(self, row: sqlite3.Row, token_bundle: dict[str, list[str]]) -> dict[str, Any] | None:
+        metadata = self._json_dict(row["metadata"])
+        content = str(row["content"] or "").strip()
+        match = self._livingmemory_match_info(content, str(row["metadata"] or ""), token_bundle)
+        if not match.get("accepted"):
+            return None
+        return {
+            "source": "graph",
+            "source_label": "关系图谱",
+            "id": row["entry_key"] or row["id"],
+            "parent_memory_id": row["source_memory_id"],
+            "score": match.get("score"),
+            "matched_tokens": match.get("matched_tokens", []),
+            "primary_hits": match.get("primary_hits", 0),
+            "support_hits": match.get("support_hits", 0),
+            "session_id": self._single_line(row["session_id"] or metadata.get("session_id"), 80),
+            "persona_id": self._single_line(row["persona_id"] or metadata.get("persona_id"), 80),
+            "importance": metadata.get("importance"),
+            "created_at": str(row["created_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+            "create_time": self._coerce_float(metadata.get("create_time")),
+            "last_access_time": self._coerce_float(metadata.get("last_access_time")),
+            "topics": [],
+            "key_facts": [],
+            "preview": self._single_line(content, 260),
+            "content": content[:1600],
+        }
+
+    def _query_livingmemory_for_tokens(self, db_path: Path, token_bundle: dict[str, list[str]], limit: int) -> list[dict[str, Any]]:
+        tokens = token_bundle.get("primary_tokens") or token_bundle.get("tokens", [])
+        if not tokens:
+            return []
+        db_uri = f"file:{db_path.as_posix()}?mode=ro"
+        conn = sqlite3.connect(db_uri, uri=True, timeout=2.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("PRAGMA busy_timeout=1500")
+            like_tokens = [self._sqlite_like_pattern(token) for token in tokens]
+            table_limit = max(80, limit * 8)
+            items: list[dict[str, Any]] = []
+
+            def where_for(columns: list[str]) -> tuple[str, list[str]]:
+                parts: list[str] = []
+                params: list[str] = []
+                for pattern in like_tokens:
+                    sub = []
+                    for column in columns:
+                        sub.append(f"{column} LIKE ? ESCAPE '\\'")
+                        params.append(pattern)
+                    parts.append("(" + " OR ".join(sub) + ")")
+                return " OR ".join(parts), params
+
+            if self._sqlite_table_exists(conn, "documents"):
+                where, params = where_for(["text", "metadata"])
+                for row in conn.execute(
+                    f"SELECT id, doc_id, text, metadata, created_at, updated_at FROM documents WHERE {where} ORDER BY id DESC LIMIT ?",
+                    [*params, table_limit],
+                ).fetchall():
+                    item = self._livingmemory_item_from_document(row, token_bundle)
+                    if item:
+                        items.append(item)
+
+            if self._sqlite_table_exists(conn, "memory_atoms"):
+                where, params = where_for(["content", "entities", "metadata"])
+                for row in conn.execute(
+                    f"""SELECT id, parent_memory_id, atom_type, content, entities, importance, confidence,
+                              created_at, last_accessed_at, session_id, persona_id, metadata
+                         FROM memory_atoms
+                        WHERE (status IS NULL OR status != 'expired') AND ({where})
+                        ORDER BY id DESC LIMIT ?""",
+                    [*params, table_limit],
+                ).fetchall():
+                    item = self._livingmemory_item_from_atom(row, token_bundle)
+                    if item:
+                        items.append(item)
+
+            if self._sqlite_table_exists(conn, "graph_entries"):
+                where, params = where_for(["content", "metadata", "session_id"])
+                for row in conn.execute(
+                    f"""SELECT id, entry_key, source_memory_id, session_id, persona_id, entry_type,
+                              relation_type, content, metadata, created_at, updated_at
+                         FROM graph_entries
+                        WHERE {where}
+                        ORDER BY id DESC LIMIT ?""",
+                    [*params, table_limit],
+                ).fetchall():
+                    item = self._livingmemory_item_from_graph_entry(row, token_bundle)
+                    if item:
+                        items.append(item)
+
+            seen: set[tuple[str, str]] = set()
+            unique: list[dict[str, Any]] = []
+            for item in sorted(items, key=lambda entry: (entry.get("score") or 0, entry.get("last_access_time") or entry.get("create_time") or 0), reverse=True):
+                key = (str(item.get("source") or ""), str(item.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(item)
+                if len(unique) >= limit:
+                    break
+            return unique
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _sqlite_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+        row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table,)).fetchone()
+        return row is not None
 
     @staticmethod
     def _query_int(name: str, default: int, minimum: int, maximum: int) -> int:
