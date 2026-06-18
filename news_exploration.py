@@ -245,6 +245,148 @@ _PLATFORM_DISPLAY_NAMES = {
 class NewsExplorationMixin:
     """新闻阅读/网页探索"""
 
+    def _external_event_pool(self) -> list[dict[str, Any]]:
+        raw = self.data.setdefault("external_event_pool", [])
+        if not isinstance(raw, list):
+            raw = []
+            self.data["external_event_pool"] = raw
+        return raw
+
+    def _cleanup_external_event_pool(self, *, now: float | None = None) -> list[dict[str, Any]]:
+        now = _now_ts() if now is None else now
+        kept: list[dict[str, Any]] = []
+        for item in self._external_event_pool():
+            if not isinstance(item, dict):
+                continue
+            created = _safe_float(item.get("created_ts"), 0)
+            if created > 0 and now - created <= 48 * 3600:
+                kept.append(item)
+        self.data["external_event_pool"] = kept[-200:]
+        return self.data["external_event_pool"]
+
+    def _external_event_signature(self, payload: dict[str, Any], *, source_type: str = "") -> str:
+        title = _single_line(payload.get("headline") or payload.get("topic") or payload.get("title") or payload.get("source_title"), 120).lower()
+        source = _single_line(payload.get("selected_source") or payload.get("source_title") or payload.get("source"), 60).lower()
+        link = _single_line(payload.get("selected_link") or payload.get("source_url") or payload.get("link") or payload.get("video_link"), 220).lower()
+        if link:
+            link = re.sub(r"https?://", "", link)
+            link = link.split("?", 1)[0]
+        compact = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title)
+        return "|".join(part for part in (_single_line(source_type, 24).lower(), source[:24], compact[:64], link[:96]) if part)
+
+    def _external_event_recently_seen(self, payload: dict[str, Any], *, source_type: str = "", now: float | None = None) -> bool:
+        now = _now_ts() if now is None else now
+        signature = self._external_event_signature(payload, source_type=source_type)
+        if not signature:
+            return False
+        for item in self._cleanup_external_event_pool(now=now):
+            if str(item.get("signature") or "") != signature:
+                continue
+            if now - _safe_float(item.get("created_ts"), 0) <= 24 * 3600:
+                return True
+        return False
+
+    def _remember_external_event(self, payload: dict[str, Any], *, source_type: str = "", reason: str = "") -> None:
+        now = _now_ts()
+        signature = self._external_event_signature(payload, source_type=source_type)
+        if not signature:
+            return
+        pool = self._cleanup_external_event_pool(now=now)
+        pool.append(
+            {
+                "signature": signature,
+                "source_type": _single_line(source_type, 24),
+                "reason": _single_line(reason, 40),
+                "title": _single_line(payload.get("headline") or payload.get("topic") or payload.get("title"), 120),
+                "created_ts": now,
+            }
+        )
+        del pool[:-200]
+
+    def _external_event_user_interest_score(self, user: dict[str, Any], payload: dict[str, Any]) -> int:
+        memory_text = ""
+        formatter = getattr(self, "_format_companion_memory_for_prompt", None)
+        if callable(formatter):
+            try:
+                memory_text = _single_line(formatter(user), 700).lower()
+            except Exception:
+                memory_text = ""
+        haystack = (
+            _single_line(payload.get("headline") or payload.get("topic") or payload.get("title"), 180)
+            + " "
+            + _single_line(payload.get("impression") or payload.get("summary") or payload.get("note"), 320)
+        ).lower()
+        if not memory_text or not haystack:
+            return 0
+        score = 0
+        for token in re.findall(r"[\u4e00-\u9fff]{2,8}|[a-z0-9_]{3,24}", haystack):
+            if token and token in memory_text:
+                score += 1
+        return min(10, score)
+
+    def _external_event_quality_score(self, payload: dict[str, Any]) -> int:
+        score = 0
+        if _single_line(payload.get("headline") or payload.get("topic") or payload.get("title"), 120):
+            score += 2
+        impression = _single_line(payload.get("impression") or payload.get("summary") or payload.get("note"), 320)
+        if len(impression) >= 36:
+            score += 2
+        if _single_line(payload.get("selected_link") or payload.get("source_url") or payload.get("link"), 220):
+            score += 1
+        if _safe_float(payload.get("published_ts"), 0) > 0:
+            score += 1
+        if _safe_int(payload.get("score"), 0, 0, 10) >= max(1, _safe_int(getattr(self, "bilibili_share_min_score", 7), 7, 0, 10)):
+            score += 2
+        return min(10, score)
+
+    def _external_event_share_decision(
+        self,
+        user: dict[str, Any],
+        payload: dict[str, Any],
+        *,
+        source_type: str,
+        wish: dict[str, Any] | None = None,
+        base_probability: float = 0.2,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        now = _now_ts() if now is None else now
+        relevance = _safe_int((wish or {}).get("relevance"), 0, 0, 10)
+        desire = _safe_int((wish or {}).get("desire"), 0, 0, 10)
+        user_match = self._external_event_user_interest_score(user, payload)
+        quality = self._external_event_quality_score(payload)
+        freshness = 6
+        published_ts = _safe_float(payload.get("published_ts"), 0)
+        if published_ts > 0:
+            age_hours = max(0.0, (now - published_ts) / 3600.0)
+            if age_hours <= 6:
+                freshness = 10
+            elif age_hours <= 24:
+                freshness = 8
+            elif age_hours <= 72:
+                freshness = 5
+            else:
+                freshness = 2
+        noisy = self._external_event_recently_seen(payload, source_type=source_type, now=now)
+        duplicate_penalty = 4 if noisy else 0
+        interrupt_penalty = 0
+        if now - _safe_float(user.get("last_seen"), 0) < max(self.idle_minutes, 90) * 60:
+            interrupt_penalty += 3
+        if now - _safe_float(user.get("last_sent"), 0) < max(self.min_interval_minutes, 120) * 60:
+            interrupt_penalty += 2
+        total = relevance * 2 + desire * 2 + user_match * 2 + quality + freshness - duplicate_penalty - interrupt_penalty
+        normalized = max(0.0, min(1.0, base_probability + total / 100.0))
+        return {
+            "score": max(0, min(100, total * 2)),
+            "probability": normalized,
+            "user_match": user_match,
+            "quality": quality,
+            "freshness": freshness,
+            "duplicate_penalty": duplicate_penalty,
+            "interrupt_penalty": interrupt_penalty,
+            "should_share": bool((wish or {}).get("should_share")) and total >= 18 and not noisy,
+            "duplicate": noisy,
+        }
+
     def _bilibili_plugin_dir(self) -> Path:
         candidates = [
             Path(__file__).resolve().parent.parent / "astrbot_plugin_bilibili_bot",
@@ -568,7 +710,21 @@ class NewsExplorationMixin:
             if _safe_float(user.get("next_proactive_at"), 0) > 0 and str(user.get("planned_proactive_source") or "") == "timer":
                 continue
             score = _safe_int(candidate.get("score"), 0, 0, 10)
-            chance = min(0.86, self.bilibili_share_probability + max(0, score - self.bilibili_share_min_score) * 0.08)
+            decision = self._external_event_share_decision(
+                user,
+                candidate,
+                source_type="bilibili",
+                wish={
+                    "relevance": score,
+                    "desire": max(score - 1, 0),
+                    "should_share": score >= self.bilibili_share_min_score,
+                },
+                base_probability=self.bilibili_share_probability,
+                now=now,
+            )
+            if not decision.get("should_share"):
+                continue
+            chance = min(0.9, max(self.bilibili_share_probability, _safe_float(decision.get("probability"), self.bilibili_share_probability)))
             if random.random() > chance:
                 continue
             delay_minutes = random.randint(12, 70)
@@ -583,10 +739,10 @@ class NewsExplorationMixin:
                     "action": "message",
                     "scheduled_ts": scheduled,
                     "topic": title,
-                    "score": score,
+                    "score": max(score, _safe_int(decision.get("score"), score, 0, 100)),
                     "motive": f"刚刷到 B 站视频《{title}》,觉得有一点能分享给 {user_id},但只轻轻提一句",
                     "context_key": "bilibili_video_context",
-                    "context": {**candidate, "created_ts": now},
+                    "context": {**candidate, "created_ts": now, "share_decision": decision},
                 },
             )
             if not accepted:
@@ -594,6 +750,7 @@ class NewsExplorationMixin:
             self._record_bilibili_share_to_memory(str(user_id), candidate)
             user["last_bilibili_share_key"] = key
             user["last_bilibili_share_at"] = now
+            self._remember_external_event(candidate, source_type="bilibili", reason="bili_video_share")
             changed = True
         return changed
 
@@ -2256,11 +2413,42 @@ class NewsExplorationMixin:
                     if not wish.get("should_share"):
                         _note_news_share(user_id, "skipped", "自我关联判断认为不适合主动分享", relevance=_safe_int(wish.get("relevance"), 0), desire=_safe_int(wish.get("desire"), 0))
                         continue
-                    share_probability = max(self.news_share_probability, _safe_float(wish.get("share_probability"), 0.0))
+                    decision = self._external_event_share_decision(
+                        user,
+                        digest,
+                        source_type="news",
+                        wish=wish,
+                        base_probability=self.news_share_probability,
+                        now=now,
+                    )
+                    if decision.get("duplicate"):
+                        _note_news_share(user_id, "skipped", "近期同类外界信息已经处理过")
+                        continue
+                    if not decision.get("should_share"):
+                        _note_news_share(
+                            user_id,
+                            "skipped",
+                            "统一评分认为这条新闻不值得现在主动分享",
+                            score=_safe_int(decision.get("score"), 0, 0, 100),
+                            user_match=_safe_int(decision.get("user_match"), 0, 0, 10),
+                        )
+                        continue
+                    share_probability = max(self.news_share_probability, _safe_float(decision.get("probability"), self.news_share_probability))
                     share_probability *= self.external_event_self_link_probability
                     if strong_self_link:
                         share_probability = max(share_probability, min(0.95, _safe_float(wish.get("share_probability"), share_probability)))
                 else:
+                    decision = self._external_event_share_decision(
+                        user,
+                        digest,
+                        source_type="news",
+                        wish={"relevance": 4, "desire": 4, "should_share": True},
+                        base_probability=self.news_share_probability,
+                        now=now,
+                    )
+                    if decision.get("duplicate") or not decision.get("should_share"):
+                        _note_news_share(user_id, "skipped", "统一评分认为这条新闻不值得现在主动分享")
+                        continue
                     share_probability = self.news_share_probability
                 if random.random() > max(0.0, min(1.0, share_probability)):
                     _note_news_share(user_id, "skipped", "分享概率未命中", probability=round(max(0.0, min(1.0, share_probability)), 3))
@@ -2277,7 +2465,7 @@ class NewsExplorationMixin:
                         "action": "message",
                         "scheduled_ts": now + random.randint(10, 55) * 60,
                         "topic": _single_line(digest.get("topic"), 48) or "刚看到的新闻",
-                        "score": 4 if self_link_motive else 3,
+                        "score": max(4 if self_link_motive else 3, _safe_int(decision.get("score"), 0, 0, 100)),
                         "motive": self_link_motive
                         or "刚看了几条新闻,其中一条让自己想轻轻和用户提一句,但不要像播报新闻",
                         "context_key": "news_context",
@@ -2285,6 +2473,7 @@ class NewsExplorationMixin:
                             **digest,
                             "share_tone": self_link_tone,
                             "share_boundary": self_link_boundary,
+                            "share_decision": decision,
                         },
                     },
                 )
@@ -2295,11 +2484,13 @@ class NewsExplorationMixin:
                         **digest,
                         "share_tone": self_link_tone,
                         "share_boundary": self_link_boundary,
+                        "share_decision": decision,
                     }
                     user["last_news_share_key"] = selected_key
                     user["last_news_share_at"] = now
                     if isinstance(wish, dict) and wish:
                         user["last_external_event_self_link_at"] = now
+                    self._remember_external_event(digest, source_type="news", reason="news_share")
                 else:
                     _note_news_share(user_id, "blocked", "主动候选被计划队列拒绝，可能已有更早主动或主题重复")
         if accepted_any:
@@ -3196,9 +3387,29 @@ class NewsExplorationMixin:
                         continue
                     if not wish.get("should_share"):
                         continue
-                    share_probability = max(self.web_exploration_share_probability, _safe_float(wish.get("share_probability"), 0.0))
+                    decision = self._external_event_share_decision(
+                        user,
+                        digest,
+                        source_type="web_exploration",
+                        wish=wish,
+                        base_probability=self.web_exploration_share_probability,
+                        now=now,
+                    )
+                    if decision.get("duplicate") or not decision.get("should_share"):
+                        continue
+                    share_probability = max(self.web_exploration_share_probability, _safe_float(decision.get("probability"), 0.0))
                     share_probability *= self.external_event_self_link_probability
                 else:
+                    decision = self._external_event_share_decision(
+                        user,
+                        digest,
+                        source_type="web_exploration",
+                        wish={"relevance": 4, "desire": 4, "should_share": True},
+                        base_probability=self.web_exploration_share_probability,
+                        now=now,
+                    )
+                    if decision.get("duplicate") or not decision.get("should_share"):
+                        continue
                     share_probability = self.web_exploration_share_probability
                 if random.random() > max(0.0, min(1.0, share_probability)):
                     continue
@@ -3214,13 +3425,14 @@ class NewsExplorationMixin:
                         "action": "message",
                         "scheduled_ts": now + random.randint(12, 70) * 60,
                         "topic": _single_line(digest.get("topic"), 48) or "刚查到的新东西",
-                        "score": 4 if self_link_motive else 3,
+                        "score": max(4 if self_link_motive else 3, _safe_int(decision.get("score"), 0, 0, 100)),
                         "motive": self_link_motive or "刚自己上网查了点新东西,有一点想按自己的语气轻轻告诉用户",
                         "context_key": "web_exploration_context",
                         "context": {
                             **digest,
                             "share_tone": self_link_tone,
                             "share_boundary": self_link_boundary,
+                            "share_decision": decision,
                         },
                     },
                 )
@@ -3229,10 +3441,12 @@ class NewsExplorationMixin:
                         **digest,
                         "share_tone": self_link_tone,
                         "share_boundary": self_link_boundary,
+                        "share_decision": decision,
                     }
                     user["last_web_exploration_share_at"] = now
                     if isinstance(wish, dict) and wish:
                         user["last_external_event_self_link_at"] = now
+                    self._remember_external_event(digest, source_type="web_exploration", reason="web_exploration_share")
                     break
         self._save_data_sync()
         logger.info("[PrivateCompanion] 已完成一次网页探索: %s", _single_line(digest.get("topic"), 80))

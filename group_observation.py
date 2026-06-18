@@ -287,6 +287,15 @@ class GroupObservationMixin:
             })
         recent.append(record)
         del recent[:-self.max_group_recent_messages]
+        self._record_user_recent_group_message_from_observation(
+            group_id=str(group_id or group.get("group_id") or ""),
+            sender_id=sender_id,
+            sender_name=sender_name,
+            text=cleaned,
+            scene=scene,
+            message_id=message_id,
+            ts=now,
+        )
 
         if self.enable_group_member_profiles:
             members = group.setdefault("members", {})
@@ -800,6 +809,7 @@ class GroupObservationMixin:
         terms = group.get("slang_terms")
         if not isinstance(terms, list):
             return False
+        now = _now_ts()
         kept: list[Any] = []
         removed: set[str] = set()
         for item in terms:
@@ -809,6 +819,17 @@ class GroupObservationMixin:
             if isinstance(meaning_item, dict) and meaning_item.get("source") == "explicit_correction":
                 kept.append(item)
                 continue
+            if isinstance(item, dict):
+                count = _safe_int(item.get("count"), 0, 0)
+                last_seen = _safe_float(item.get("last_seen"), 0)
+                if last_seen > 0:
+                    age_days = max(0.0, (now - last_seen) / 86400.0)
+                    if age_days >= 21 and count <= 2:
+                        removed.add(term)
+                        continue
+                    if age_days >= 45 and count <= 5:
+                        removed.add(term)
+                        continue
             if term and self._looks_like_group_member_name(group, term):
                 removed.add(term)
                 continue
@@ -821,6 +842,52 @@ class GroupObservationMixin:
             for term in removed:
                 meanings.pop(term, None)
         return True
+
+    def _cleanup_group_members(self, group: dict[str, Any], *, now: float | None = None) -> bool:
+        members = group.get("members")
+        if not isinstance(members, dict):
+            return False
+        now = _now_ts() if now is None else now
+        changed = False
+        for user_id, member in list(members.items()):
+            if not isinstance(member, dict):
+                members.pop(user_id, None)
+                changed = True
+                continue
+            last_seen = _safe_float(member.get("last_seen"), 0)
+            if last_seen > 0 and now - last_seen > 90 * 86400 and _safe_int(member.get("count"), 0, 0) <= 2:
+                members.pop(user_id, None)
+                changed = True
+                continue
+            phrases = member.get("recent_phrases")
+            if isinstance(phrases, list):
+                deduped: list[str] = []
+                for item in phrases:
+                    text = _single_line(item, 40)
+                    if text and text not in deduped:
+                        deduped.append(text)
+                if deduped != phrases:
+                    member["recent_phrases"] = deduped[:8]
+                    changed = True
+        return changed
+
+    def _cleanup_group_relationship_edges(self, group: dict[str, Any], *, now: float | None = None) -> bool:
+        edges = group.get("relationship_edges")
+        if not isinstance(edges, dict):
+            return False
+        now = _now_ts() if now is None else now
+        changed = False
+        for key, item in list(edges.items()):
+            if not isinstance(item, dict):
+                edges.pop(key, None)
+                changed = True
+                continue
+            last_seen = _safe_float(item.get("last_seen") or item.get("updated_ts"), 0)
+            weight = _safe_int(item.get("count"), 0, 0)
+            if last_seen > 0 and now - last_seen > 60 * 86400 and weight <= 2:
+                edges.pop(key, None)
+                changed = True
+        return changed
 
     def _cleanup_all_group_slang_terms(self) -> bool:
         groups = self.data.get("groups") if isinstance(getattr(self, "data", None), dict) else {}
@@ -1432,6 +1499,32 @@ class GroupObservationMixin:
             f"话题钩子：{topic}" if topic else "",
         ]
         return "\n".join(part for part in parts if part)
+
+    def _group_share_send_block_reason(self, user_id: str, user: dict[str, Any], *, now: float | None = None) -> str:
+        if str(user.get("planned_proactive_reason") or "") != "group_share":
+            return ""
+        share = user.get("group_share_context")
+        if not isinstance(share, dict):
+            return "群聊分享上下文已失效"
+        check_now = _now_ts() if now is None else now
+        created_ts = _safe_float(share.get("created_ts"), 0)
+        if created_ts <= 0 or check_now - created_ts > 3 * 3600:
+            return "群聊分享候选已过期"
+        group_id = _single_line(share.get("group_id"), 40)
+        if not group_id:
+            return "群聊分享缺少群号"
+        groups = self.data.get("groups")
+        group = groups.get(group_id) if isinstance(groups, dict) else None
+        if not isinstance(group, dict):
+            return "群聊记录不存在"
+        members = group.get("members") if isinstance(group.get("members"), dict) else {}
+        member = members.get(str(user_id)) if isinstance(members, dict) else None
+        member_last_seen = _safe_float((member or {}).get("last_seen"), 0) if isinstance(member, dict) else 0
+        if member_last_seen > created_ts:
+            return f"用户已在群 {group_id} 重新发言（{self._format_elapsed(check_now - member_last_seen)}前）"
+        if member_last_seen > 0 and check_now - member_last_seen < 8 * 3600:
+            return f"用户距上次群发言不足 8 小时（{self._format_elapsed(check_now - member_last_seen)}前）"
+        return ""
 
     def _format_group_wakeup_humanized_prompt(self, effect: dict[str, Any] | None, state: dict[str, Any] | None = None) -> str:
         if not isinstance(effect, dict) or not effect:

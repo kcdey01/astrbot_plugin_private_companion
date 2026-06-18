@@ -975,6 +975,7 @@ class ProactiveMessageMixin:
 12. 如果发图,先在内容选择菜单里选“可拍画面”或“眼前物”方向,再自己生成当前场景里合理的具体画面。不要总是天气、窗外、晚霞。
 13. 连贯性优先：当前时间、当前生活片段、聊天历史要合成同一个合理现场。只抓一个最自然的当下切口开口,不要把多个不同时段或不同地点的生活碎片拼成一条消息；如果资料之间冲突,优先服从当前真实时段和当前生活片段。
 14. 不要把用户很久前的请求、邀约、相对时间说法当成此刻正在等你处理的事。除非定时提醒或当前日程明确要求兑现约定,否则旧消息只保留成情绪和关系背景,主动消息要从当前时段自然开口。
+14.5 如果现在是早晨/上午的主动问候,绝不能写成“好呀、下午陪你、五点之后、你到时候叫我”这类在回应旧邀约或旧请求的话；这种旧话题只能当背景,不能被当成当前正在发生的对话。
 15. 普通主动消息不需要解释自己为什么现在出现,也不要为了接上旧聊天而补一段“刚看到/才看到”的说明；像真实私聊一样,直接从当下能说的话开口。
 16. 如果最近已经主动说过同一件小事,这次不要换壳复述。可以只留一点余味、换到新的具体细节,或者自然转开话题。
 17. 不要用“哈哈,我也觉得”“确实”“对吧”“是吧”这类附和式开头；主动消息不是在回复用户刚说的话,要直接说自己的观察或念头。
@@ -1076,7 +1077,53 @@ class ProactiveMessageMixin:
         style_fatigue_hint = self._format_proactive_style_fatigue_hint(user)
         if style_fatigue_hint:
             prompt = f"{prompt}\n\n{style_fatigue_hint}"
+        continuity_hint = self._format_proactive_continuity_hint(user, reason=reason, action=action)
+        if continuity_hint:
+            prompt = f"{prompt}\n\n{continuity_hint}"
         return prompt.strip()
+
+    def _format_proactive_continuity_hint(self, user: dict[str, Any], *, reason: str, action: str) -> str:
+        followup_kind = str(user.get("planned_followup_kind") or "").strip()
+        chain = user.get("planned_event_chain")
+        has_event_chain = isinstance(chain, list) and any(isinstance(item, dict) for item in chain)
+        has_trigger = bool(_single_line(user.get("planned_proactive_trigger_message_id"), 120))
+        source = str(user.get("planned_proactive_source") or "").strip()
+        explicit_followup = bool(followup_kind or has_event_chain or (source == "timer" and has_trigger))
+        independent_reasons = {
+            "morning_greeting",
+            "noon_greeting",
+            "evening_greeting",
+            "check_in",
+            "quiet_care",
+            "state_share",
+        }
+        if reason in independent_reasons and not explicit_followup:
+            return "\n".join(
+                [
+                    "【主动承接边界】",
+                    "本轮是独立主动开口：聊天历史只能提供关系背景,不能被写成当前有人刚问你、约你、让你做决定。",
+                    "开头不要使用回复式承接词,例如“好呀/好啊/可以呀/行啊/那就/你说呢/要不/我哪来的/你到时候”。",
+                    "不要承接旧邀约、旧时间点或旧问答,尤其不要把下午、五点、放学、垫钱、到时候叫你这类历史片段当成当前正在发生。",
+                    "如果想轻轻延续关系感,只能从当前时段自起一句,像刚把一句话放进私聊里。",
+                ]
+            )
+        if explicit_followup:
+            return "\n".join(
+                [
+                    "【主动承接边界】",
+                    "本轮有明确的续接来源,可以自然接住那个来源；但仍然不要接不存在的用户新消息,也不要把过期相对时间当成当前事实。",
+                    "如果续接来源和当前时段冲突,优先服从当前时段,把旧内容改成轻背景。",
+                ]
+            )
+        if reason in {"group_share", "news_share", "bili_video_share", "web_exploration_share", "creative_share", "diary_share", "activity_share", "background_schedule"}:
+            return "\n".join(
+                [
+                    "【主动承接边界】",
+                    "本轮可以围绕素材自然分享,但不是在回答用户刚问的问题。",
+                    "开头避免“好呀/你说呢/要不/那就”这类回复口吻；直接把素材或当下念头递过去。",
+                ]
+            )
+        return ""
 
     def _format_proactive_specificity_hint(
         self,
@@ -1739,7 +1786,44 @@ class ProactiveMessageMixin:
         cleaned = self._visible_text_without_tts_reading(cleaned, limit=1000)
         if self._should_drop_vague_generic_proactive(user, reason=reason, action=action, action_context=action_context, text=cleaned):
             return ""
+        if self._should_drop_misstaged_proactive_text(cleaned, reason=reason, action=action):
+            return ""
         return self._normalize_proactive_sentence_flow(cleaned)
+
+    def _should_drop_misstaged_proactive_text(self, text: str, *, reason: str, action: str) -> bool:
+        cleaned = _single_line(text, 220)
+        if not cleaned:
+            return True
+        if action != "message" or reason not in {"morning_greeting", "noon_greeting", "evening_greeting", "check_in"}:
+            return False
+        reply_openers = ("好呀", "好啊", "可以呀", "可以啊", "行呀", "行啊", "嗯好", "那就", "你说呢", "要不", "不然")
+        old_invite_markers = (
+            "下午陪你", "陪你出去", "出去走走", "五点", "放学之后", "下班之后",
+            "到时候叫我", "到时候喊我", "到时候", "垫上", "我哪来的钱",
+        )
+        if reason == "morning_greeting" and cleaned.startswith(reply_openers) and any(token in cleaned for token in old_invite_markers):
+            logger.info(
+                "[PrivateCompanion] 主动消息疑似把旧邀约当成当前回复,已丢弃: reason=%s text=%s",
+                reason,
+                cleaned,
+            )
+            return True
+        if reason in {"morning_greeting", "noon_greeting", "evening_greeting"}:
+            stale_reply_patterns = (
+                r"^(?:好呀|好啊|可以呀|可以啊|行呀|行啊|嗯好|那就).{0,30}(?:你到时候|到时候你|到时候叫|到时候喊)",
+                r"^(?:好呀|好啊|可以呀|可以啊|行呀|行啊|嗯好|那就).{0,30}(?:我得|我得等|我只能|我可以).{0,18}(?:之后|以后|才行)",
+                r"^(?:你说呢|要不|不然).{0,30}(?:我哪来|哪来的钱|先帮我|帮我垫|垫上)",
+                r"^(?:好呀|好啊|可以呀|可以啊|行呀|行啊|嗯好|那就|你说呢|要不|不然).{0,36}(?:下午|五点|放学|下班|垫上|哪来的钱)",
+            )
+            if any(re.search(pattern, cleaned) for pattern in stale_reply_patterns):
+                logger.info(
+                    "[PrivateCompanion] 主动消息疑似接续旧对话而非主动开口,已丢弃: reason=%s text=%s",
+                    reason,
+                    cleaned,
+                )
+                return True
+        return False
+
 
     def _collapse_multi_candidate_proactive_text(self, text: str, *, user: dict[str, Any], name: str = "") -> str:
         cleaned = str(text or "").strip()
@@ -4246,19 +4330,19 @@ class ProactiveMessageMixin:
         motive: str = "",
         action_summary: str = "",
     ) -> str:
-        parts = ["[主动消息]"]
-        reason_text = _single_line(reason, 40) or "自然想起用户"
-        parts.append(f"触发原因：{reason_text}")
         action_text = _single_line(action, 40) or "message"
-        if action_text != "message":
-            parts.append(f"主动行为：{action_text}")
-        summary_text = _single_line(action_summary, 80)
-        if summary_text and summary_text != action_text:
-            parts.append(f"行为结果：{summary_text}")
         motive_text = _single_line(motive, 120)
+        lines = [
+            "[主动消息]",
+            f"触发原因：{_single_line(reason, 40) or 'unknown'}",
+            f"行为结果：{action_text}",
+        ]
         if motive_text:
-            parts.append(f"内部动机：{motive_text}")
-        return "；".join(parts)
+            lines.append(f"内部动机：{motive_text}")
+        if action_summary:
+            lines.append(f"动作摘要：{_single_line(action_summary, 160)}")
+        lines.append("说明：这不是用户消息，而是 Private Companion 插件为触发主动消息写入的记录。")
+        return "；".join(lines)
 
     def _build_proactive_archive_assistant_text(
         self,

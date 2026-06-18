@@ -6514,6 +6514,38 @@ class DailyStateMixin:
                     self._save_data_sync()
                 self._debug_tick_skip(user_id, load_defer_note, prefix="延后")
                 continue
+            group_share_block_reason = ""
+            if str(user.get("planned_proactive_reason") or "") == "group_share":
+                async with self._data_lock:
+                    current_for_group_check = self._get_user(user_id)
+                    checker = getattr(self, "_group_share_send_block_reason", None)
+                    if callable(checker):
+                        group_share_block_reason = checker(user_id, current_for_group_check)
+                    if group_share_block_reason:
+                        current_for_group_check["proactive_sending"] = False
+                        current_for_group_check["proactive_sending_started_at"] = 0
+                        current_for_group_check["next_proactive_at"] = 0
+                        current_for_group_check["planned_proactive_reason"] = ""
+                        current_for_group_check["planned_proactive_action"] = ""
+                        current_for_group_check["planned_proactive_source"] = ""
+                        current_for_group_check["planned_proactive_motive"] = ""
+                        current_for_group_check["planned_proactive_topic"] = ""
+                        current_for_group_check["planned_event_chain"] = []
+                        current_for_group_check["planned_opener_mode"] = ""
+                        current_for_group_check["planned_followup_kind"] = ""
+                        current_for_group_check["planned_proactive_quota_exempt"] = False
+                        current_for_group_check["group_share_context"] = {}
+                        self._mark_planned_candidate_status(current_for_group_check, "blocked", group_share_block_reason)
+                        self._update_proactive_audit(audit_id, status="cancelled", note=group_share_block_reason)
+                        self._save_data_sync()
+                if group_share_block_reason:
+                    logger.info(
+                        "[PrivateCompanion] 群聊分享主动发送前复核取消: user=%s reason=%s",
+                        user_id,
+                        group_share_block_reason,
+                    )
+                    self._debug_tick_skip(user_id, group_share_block_reason, prefix="取消")
+                    continue
             task_start_last_seen = _safe_float(user.get("last_seen"), 0)
             task_start_inbound_count = _safe_int(user.get("inbound_count"), 0)
             try:

@@ -228,7 +228,7 @@ const providerGuides = {
   PRIVATE_READING_VISION_PROVIDER_ID: {
     purpose: "夹层阅读专用：理解封面和抽样页，生成页边批注、读后感、评分和偏好标签。",
     fit: "必须是支持图片输入的视觉模型，最好能稳定输出 JSON，并能看懂漫画页图细节。",
-    fallback: "不回退。留空或模型不可用时，不生成本子批注和读后感。",
+    fallback: "不回退。留空或模型不可用时，不生成私密阅读批注和读后感。",
   },
   NEWS_PROVIDER_ID: {
     purpose: "从新闻标题和摘要候选里挑选适合分享的内容，并整理成 Bot 的内部印象。",
@@ -351,7 +351,7 @@ const featureMeta = {
   enable_photo_text_action: ["主动拍照/生图", "允许 Bot 在合适的主动动机下生成真实图片；本地 ComfyUI 可在电脑忙时自动延后。"],
   enable_private_reading_integration: ["夹层阅读素材", "检测到可用素材能力时，允许作为低频私下阅读来源。"],
   enable_private_reading_boredom_read: ["私下阅读", "空档、无聊或夜里低频自己搜索并阅读，形成内部印象。"],
-  enable_private_reading_ask_recommendation: ["征求推荐", "空档或无聊时，低频私聊询问用户有没有好看的本子或漫画推荐。"],
+  enable_private_reading_ask_recommendation: ["征求推荐", "空档或无聊时，低频私聊询问用户有没有合适的私密阅读推荐。"],
   enable_private_reading_preference_influence: ["私密偏好影响", "评分样本足够后，把稳定偏好作为私聊私密互动的弱背景。"],
   enable_unanswered_screen_peek_followup: ["沉默后窥屏", "主动消息后用户长时间没回、且 Bot 正好无聊时，可免日次数窥屏确认用户在做什么。"],
   enable_tts_enhancement: ["TTS强化", "支持中文聊天文本搭配外语语音块，统一处理生成路径、<tts> 标签规范化、语种控制、朗读文本清洗和主用户触发。"],
@@ -4690,13 +4690,13 @@ function renderLockedDrawer(count) {
 
 function renderUnlockedDrawer(items) {
   if (!items.length) {
-    return `<div class="empty small">抽屉已经打开，但里面暂时还没有日记本或夹层藏书。</div>`;
+    return `<div class="empty small">抽屉已经打开，但里面暂时还没有日记本或私密阅读记录。</div>`;
   }
   return renderBookCategoryShelves(items, {
     reverseBooks: true,
     notes: {
       "日记": "按日期收进同一本里",
-      "夹层藏书": "只保留标题和阅读印象",
+      "私密阅读": "只保留标题和阅读印象",
     },
   });
 }
@@ -4736,7 +4736,7 @@ function bookshelfCategoryTitle(book) {
   if (book?.kind === "creative") return book.work_type || "创作";
   if (book?.kind === "diary") return "日记";
   if (book?.kind === "browsing") return "浏览记录";
-  if (book?.kind === "jm_album") return "夹层藏书";
+  if (book?.kind === "jm_album") return "私密阅读";
   return "其他";
 }
 
@@ -4745,7 +4745,7 @@ function bookshelfCategoryNote(title, books) {
   if (kind === "browsing") return "新闻阅读和主动搜索会在这里留痕";
   if (kind === "creative") return "Bot 自己慢慢推进的文本作品";
   if (kind === "diary") return "按日期翻阅";
-  if (kind === "jm_album") return "夹层内的私密藏书";
+  if (kind === "jm_album") return "夹层内的私密阅读记录";
   return `${books.length} 本`;
 }
 
@@ -4760,7 +4760,7 @@ function renderBookshelfBook(item) {
     creative: "创作",
     diary: "日记本",
     browsing: "浏览记录",
-    jm_album: "夹层藏书",
+    jm_album: "私密阅读",
   }[kind] || kind;
   const bookId = bookshelfBookId(item);
   const title = item.title || "未命名";
@@ -4784,7 +4784,7 @@ function bookshelfBookId(item) {
 
 function renderBookCoverInner(book, kindLabel, title, progress = "") {
   const coverSrc = book.kind === "jm_album" ? String(book.cover_src || "") : "";
-  const image = coverSrc ? bookshelfImageTag(coverSrc, `${title || "夹层藏书"}封面`) : "";
+  const image = coverSrc ? bookshelfImageTag(coverSrc, `${title || "私密阅读"}封面`) : "";
   return `
     ${image}
     <span>${escapeHtml(kindLabel)}</span>
@@ -4912,7 +4912,7 @@ function renderBookDetailPanel() {
     creative: book.work_type || "创作书",
     diary: "日记本",
     browsing: "浏览记录",
-    jm_album: "夹层藏书",
+    jm_album: "私密阅读",
   }[book.kind] || "书";
   const entryBook = ["diary", "browsing"].includes(book.kind || "");
   const diaryEntries = entryBook && Array.isArray(book.entries) ? book.entries : [];
@@ -5142,7 +5142,7 @@ function renderJmAlbumReader(book, kindLabel, displayTitle, displayIntro, readin
             <figure class="manga-page ${comment ? `has-note ${spreadIndex === 0 ? "note-left" : "note-right"}` : ""}">
               ${spreadIndex === 0 ? note : ""}
               <div class="manga-page-image">
-                ${bookshelfImageTag(page.src, `${book.title || "夹层藏书"} 第 ${page.index} 页`)}
+                ${bookshelfImageTag(page.src, `${book.title || "私密阅读"} 第 ${page.index} 页`)}
                 <figcaption>${escapeHtml(page.index)} / ${escapeHtml(pages.length)}</figcaption>
               </div>
               ${spreadIndex !== 0 ? note : ""}
@@ -9233,7 +9233,7 @@ async function rateSelectedBookshelfItem(button = null) {
   const albumId = book.album_id || button?.closest("[data-book-rating-album]")?.dataset?.bookRatingAlbum || "";
   const rating = Number(button?.dataset?.bookRating || 0);
   if (!albumId || !rating) {
-    showToast("没有找到要评分的藏书。", "error");
+    showToast("没有找到要评分的阅读记录。", "error");
     return;
   }
   const reason = "";
@@ -9258,7 +9258,7 @@ async function updateSelectedBookshelfTags(form) {
   const book = state.selectedBook || {};
   const albumId = book.album_id || "";
   if (!albumId) {
-    showToast("没有找到要编辑标签的藏书。", "error");
+    showToast("没有找到要编辑标签的阅读记录。", "error");
     return;
   }
   const button = form.querySelector("button[type='submit']");
@@ -9304,7 +9304,7 @@ async function rereadSelectedBookshelfItem(button = null) {
   const book = state.selectedBook || {};
   const albumId = book.album_id || "";
   if (!albumId) {
-    showToast("没有找到要重读的藏书。", "error");
+    showToast("没有找到要重读的阅读记录。", "error");
     return;
   }
   const currentPage = state.bookshelfPage;

@@ -239,6 +239,66 @@ _PLATFORM_DISPLAY_NAMES = {
 class UserMemoryMixin:
     """用户记忆系统"""
 
+    @staticmethod
+    def _memory_fact_signature(text: Any) -> str:
+        compact = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]+", "", str(text or "")).lower()
+        return compact[:80]
+
+    def _cleanup_companion_memory_items(self, user: dict[str, Any]) -> list[dict[str, Any]]:
+        memory = user.get("companion_memory")
+        if not isinstance(memory, dict):
+            return []
+        items = memory.get("items")
+        if not isinstance(items, list):
+            memory["items"] = []
+            return []
+        now = _now_ts()
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            text = _single_line(raw.get("text"), 260)
+            if not text:
+                continue
+            created_ts = _safe_float(raw.get("created_ts"), 0)
+            created_at = _single_line(raw.get("created_at"), 24)
+            if created_ts <= 0 and created_at:
+                try:
+                    created_ts = datetime.strptime(created_at, "%Y-%m-%d %H:%M").timestamp()
+                except Exception:
+                    created_ts = now
+            if created_ts > 0 and now - created_ts > 180 * 86400:
+                continue
+            signature = self._memory_fact_signature(text)
+            if not signature or signature in seen:
+                continue
+            seen.add(signature)
+            item = dict(raw)
+            item["text"] = text
+            item["created_ts"] = created_ts or now
+            deduped.append(item)
+        deduped.sort(key=lambda item: (_safe_int(item.get("weight"), 1, 0), _safe_float(item.get("created_ts"), 0)), reverse=True)
+        memory["items"] = deduped[: self.max_companion_memory_items]
+        return memory["items"]
+
+    def _companion_memory_relevant_items(self, user: dict[str, Any], *, hint: str = "", limit: int = 6) -> list[dict[str, Any]]:
+        items = self._cleanup_companion_memory_items(user)
+        if not items:
+            return []
+        hint_text = _single_line(hint, 260).lower()
+        if not hint_text:
+            return items[: max(1, limit)]
+        weighted: list[tuple[int, dict[str, Any]]] = []
+        for item in items:
+            text = _single_line(item.get("text"), 260).lower()
+            score = _safe_int(item.get("weight"), 1, 0)
+            if text and any(token and token in hint_text for token in re.findall(r"[\u4e00-\u9fff]{2,8}|[a-z0-9_]{3,24}", text)):
+                score += 4
+            weighted.append((score, item))
+        weighted.sort(key=lambda pair: (pair[0], _safe_float(pair[1].get("created_ts"), 0)), reverse=True)
+        return [item for _, item in weighted[: max(1, limit)]]
+
     def _relationship_profile(self, user: dict[str, Any]) -> dict[str, Any]:
         proactive_count = _safe_int(user.get("proactive_sent_count"), 0)
         reply_count = _safe_int(user.get("reply_count"), 0)
@@ -387,8 +447,14 @@ class UserMemoryMixin:
             "kind": kind,
             "weight": min(5, 1 + score),
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "created_ts": _now_ts(),
         }
-        deduped = [old for old in items if isinstance(old, dict) and _single_line(old.get("text"), 260) != cleaned]
+        signature = self._memory_fact_signature(cleaned)
+        deduped = [
+            old
+            for old in items
+            if isinstance(old, dict) and self._memory_fact_signature(_single_line(old.get("text"), 260)) != signature
+        ]
         deduped.insert(0, item)
         memory["items"] = deduped[: self.max_companion_memory_items]
         memory["updated_at"] = item["created_at"]
@@ -435,7 +501,7 @@ class UserMemoryMixin:
                     text = _single_line(value, 180)
                 if text:
                     lines.append(f"{label}：{text}")
-        items = memory.get("items")
+        items = self._companion_memory_relevant_items(user, hint=user.get("last_user_message") or "", limit=8)
         if isinstance(items, list) and items:
             facts = []
             for item in items[:8]:
@@ -464,6 +530,7 @@ class UserMemoryMixin:
         episodes = user.get("dialogue_episodes")
         if not isinstance(episodes, list):
             return ""
+        seen: set[str] = set()
         lines: list[str] = []
         for item in episodes[-4:]:
             if not isinstance(item, dict):
@@ -471,6 +538,11 @@ class UserMemoryMixin:
             summary = _single_line(item.get("summary"), 120)
             if not summary:
                 continue
+            signature = self._memory_fact_signature(summary)
+            if signature and signature in seen:
+                continue
+            if signature:
+                seen.add(signature)
             mood = _single_line(item.get("emotional_residue"), 60)
             topic = _single_line(item.get("reusable_topic"), 80)
             parts = [summary]
@@ -488,11 +560,17 @@ class UserMemoryMixin:
         lines: list[str] = []
         now = _now_ts()
         kept = []
+        seen: set[str] = set()
         for item in loops:
             if not isinstance(item, dict):
                 continue
             if now - _safe_float(item.get("created_ts"), now) > 14 * 86400:
                 continue
+            signature = self._memory_fact_signature(item.get("text"))
+            if signature and signature in seen:
+                continue
+            if signature:
+                seen.add(signature)
             kept.append(item)
         if len(kept) != len(loops):
             user["open_loops"] = kept[-12:]

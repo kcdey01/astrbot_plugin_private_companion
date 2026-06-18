@@ -1689,7 +1689,7 @@
   "enable_private_reading_ask_recommendation": {
     "description": "向用户征求推荐",
     "type": "bool",
-    "hint": "当夹层阅读素材可用且 Bot 比较无聊时，低频主动私聊询问用户有没有好看的本子或漫画推荐。",
+    "hint": "当夹层阅读素材可用且 Bot 比较无聊时，低频主动私聊询问用户有没有合适的私密阅读推荐。",
     "default": false,
     "condition": {
       "enable_private_reading_integration": true
@@ -1735,7 +1735,7 @@
   "private_reading_min_interval_hours": {
     "description": "夹层阅读最小间隔（小时）",
     "type": "int",
-    "hint": "彩蛋触发的最小间隔，避免频繁搜索和消耗视觉模型。",
+    "hint": "低频阅读触发的最小间隔，避免频繁搜索和消耗视觉模型。",
     "slider": {
       "min": 4,
       "max": 168,

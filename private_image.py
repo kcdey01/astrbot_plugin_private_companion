@@ -1769,6 +1769,108 @@ class PrivateImageMixin:
         )
         return any(marker in compact for marker in markers)
 
+    def _private_image_reply_drifts_to_stale_context(self, text: str) -> bool:
+        compact = re.sub(r"\s+", "", str(text or ""))
+        if not compact:
+            return False
+        stale_markers = (
+            "下午我会", "下午陪你", "五点放学", "放学就行", "放学之后",
+            "到时候叫我", "到时候喊我", "ちゃんと付き合う", "午後",
+        )
+        image_markers = (
+            "图", "图片", "画面", "漫画", "这个", "这张", "大腿", "夹头",
+            "好笑", "离谱", "表情", "梗", "幽灵", "月亮",
+        )
+        return any(marker in compact for marker in stale_markers) and any(marker in compact for marker in image_markers)
+
+    def _record_user_recent_group_message_from_observation(
+        self,
+        *,
+        group_id: str,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+        scene: dict[str, Any] | None = None,
+        message_id: str = "",
+        ts: float | None = None,
+    ) -> None:
+        user_id = str(sender_id or "").strip()
+        if not user_id:
+            return
+        users = self.data.get("users")
+        configured_ids = set(self._configured_target_ids()) if callable(getattr(self, "_configured_target_ids", None)) else set()
+        if not isinstance(users, dict):
+            return
+        if user_id not in users and user_id not in configured_ids:
+            return
+        user = self._get_user(user_id)
+        now = _now_ts() if ts is None else float(ts or 0)
+        recent = user.setdefault("recent_group_messages", [])
+        if not isinstance(recent, list):
+            recent = []
+            user["recent_group_messages"] = recent
+        recent.append(
+            {
+                "ts": now,
+                "group_id": _single_line(group_id, 40),
+                "sender_name": _single_line(sender_name, 40),
+                "text": _single_line(text, 180),
+                "message_id": _single_line(message_id, 120),
+                "talking_to": _single_line((scene or {}).get("talking_to"), 40) if isinstance(scene, dict) else "",
+                "scene_trigger": _single_line((scene or {}).get("trigger"), 40) if isinstance(scene, dict) else "",
+            }
+        )
+        cutoff = now - 2 * 3600
+        kept = [
+            item for item in recent
+            if isinstance(item, dict) and _safe_float(item.get("ts"), 0) >= cutoff
+        ]
+        user["recent_group_messages"] = kept[-8:]
+
+    def _format_recent_group_messages_for_private_image_prompt(self, user_id: str) -> str:
+        if not user_id:
+            return ""
+        try:
+            user = self._get_user(user_id)
+        except Exception:
+            return ""
+        recent = user.get("recent_group_messages")
+        if not isinstance(recent, list):
+            return ""
+        now = _now_ts()
+        items = [
+            item for item in recent
+            if isinstance(item, dict) and 0 <= now - _safe_float(item.get("ts"), 0) <= 20 * 60
+        ][-4:]
+        if not items:
+            return ""
+        lines = ["【用户刚刚在群里的近况】"]
+        for item in items:
+            elapsed = self._format_elapsed(max(0, now - _safe_float(item.get("ts"), 0)))
+            group_id = _single_line(item.get("group_id"), 40)
+            text = _single_line(item.get("text"), 160)
+            if text:
+                lines.append(f"- {elapsed}前｜群 {group_id}｜{text}")
+        if len(lines) <= 1:
+            return ""
+        lines.append("使用方式：这比私聊压缩历史更新，只作为当前用户近况和语气背景；当前回复仍然优先回应这张图片。")
+        return "\n".join(lines)
+
+    def _trim_private_image_stale_context_tail(self, text: str) -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return ""
+        stale_patterns = (
+            r"\s*<tts\b[^>]*>[^<]*(?:午後|付き合う)[^<]*</tts>\s*[^。！？!?]*?(?:下午|五点|放学|陪你)[^。！？!?\n]*[。！？!?]?",
+            r"\s*(?:另外|还有|それと|顺便)[，,、\s]*[^。！？!?\n]*(?:下午|五点|放学|到时候|陪你)[^。！？!?\n]*[。！？!?]?",
+            r"\s*[^。！？!?\n]*(?:下午我会|下午陪你|五点放学|放学就行|到时候叫我|到时候喊我)[^。！？!?\n]*[。！？!?]?",
+        )
+        trimmed = cleaned
+        for pattern in stale_patterns:
+            trimmed = re.sub(pattern, "", trimmed, flags=re.IGNORECASE).strip()
+        trimmed = re.sub(r"\n{3,}", "\n\n", trimmed).strip()
+        return trimmed or cleaned
+
     def _private_image_reply_misses_content_question(self, text: str) -> bool:
         compact = re.sub(r"\s+", "", str(text or ""))
         if not compact:
@@ -2016,6 +2118,7 @@ class PrivateImageMixin:
             prompt = (
                 "用户刚刚只发了一张图片,没有补充文字。"
                 "图片内容已在系统提示的【本轮延迟图片】视觉摘要中给出；请直接回应那张图,不要说没看到图片。"
+                "本轮只回应当前图片和用户发图可能表达的态度/梗/疑问；聊天历史只作语气背景,不要续写、答应或安排旧话题。"
                 if vision_text
                 else "用户刚刚只发了一张图片,没有补充文字。"
             )
@@ -2130,6 +2233,17 @@ class PrivateImageMixin:
             if direct_image_mode:
                 req.image_urls = list(request_image_refs)
             await self.inject_humanized_state(framework_event, req)
+            boundary_prompt = (
+                "【本轮图片回复边界】\n"
+                "用户当前只发了一张图片,没有文字补充。你的当前任务是回应这张图片本身和用户借图表达的态度/梗/疑问。\n"
+                "不要把聊天历史、长期记忆、主动消息、旧 TTS 文本或压缩摘要里的邀约当成当前输入；"
+                "不要顺便提下午、五点、放学、出去走走、陪你、到时候叫我等旧约定。"
+            )
+            recent_group_context = self._format_recent_group_messages_for_private_image_prompt(user_id)
+            if recent_group_context:
+                boundary_prompt = f"{boundary_prompt}\n\n{recent_group_context}"
+            current_prompt = str(getattr(req, "system_prompt", "") or "")
+            req.system_prompt = f"{current_prompt}\n\n{boundary_prompt}".strip() if current_prompt else boundary_prompt
             if direct_image_mode:
                 existing = getattr(req, "image_urls", None)
                 if not isinstance(existing, list):
@@ -2242,6 +2356,23 @@ class PrivateImageMixin:
                     _single_line(reply, 180),
                 )
                 reply = ""
+            if reply and vision_text and self._private_image_reply_drifts_to_stale_context(reply):
+                trimmed_reply = self._trim_private_image_stale_context_tail(reply)
+                if trimmed_reply and trimmed_reply != reply and not self._private_image_reply_drifts_to_stale_context(trimmed_reply):
+                    logger.info(
+                        "[PrivateCompanion] 私聊单图主链回复夹带旧上下文,已裁剪: user=%s before=%s after=%s",
+                        user_id,
+                        _single_line(reply, 180),
+                        _single_line(trimmed_reply, 180),
+                    )
+                    reply = trimmed_reply
+                else:
+                    logger.info(
+                        "[PrivateCompanion] 私聊单图主链回复夹带旧上下文,转入兜底回复: user=%s reply_preview=%s",
+                        user_id,
+                        _single_line(reply, 180),
+                    )
+                    reply = ""
             if reply:
                 logger.info(
                     "[PrivateCompanion] 私聊单图主链回复生成: user=%s chars=%s intent=%s ownership=%s reply_preview=%s",

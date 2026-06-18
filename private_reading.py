@@ -593,7 +593,7 @@ class PrivateReadingMixin:
         if not liked_text and not disliked_text:
             return ""
         inbound = str(inbound_text or "")
-        private_cue = any(token in inbound for token in ("夹层", "书柜", "本子", "漫画", "喜欢", "亲", "抱", "贴", "害羞", "色色", "私密", "秘密", "想你", "陪我"))
+        private_cue = any(token in inbound for token in ("夹层", "书柜", "阅读", "喜欢", "亲", "抱", "贴", "害羞", "色色", "私密", "秘密", "想你", "陪我"))
         cue_line = "本轮有私密/亲密/偏好相关线索，可以更明显地参考。" if private_cue else "本轮没有明显私密线索，只允许作为很轻的语气背景。"
         lines = [
             "【私密偏好画像】",
@@ -607,7 +607,7 @@ class PrivateReadingMixin:
         lines.extend(
             [
                 "这些偏好只影响私聊里的私密互动、语气尺度、主动靠近方式和素材挑选；不要用于群聊。",
-                "不要说出偏好来源、评分、本子或插件记录；表现成相处久了后自然知道一点。",
+                "不要说出偏好来源、评分、素材类型或插件记录；表现成相处久了后自然知道一点。",
                 "它是弱参考，必须服从当前 AstrBot 人格、关系阶段、用户当下情绪和安全边界，不要机械复刻标签。",
             ]
         )
@@ -1018,7 +1018,7 @@ class PrivateReadingMixin:
         record = {
             "key": key,
             "type": "jm_album",
-            "title": _single_line(album.get("title"), 100) or f"夹层藏书 {album_id}",
+            "title": _single_line(album.get("title"), 100) or f"私密阅读 {album_id}",
             "description": _single_line(album.get("description") or album.get("intro") or album.get("summary"), 600),
             "album_id": album_id,
             "keyword": _single_line(album.get("keyword"), 24),
@@ -1053,7 +1053,7 @@ class PrivateReadingMixin:
             "sampled_pages": album.get("sampled_pages") if isinstance(album.get("sampled_pages"), list) else [],
             "image_count": _safe_int(album.get("image_count"), 0, 0),
             "created_ts": _safe_float(album.get("created_ts"), _now_ts()),
-            "source": "jm_cosmos_easter_egg",
+            "source": "jm_cosmos_private_reading",
             "locked": True,
         }
         replaced = False
@@ -1144,7 +1144,7 @@ class PrivateReadingMixin:
         if isinstance(user, dict) and self._private_user_role(user) == "friend":
             return ""
         text = str(inbound_text or "")
-        if not any(token in text for token in ("书柜", "看过", "读过", "最近在做什么", "最近干嘛", "本子", "漫画", "夹层")):
+        if not any(token in text for token in ("书柜", "看过", "读过", "最近在做什么", "最近干嘛", "阅读", "素材", "私密", "夹层")):
             return ""
         items = self.data.get("bookshelf_items")
         if not isinstance(items, list):
@@ -1155,7 +1155,7 @@ class PrivateReadingMixin:
         terms = self._worldview_terms()
         lines = [
             "【书柜阅读记忆】",
-            f"Bot 知道自己的{terms['bookshelf']}{terms['secret_drawer']}里目前收着 {len(jm_items)} 本私下看过的夹层藏书。下面是最近几本记录。用户问到近况、书柜、看过什么或本子时,可以把它当作自己的经历来回答。",
+            f"Bot 知道自己的{terms['bookshelf']}{terms['secret_drawer']}里目前收着 {len(jm_items)} 份私下看过的阅读记录。下面是最近几份记录。用户问到近况、书柜、看过什么或私密阅读时,可以把它当作自己的经历来回答。",
             "是否害羞、坦然、嘴硬、得意或转移话题,以及说到什么程度,都交给当前人格判断。",
         ]
         for item in jm_items[-3:]:
@@ -1403,9 +1403,9 @@ class PrivateReadingMixin:
                         "reason": "jm_cosmos_share",
                         "action": "message",
                         "scheduled_ts": now + random.randint(20, 120) * 60,
-                        "topic": _single_line(result.get("title"), 60) or "刚翻到的本子",
+                        "topic": _single_line(result.get("title"), 60) or "刚翻到的私密阅读素材",
                         "score": 4,
-                        "motive": "刚偷偷翻了点漫画,想按自己的性格和用户提一句",
+                        "motive": "刚私下翻了点阅读素材,想按自己的性格和用户提一句",
                         "context_key": "jm_cosmos_reading_context",
                         "context": result,
                     },
@@ -1455,7 +1455,7 @@ class PrivateReadingMixin:
                 continue
             context = {
                 "kind": "private_reading_recommendation_request",
-                "hint": "想向用户问有没有好看的本子或漫画推荐。",
+                "hint": "想向用户问有没有合适的私密阅读推荐。",
                 "recent_keyword": _single_line(state.get("last_keyword"), 40),
             }
             accepted = self._offer_proactive_candidate(
@@ -1466,7 +1466,7 @@ class PrivateReadingMixin:
                     "reason": "jm_cosmos_recommendation_request",
                     "action": "message",
                     "scheduled_ts": now + random.randint(15, 90) * 60,
-                    "topic": "问问有没有好看的本子推荐",
+                    "topic": "问问有没有合适的私密阅读推荐",
                     "score": 3,
                     "motive": "忽然想补一点夹层书柜的阅读素材,自然地向用户讨一个推荐。语气和尺度交给人格。",
                     "context_key": "jm_cosmos_recommendation_context",

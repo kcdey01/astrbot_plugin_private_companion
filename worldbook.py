@@ -1058,6 +1058,9 @@ class WorldbookMixin:
             return token in text
         if not self._worldbook_token_usable(token):
             return False
+        if len(token) <= 2:
+            pattern = rf"(?<![\u4e00-\u9fffA-Za-z0-9_]){re.escape(token)}(?![\u4e00-\u9fffA-Za-z0-9_])"
+            return bool(re.search(pattern, text))
         return token in text
 
     def _worldbook_profile_view(self, profile: dict[str, Any], *, match_reason: str, confidence: str) -> dict[str, Any]:
@@ -1111,6 +1114,8 @@ class WorldbookMixin:
                     continue
                 user_id, profile = hits[0]
                 if user_id in selected:
+                    continue
+                if len(token) <= 2 and str(sender_id or "") != str(user_id):
                     continue
                 selected[user_id] = self._worldbook_profile_view(
                     profile,

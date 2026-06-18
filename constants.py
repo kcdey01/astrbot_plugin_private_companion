@@ -253,6 +253,7 @@ _DEFAULT_USER_TEMPLATE = {
     "recent_reply_topics": [],
     "postprocess_stats": {},
     "dialogue_episodes": [],
+    "recent_group_messages": [],
     "open_loops": [],
     "action_preferences": {},
     "action_consequences": [],

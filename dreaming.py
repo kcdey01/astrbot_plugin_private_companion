@@ -122,17 +122,22 @@ def normalize_dream_fragment_pool(plugin, fragments: Any, *, now_ts: float | Non
     if not isinstance(fragments, list):
         return []
     deduped: dict[str, dict[str, Any]] = {}
+    fuzzy_seen: set[str] = set()
     for raw in fragments:
         item = plugin._normalize_dream_fragment_item(raw)
         if not item:
             continue
         text = item["text"]
+        fuzzy_key = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]+", "", text).lower()[:36]
+        if not fuzzy_key or fuzzy_key in fuzzy_seen:
+            continue
         item["effective_weight"] = plugin._dream_fragment_effective_weight(item, now_ts=now_ts)
         if item["effective_weight"] < 0.12:
             continue
         existing = deduped.get(text)
         if not existing or item["effective_weight"] > existing.get("effective_weight", 0):
             deduped[text] = item
+            fuzzy_seen.add(fuzzy_key)
     ranked = sorted(
         deduped.values(),
         key=lambda item: (float(item.get("effective_weight", 0)), float(item.get("created_ts", 0))),

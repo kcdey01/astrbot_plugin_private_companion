@@ -738,6 +738,225 @@ class ProactiveEngineMixin:
                 item["updated_ts"] = _now_ts()
                 break
 
+    def _proactive_decision_factors(self, user: dict[str, Any], *, now: float | None = None) -> list[dict[str, Any]]:
+        now = _now_ts() if now is None else now
+        factors: list[dict[str, Any]] = []
+
+        def add(
+            key: str,
+            label: str,
+            passed: bool,
+            score: int,
+            detail: str = "",
+            *,
+            blocker: bool = False,
+        ) -> None:
+            factors.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "passed": bool(passed),
+                    "score": int(score),
+                    "detail": _single_line(detail, 160),
+                    "blocker": bool(blocker),
+                }
+            )
+
+        user_id = str(user.get("user_id") or user.get("id") or "")
+        enabled = self._user_enabled_for_proactive(user_id, user)
+        add("enabled", "用户启用", enabled, 18 if enabled else -80, "已启用" if enabled else "私聊对象未启用", blocker=not enabled)
+
+        has_session = bool(user.get("umo"))
+        add("session", "私聊会话", has_session, 12 if has_session else -70, "会话可用" if has_session else "缺少私聊会话", blocker=not has_session)
+
+        if user.get("proactive_sending"):
+            add("sending", "发送占用", False, -60, "上一条主动消息仍在发送中", blocker=True)
+        else:
+            add("sending", "发送占用", True, 6, "当前没有发送占用")
+
+        daily_limit = self._effective_user_daily_limit(user)
+        sent_today = _safe_int(user.get("sent_today"), 0)
+        under_limit = daily_limit > 0 and sent_today < daily_limit
+        if daily_limit <= 0:
+            add("daily_limit", "每日上限", False, -55, "每日上限为 0", blocker=True)
+        else:
+            add(
+                "daily_limit",
+                "每日上限",
+                under_limit,
+                8 if under_limit else -40,
+                f"{sent_today}/{daily_limit}",
+                blocker=not under_limit,
+            )
+
+        due_timer_active = self._has_due_llm_timer(user, now=now)
+        source = str(user.get("planned_proactive_source") or "")
+        rest_until = self._user_rest_silence_until(user, now=now)
+        rest_blocked = rest_until > now and not due_timer_active and source != "timer"
+        add(
+            "rest",
+            "休息静默",
+            not rest_blocked,
+            5 if not rest_blocked else -45,
+            "未命中静默" if not rest_blocked else "用户明确休息中",
+            blocker=rest_blocked,
+        )
+
+        quiet_blocked = self._is_quiet_time() and not self._can_send_insomnia_night_message(user)
+        add(
+            "quiet_hours",
+            "免打扰",
+            not quiet_blocked,
+            4 if not quiet_blocked else -42,
+            "当前可发" if not quiet_blocked else "处于免打扰时段",
+            blocker=quiet_blocked,
+        )
+
+        rel_state = user.get("relationship_state")
+        relationship_blocked = (
+            self.enable_relationship_state_machine
+            and isinstance(rel_state, dict)
+            and rel_state.get("mode") == "backoff"
+            and _safe_float(rel_state.get("backoff_until"), 0) > now
+        )
+        emotion_blocked = (
+            bool(getattr(self, "enable_emotion_simulation", True))
+            and isinstance(rel_state, dict)
+            and rel_state.get("mode") in {"hurt", "refusing"}
+            and _safe_float(rel_state.get("hurt_until"), 0) > now
+        )
+        relation_ok = not (relationship_blocked or emotion_blocked)
+        relation_detail = "状态平稳"
+        if isinstance(rel_state, dict) and rel_state.get("mode"):
+            relation_detail = f"mode={_single_line(rel_state.get('mode'), 24)}"
+        add(
+            "relationship_gate",
+            "关系/情绪闸门",
+            relation_ok,
+            7 if relation_ok else -48,
+            relation_detail,
+            blocker=not relation_ok,
+        )
+
+        next_at = _safe_float(user.get("next_proactive_at"), 0)
+        planned_reason = str(user.get("planned_proactive_reason") or "")
+        if next_at <= 0:
+            add("planned", "候选计划", False, -12, "尚未安排下一次候选")
+        else:
+            due = now >= next_at
+            add(
+                "planned",
+                "候选计划",
+                due,
+                10 if due else -10,
+                (
+                    self._environment_fromtimestamp(next_at).strftime("%m-%d %H:%M:%S")
+                    if next_at > 0
+                    else "未安排"
+                ),
+                blocker=False,
+            )
+
+        last_seen = _safe_float(user.get("last_seen"), 0)
+        idle_minutes = self._effective_user_idle_minutes(user)
+        if self._is_greeting_reason(planned_reason):
+            idle_minutes = self._effective_user_greeting_idle_minutes(user)
+        idle_seconds = max(0, idle_minutes) * 60
+        idle_elapsed = now - last_seen if last_seen > 0 else 999999999.0
+        idle_passed = due_timer_active or idle_elapsed >= idle_seconds
+        add(
+            "idle",
+            "用户空闲",
+            idle_passed,
+            9 if idle_passed else -28,
+            (
+                f"已空闲 {self._format_elapsed(max(0, idle_elapsed))} / 至少 {self._format_elapsed(idle_seconds)}"
+                if last_seen > 0
+                else "暂无活跃记录"
+            ),
+            blocker=not idle_passed and not due_timer_active,
+        )
+
+        last_sent = _safe_float(user.get("last_sent"), 0)
+        min_interval = self._effective_min_interval_seconds(user)
+        if self._is_greeting_reason(planned_reason) and self._private_user_role(user) != "friend":
+            min_interval = min(min_interval, self._greeting_min_interval_seconds(planned_reason))
+        send_elapsed = now - last_sent if last_sent > 0 else 999999999.0
+        interval_passed = due_timer_active or send_elapsed >= min_interval
+        add(
+            "interval",
+            "发送间隔",
+            interval_passed,
+            8 if interval_passed else -25,
+            (
+                f"已过 {self._format_elapsed(max(0, send_elapsed))} / 至少 {self._format_elapsed(min_interval)}"
+                if last_sent > 0
+                else "还没有主动发送记录"
+            ),
+            blocker=not interval_passed and not due_timer_active,
+        )
+
+        if planned_reason:
+            reason_allowed = due_timer_active or self._is_reason_allowed_now(planned_reason)
+            add(
+                "reason_window",
+                "时段适配",
+                reason_allowed,
+                6 if reason_allowed else -18,
+                planned_reason,
+                blocker=not reason_allowed and not due_timer_active,
+            )
+
+        planned_action = str(user.get("planned_proactive_action") or "message")
+        action_ok = self._action_is_available(planned_action, user)
+        add(
+            "action",
+            "动作可用",
+            action_ok,
+            6 if action_ok else -24,
+            planned_action or "message",
+            blocker=not action_ok,
+        )
+
+        repeated = self._planned_proactive_recently_repeated(user)
+        add(
+            "dedupe",
+            "主题去重",
+            not repeated,
+            6 if not repeated else -20,
+            "近期无重复" if not repeated else "近期主动主题过于相似",
+            blocker=repeated,
+        )
+
+        total_score = 50 + sum(int(item.get("score") or 0) for item in factors)
+        factors.append(
+            {
+                "key": "total",
+                "label": "综合评分",
+                "passed": total_score >= 50,
+                "score": max(0, min(100, total_score)),
+                "detail": "分数越高越适合现在发",
+                "blocker": False,
+            }
+        )
+        return factors
+
+    def _proactive_decision_snapshot(self, user: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
+        now = _now_ts() if now is None else now
+        factors = self._proactive_decision_factors(user, now=now)
+        blocker_labels = [item.get("label") for item in factors if item.get("blocker")]
+        total_score = 0
+        for item in factors:
+            if item.get("key") == "total":
+                total_score = _safe_int(item.get("score"), 0, 0, 100)
+                break
+        return {
+            "score": total_score,
+            "blockers": [str(item) for item in blocker_labels if str(item or "").strip()],
+            "factors": factors,
+            "generated_ts": now,
+        }
+
     def _proactive_audit_log(self) -> list[dict[str, Any]]:
         raw = self.data.setdefault("proactive_audit_log", [])
         if not isinstance(raw, list):
@@ -849,6 +1068,7 @@ class ProactiveEngineMixin:
         probe = dict(user)
         decision, reason = self._should_send(probe)
         now = _now_ts()
+        snapshot = self._proactive_decision_snapshot(probe, now=now)
         planned_reason = str(probe.get("planned_proactive_reason") or "")
         planned_action = str(probe.get("planned_proactive_action") or "message")
         planned_source = str(probe.get("planned_proactive_source") or "")
@@ -890,6 +1110,7 @@ class ProactiveEngineMixin:
         lines = [
             f"主动判定：{'会发送' if decision else '这次不发'}",
             f"原因：{reason}",
+            f"综合评分：{_safe_int(snapshot.get('score'), 0, 0, 100)}/100",
             f"下次候选：{next_at_text}",
             f"计划：{planned_reason or '未记录'}｜{planned_action}"
             + (f"｜计划源：{planned_source}" if planned_source else "")
@@ -903,6 +1124,23 @@ class ProactiveEngineMixin:
             f"距上次主动：{self._format_elapsed(max(0, last_sent_gap)) if last_sent_gap >= 0 else '从未'}｜要求至少 {self._format_elapsed(min_interval)}",
             f"时间窗适配：{reason_allowed_text}｜自然动机：{moment_ok_text}",
         ]
+        blockers = snapshot.get("blockers") if isinstance(snapshot.get("blockers"), list) else []
+        if blockers:
+            lines.append("阻塞项：" + " / ".join(_single_line(item, 32) for item in blockers[:6] if _single_line(item, 32)))
+        factor_lines = []
+        factors = snapshot.get("factors") if isinstance(snapshot.get("factors"), list) else []
+        for item in factors:
+            if not isinstance(item, dict) or item.get("key") in {"total"}:
+                continue
+            label = _single_line(item.get("label"), 24)
+            detail = _single_line(item.get("detail"), 90)
+            state_text = "通过" if item.get("passed") else "未通过"
+            score_text = f"{_safe_int(item.get('score'), 0, -100, 100):+d}"
+            if label:
+                factor_lines.append(f"- {label}：{state_text}（{score_text}）" + (f"｜{detail}" if detail else ""))
+        if factor_lines:
+            lines.append("判定分解：")
+            lines.extend(factor_lines[:12])
         return "\n".join(lines)
 
     def _simulation_label(self, user: dict[str, Any]) -> str:

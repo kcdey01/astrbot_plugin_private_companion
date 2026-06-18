@@ -301,7 +301,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.9.1",
+    "4.0.0",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -1001,6 +1001,20 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             self._save_data_sync()
         if self._cleanup_all_group_slang_terms():
             self._save_data_sync()
+        groups = self.data.get("groups") if isinstance(self.data.get("groups"), dict) else {}
+        if isinstance(groups, dict):
+            group_cleanup_changed = False
+            for raw_group in groups.values():
+                if not isinstance(raw_group, dict):
+                    continue
+                cleaner = getattr(self, "_cleanup_group_members", None)
+                if callable(cleaner) and cleaner(raw_group):
+                    group_cleanup_changed = True
+                edge_cleaner = getattr(self, "_cleanup_group_relationship_edges", None)
+                if callable(edge_cleaner) and edge_cleaner(raw_group):
+                    group_cleanup_changed = True
+            if group_cleanup_changed:
+                self._save_data_sync()
         if self.worldbook_auto_import:
             try:
                 if self._import_worldbook_entries_from_sources():
@@ -1807,7 +1821,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             "图片", "看图", "照片", "语音", "引用", "转发", "聊天记录",
             "帮我", "怎么", "为什么", "是什么", "怎么办", "分析", "解释", "总结",
             "日程", "状态", "近况", "在干嘛", "做什么", "忙什么",
-            "书柜", "夹层", "本子", "新闻", "说说", "空间", "发给", "转告", "@",
+            "书柜", "夹层", "阅读", "素材", "新闻", "说说", "空间", "发给", "转告", "@",
         )
         return not any(token in cleaned for token in heavy_tokens)
 
@@ -2179,6 +2193,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     "这是当前这张图片的可靠内容摘要；即使当前主模型不能直接识图,也请按此摘要理解,不要回答“没看到图”或要求重发。"
                     "请同时利用“可见内容”和“图像表达意图”；图片类型只影响回复组织顺序,不允许丢掉另一项。"
                     "如果用户问图里是什么,必须先回答画面内容,再结合表达意图；不要提模型、插件或路径。"
+                    "本轮只回应当前图片和用户发图可能表达的态度/梗/疑问；不要把聊天历史、长期记忆、主动消息、旧 TTS 文本或压缩摘要里的邀约当成当前输入。"
+                    "不要顺便提下午、五点、放学、出去走走、陪你、到时候叫我等旧约定。"
                     f"{self._private_image_identity_disambiguation_instruction()}\n"
                     f"{reply_objective}\n"
                     f"{buffered_image_vision}"
@@ -2192,7 +2208,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 injection_parts.append(
                     "【本轮延迟图片】\n"
                     f"{image_context_intro}图片已暂存,但视觉转述暂时不可用；"
-                    "如果用户问的是图片内容,请自然说明自己这边暂时没看清,不要编造画面。\n"
+                    "如果用户问的是图片内容,请自然说明自己这边暂时没看清,不要编造画面。"
+                    "本轮只回应当前图片和用户补充文字,不要续写、答应或安排历史里的旧邀约/旧 TTS 内容。\n"
                     + "\n".join(f"- {path}" for path in buffered_images)
                 )
         elif bool(getattr(event, "private_companion_deferred_private_image_only_ready", False)):
@@ -2201,7 +2218,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     "【本轮延迟图片】\n"
                     "用户刚刚只发了一张图片,没有继续补充文字。下面是视觉模型对那张图的内部摘要；"
                     "这是当前这张图片的可靠内容摘要；即使当前主模型不能直接识图,也请按此摘要理解,不要回答“没看到图”或要求重发。"
-                    "请自然回应图片内容,不要提模型、插件或处理过程。\n"
+                    "请自然回应图片内容,不要提模型、插件或处理过程。"
+                    "本轮只回应当前图片和用户发图可能表达的态度/梗/疑问；不要把聊天历史、长期记忆、主动消息、旧 TTS 文本或压缩摘要里的邀约当成当前输入。"
+                    "不要顺便提下午、五点、放学、出去走走、陪你、到时候叫我等旧约定。\n"
                     f"{buffered_image_vision}"
                 )
             else:
@@ -2209,6 +2228,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     "【本轮延迟图片】\n"
                     "用户刚刚只发了一张图片,没有继续补充文字。当前没有拿到可用图片内容；"
                     "请不要沉默,也不要编造画面,可以自然地表示这边暂时没看清并等用户补一句。"
+                    "不要续写、答应或安排历史里的旧邀约/旧 TTS 内容。"
                 )
         reply_image_sources: list[str] = []
         reply_image_prompt_anchor = ""

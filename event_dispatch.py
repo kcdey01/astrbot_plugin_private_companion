@@ -2137,6 +2137,18 @@ class EventDispatchMixin:
         cleaned = _single_line(text, 240)
         if not cleaned:
             return True
+        compact = re.sub(r"\s+", "", cleaned)
+        if compact in {
+            "我主动开口了。",
+            "我主动开口了",
+            "我主动发了一段语音。",
+            "我主动发了一段语音",
+            "我主动分享了一点东西。",
+            "我主动分享了一点东西",
+            "我主动做了一次小互动。",
+            "我主动做了一次小互动",
+        }:
+            return True
         if re.fullmatch(r"(?:图|图片|照片)(?:好|好了|生成好了|出来了|完成了)[啦了~～。!！]*", cleaned):
             return True
         if re.fullmatch(r"(?:生图|出图|图片生成)(?:完成|好了|成功)[啦了~～。!！]*", cleaned):

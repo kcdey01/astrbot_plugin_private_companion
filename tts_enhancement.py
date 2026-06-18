@@ -410,7 +410,22 @@ class TtsEnhancementMixin:
     def _tts_visible_text_has_chinese(self, text: str) -> bool:
         cleaned = self._strip_any_tts_markup(text)
         cleaned = re.sub(r"[\s\W_]+", "", cleaned, flags=re.UNICODE)
-        return bool(re.search(r"[\u4e00-\u9fff]{2,}", cleaned))
+        if not cleaned:
+            return False
+        # Japanese uses CJK ideographs too. A visible explanation for a non-Chinese
+        # TTS block must be actual Chinese, not merely Japanese text containing kanji.
+        if re.search(r"[\u3040-\u30ff\u31f0-\u31ff]", cleaned):
+            return False
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", cleaned))
+        if cjk_count < 2:
+            return False
+        chinese_markers = (
+            "的", "了", "是", "我", "你", "他", "她", "它", "们", "这", "那",
+            "不", "有", "在", "就", "吗", "呢", "吧", "呀", "啊", "哦", "嘛",
+            "想", "要", "可以", "知道", "睡", "觉", "终于", "今天", "明天",
+            "晚上", "早上", "下次", "这次", "喜欢", "辛苦", "轻点", "等会",
+        )
+        return any(marker in cleaned for marker in chinese_markers) or cjk_count >= 4
 
     async def _translate_tts_spoken_to_chinese(self, text: str, event: Any, *, provider_kind: str) -> str:
         spoken = self._normalize_tts_spoken_text(text, provider_kind=provider_kind)
@@ -435,8 +450,18 @@ TTS 朗读文本：
                 translated = str(getattr(resp, "completion_text", resp) or "").strip()
                 translated = self._strip_any_tts_markup(translated)
                 translated = _single_line(translated, 300)
-                if self._tts_visible_text_has_chinese(translated):
+                same_as_source = (
+                    re.sub(r"\W+", "", translated, flags=re.UNICODE).lower()
+                    == re.sub(r"\W+", "", spoken, flags=re.UNICODE).lower()
+                )
+                if self._tts_visible_text_has_chinese(translated) and not same_as_source:
                     return translated
+                if translated:
+                    logger.warning(
+                        "[PrivateCompanion] TTS中文释义结果不像中文,已丢弃: source=%s result=%s",
+                        _single_line(spoken, 80),
+                        _single_line(translated, 80),
+                    )
         except Exception as exc:
             logger.warning("[PrivateCompanion] TTS中文释义生成失败: %s", _single_line(exc, 120))
         return ""
@@ -519,6 +544,31 @@ TTS 朗读文本：
             if self._tts_provider_allows_emotion_tags(provider_kind)
             else ""
         )
+        position_rule = (
+            "语音块可以出现在回复的开头、中间或结尾，只要读起来像自然聊天即可；不要为了使用语音而把整句都塞到结尾。"
+            if mode in {"hybrid", "direct"}
+            else ""
+        )
+        examples = ""
+        if mode in {"hybrid", "direct"}:
+            if getattr(self, "tts_voice_language", "ja") == "zh":
+                examples = (
+                    "参考格式：\n"
+                    "例1：<tts>嗯，我在听。</tts>你慢慢说。\n"
+                    "例2：先别急，<tts>我陪你想一下。</tts>这件事可以一点点拆开。"
+                )
+            elif getattr(self, "tts_voice_language", "ja") == "en":
+                examples = (
+                    "参考格式：\n"
+                    "例1：<tts>I am listening.</tts>我在听。你慢慢说。\n"
+                    "例2：先别急，<tts>Let me stay with you for a moment.</tts>让我陪你待一会儿。我们一点点想。"
+                )
+            else:
+                examples = (
+                    "参考格式：\n"
+                    "例1：<tts>ちゃんと聞いてるよ。</tts>我有在好好听哦。你慢慢说。\n"
+                    "例2：先别急，<tts>少しだけ、そばにいるね。</tts>我先在你旁边待一会儿。我们一点点想。"
+                )
         extra = _single_line(getattr(self, "tts_extra_prompt", ""), 800)
         if not extra:
             extra = self._legacy_nondefault_tts_prompt()
@@ -529,7 +579,9 @@ TTS 朗读文本：
                 f"当前语音正文目标语种：{lang}。",
                 tag_rule,
                 bilingual_rule,
+                position_rule,
                 emotion_rule,
+                examples,
                 "如果写错成 <ttts>、<tttts> 等多 t 标签，系统会规范化，但你应优先输出标准 <tts>...</tts>。",
                 f"补充规则：{extra}" if extra else "",
             ]
@@ -667,6 +719,13 @@ TTS 朗读文本：
             return [chunk]
         text = "".join(str(getattr(comp, "text", "") or "") for comp in chunk).strip()
         if not text:
+            return []
+        if getattr(self, "tts_voice_language", "ja") != "zh" and not self._tts_visible_text_has_chinese(text):
+            logger.warning(
+                "[PrivateCompanion] TTS 后置文本不是中文释义,已跳过发送: session=%s text=%s",
+                _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
+                _single_line(text, 120),
+            )
             return []
         splitter = getattr(self, "_split_proactive_text", None)
         if not callable(splitter):
@@ -1248,6 +1307,12 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
                     output.append(Plain(spoken))
             pos = match.end()
         after = re.sub(r"</?t{2,}s\b[^>]*>", "", normalized[pos:], flags=re.IGNORECASE).strip()
+        if after and getattr(self, "tts_voice_language", "ja") != "zh" and not self._tts_visible_text_has_chinese(after):
+            logger.warning(
+                "[PrivateCompanion] TTS语音块后置可见文本不是中文释义,已丢弃: text=%s",
+                _single_line(after, 120),
+            )
+            after = ""
         if after:
             output.append(Plain(after))
         has_record = any(isinstance(comp, Record) for comp in output)
