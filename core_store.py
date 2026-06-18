@@ -297,6 +297,10 @@ class CoreStoreMixin:
             "dream_fragments": [],
             "daily_dream": {},
             "diary_generated_day": "",
+            "daily_diary_failed_day": "",
+            "daily_diary_failed_at": 0,
+            "daily_diary_last_error": "",
+            "daily_diary_postprocess_error": "",
             "daily_story_plan": {},
             "skill_growth": {},
             "detail_enhanced_day": "",
@@ -341,6 +345,10 @@ class CoreStoreMixin:
         data.setdefault("dream_fragments", [])
         data.setdefault("daily_dream", {})
         data.setdefault("diary_generated_day", "")
+        data.setdefault("daily_diary_failed_day", "")
+        data.setdefault("daily_diary_failed_at", 0)
+        data.setdefault("daily_diary_last_error", "")
+        data.setdefault("daily_diary_postprocess_error", "")
         data.setdefault("daily_story_plan", {})
         data.setdefault("skill_growth", {})
         data.setdefault("detail_enhanced_day", "")
@@ -533,11 +541,19 @@ class CoreStoreMixin:
                     self.data["bot_diaries"] = diaries
                 diaries.append(diary)
                 del diaries[:-self.max_diary_entries]
-                self.data["dream_fragments"] = self._merge_dream_fragment_pool(
-                    diary.get("dream_fragments", []) if isinstance(diary, dict) else []
-                )
                 self.data["diary_generated_day"] = _today_key()
-                story_plan = diary.get("story_plan")
+                try:
+                    self.data["dream_fragments"] = self._merge_dream_fragment_pool(
+                        diary.get("dream_fragments", []) if isinstance(diary, dict) else []
+                    )
+                    self.data["daily_diary_postprocess_error"] = ""
+                except Exception as exc:
+                    self.data["daily_diary_postprocess_error"] = _single_line(exc, 180)
+                    logger.warning(
+                        "[PrivateCompanion] 重建今日日记已保存,但梦境碎片合并失败: %s",
+                        _single_line(exc, 180),
+                    )
+                story_plan = diary.get("story_plan") if isinstance(diary, dict) else None
                 if isinstance(story_plan, dict):
                     self.data["daily_story_plan"] = story_plan
                 self._save_data_sync()

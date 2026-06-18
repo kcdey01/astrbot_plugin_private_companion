@@ -227,7 +227,8 @@ def normalize_story_plan(plugin, payload: dict[str, Any]) -> dict[str, Any]:
             action = "message"
         if action == "screen_peek" and not plugin.allow_screen_peek_action:
             action = "message"
-        if action == "photo_text" and not plugin.allow_photo_text_action:
+        photo_planning_available = getattr(plugin, "_photo_text_planning_available", lambda *_args, **_kwargs: False)
+        if action == "photo_text" and not bool(photo_planning_available()):
             action = "message"
         if action == "voice" and not plugin.allow_voice_action:
             action = "message"
@@ -638,6 +639,32 @@ def build_detail_enhancement_prompt(
     schedule_adjustments = plugin._format_schedule_adjustments_for_prompt()
     user_habits = plugin._format_all_user_behavior_habits_for_schedule()
     yesterday_screen_diary = plugin._format_yesterday_screen_diary_context_for_prompt()
+    photo_available = bool(getattr(plugin, "_photo_text_planning_available", lambda *_args, **_kwargs: False)())
+    photo_action_hint = (
+        "photo_text 当前可用：可以在合适场景输出 action=photo_text,但必须像真实随手拍,不能说生成图片或调用生图。"
+        if photo_available
+        else "photo_text 当前不可用：不要输出 action=photo_text,也不要设计发照片/拍照/带图主动；有可拍画面时改成 message 用文字自然分享。"
+    )
+    photo_menu_hint = (
+        "可触发文字、语音、图片/照片、窥屏、眼前物分享、路上小画面、食物/包装/书页边缘/门口/车窗/桌面一角等真实可拍内容。"
+        if photo_available
+        else "可触发文字、语音、窥屏、轻触碰；眼前物、路上小画面、食物/包装/书页边缘等只能写成普通文字分享,不要当作照片动作。"
+    )
+    photo_instruction_hint = (
+        "screen_peek 用来看用户在干嘛,photo_text 用来拍当前场景里的具体主体,message 就是普通文字,voice 是一小段自然语音,poke 是很轻的触碰感。只在合适的场景用。不要总把 photo_text 写成草稿纸、小画或画圆圈。"
+        if photo_available
+        else "screen_peek 用来看用户在干嘛,message 就是普通文字,voice 是一小段自然语音,poke 是很轻的触碰感。当前没有可用图片/照片动作,不要输出 photo_text。"
+    )
+    photo_detail_hint = (
+        "如果 action 是 photo_text,topic 或 motive 要像真人发图：先从菜单里选“眼前物”或“可拍画面”方向,再自己生成当前场景里合理的具体画面。可以写“你看这个,刚拍的。[图片]”这类真人话,但不要总是天气/晚霞/窗外。严禁出现“生成了一张图片”“调用图片生成”“AI 画图”这类说法。"
+        if photo_available
+        else "因为 photo_text 当前不可用,topic/motive 里不要写“拍给你/发图/照片/刚拍的/[图片]”；如果想分享画面,用 message 直接描述看到的东西。"
+    )
+    photo_mix_hint = (
+        "proactive_events 不要全部写成 message。当前段里如果有可拍画面或眼前物,优先考虑 photo_text；想确认用户在不在时可用 screen_peek；很短的贴近感可用 voice 或 poke。只有确实没有动作契机时才用 message。"
+        if photo_available
+        else "proactive_events 不要为了多样化强行写不可用动作。当前没有 photo_text；可用 message、screen_peek、voice 或 poke 时再选择,否则就用 message。"
+    )
     return f"""
 你现在是 Private Companion 的日程细化生成器,要把最新命中的时间区间放大来看。不要当成策划会,要像旁观角色真实度过了这一小段。
 
@@ -661,9 +688,10 @@ def build_detail_enhancement_prompt(
 · 主动意愿要真实——不是每段都要发消息,允许“想了想算了”。
 · 主动内容不要只围绕问候、天气和当前状态。先从“内容选择菜单”里选一个方向,再根据当前时间段、日程、人格和最近聊天生成新的具体内容。不要照抄菜单示例,不要把类别名写进输出。
 · 主动能力要先检索再使用：从“主动能力检索”里挑当前可用且贴合场景的 action；不要凭空造新 action,也不要为了触发而触发。这个检索过程只供内部规划,不得写进 today_events、why、topic、motive 或最终聊天内容。
-· 主动能力要融入当前情境。可触发文字、语音、图片/照片、窥屏、眼前物分享、路上小画面、食物/包装/书页边缘/门口/车窗/桌面一角等真实可拍内容。只有在独处、半独处、课间、路上、睡前、发呆、刚拿到手机等合适时机才触发。
-· screen_peek 用来看用户在干嘛,photo_text 用来拍当前场景里的具体主体,message 就是普通文字,voice 是一小段自然语音,poke 是很轻的触碰感。只在合适的场景用。不要总把 photo_text 写成草稿纸、小画或画圆圈。
-· 如果 action 是 photo_text,topic 或 motive 要像真人发图：先从菜单里选“眼前物”或“可拍画面”方向,再自己生成当前场景里合理的具体画面。可以写“你看这个,刚拍的。[图片]”这类真人话,但不要总是天气/晚霞/窗外。严禁出现“生成了一张图片”“调用图片生成”“AI 画图”这类说法。
+· 主动图片能力状态：{photo_action_hint}
+· 主动能力要融入当前情境。{photo_menu_hint}只有在独处、半独处、课间、路上、睡前、发呆、刚拿到手机等合适时机才触发。
+· {photo_instruction_hint}
+· {photo_detail_hint}
 · 如果 action 是 voice,topic 或 motive 要像语音本身或语音前后的自然文字,例如“我跟你说啊……”；不要写成“发了一段语音给你”这种旁白式命令。
 · 主动行为的结果可以留白：可以对方秒回,也可以发完等几分钟没回复后锁屏,也可以只停在“想发但没发”。保持真实感。
 · proactive_events 的 window 必须落在本次输入指定的时间段内,且窗口要有随机范围,不要整点。
@@ -672,7 +700,7 @@ def build_detail_enhancement_prompt(
 · 除非当前段确实是睡前问候,傍晚或晚间的小分享不要都写成 evening_greeting,可以使用 activity_share、check_in 或 quiet_care。
 · 不要把主动消息设计成“汇报状态”或“表演状态”：避免“今天心情好多了”“我一整天没发脾气”“我是不是不正常”“我正在写作业”“我刚刚差点把茶打翻”这类自我报告或动作小剧场。
 · 主动消息最终要像真实聊天记录：能直接接话就直接接话。状态只影响语气、句子长短、话题选择和是否开口；即使困倦、迷糊、半梦半醒或低能量,也不能把消息设计成答非所问、乱猜、漏看用户需求或逻辑混乱。不要用动作描写暗示状态。确实需要表达时只用极短口语,如“困了”“别说了”“有点烦”。
-· proactive_events 不要全部写成 message。当前段里如果有可拍画面或眼前物,优先考虑 photo_text；想确认用户在不在时可用 screen_peek；很短的贴近感可用 voice 或 poke。只有确实没有动作契机时才用 message。
+· {photo_mix_hint}
 · motive 是心里一闪而过的念头,10–40 字。
 · scene / tone / impulse 是可选的抽象引导：scene 是当时场景,tone 是语气底色,impulse 是想靠近的那股劲。
 · 如果是起床/早安/试探,可以带 chain 做分支逻辑：先只叫名字,没回->隔久一点再轻轻放一句；早晨未回复不需要马上追,也不要把没回理解成故意不理。

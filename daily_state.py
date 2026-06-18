@@ -305,13 +305,33 @@ class DailyStateMixin:
         if not self.enable_daily_diary and not force:
             return None
         today = _today_key()
+        now_ts = _now_ts()
         async with self._data_lock:
             if not force and self.data.get("diary_generated_day") == today:
                 return None
+            if not force and self.data.get("daily_diary_failed_day") == today:
+                failed_at = _safe_float(self.data.get("daily_diary_failed_at"), 0, 0)
+                if failed_at > 0 and now_ts - failed_at < 30 * 60:
+                    return None
             if not force and not self._is_daily_diary_due():
                 return None
 
-        diary = await self._generate_daily_diary()
+        try:
+            diary = await self._generate_daily_diary()
+        except Exception as exc:
+            async with self._data_lock:
+                self.data["daily_diary_failed_day"] = today
+                self.data["daily_diary_failed_at"] = now_ts
+                self.data["daily_diary_last_error"] = _single_line(exc, 180)
+                self._save_data_sync()
+            if force:
+                raise
+            logger.warning(
+                "[PrivateCompanion] 生成今日日记失败,已进入30分钟冷却避免重复请求: %s",
+                _single_line(exc, 180),
+            )
+            return None
+
         async with self._data_lock:
             diaries = self.data.setdefault("bot_diaries", [])
             if not isinstance(diaries, list):
@@ -319,11 +339,24 @@ class DailyStateMixin:
                 self.data["bot_diaries"] = diaries
             diaries.append(diary)
             del diaries[:-self.max_diary_entries]
-            self.data["dream_fragments"] = self._merge_dream_fragment_pool(
-                diary.get("dream_fragments", []) if isinstance(diary, dict) else []
-            )
+            # Mark the diary as generated before optional enrichment so a post-process
+            # bug cannot make the scheduler call the LLM again and again.
             self.data["diary_generated_day"] = today
-            story_plan = diary.get("story_plan")
+            self.data["daily_diary_failed_day"] = ""
+            self.data["daily_diary_failed_at"] = 0
+            self.data["daily_diary_last_error"] = ""
+            try:
+                self.data["dream_fragments"] = self._merge_dream_fragment_pool(
+                    diary.get("dream_fragments", []) if isinstance(diary, dict) else []
+                )
+                self.data["daily_diary_postprocess_error"] = ""
+            except Exception as exc:
+                self.data["daily_diary_postprocess_error"] = _single_line(exc, 180)
+                logger.warning(
+                    "[PrivateCompanion] 今日日记已保存,但梦境碎片合并失败: %s",
+                    _single_line(exc, 180),
+                )
+            story_plan = diary.get("story_plan") if isinstance(diary, dict) else None
             if isinstance(story_plan, dict):
                 self.data["daily_story_plan"] = story_plan
             self._save_data_sync()
@@ -6592,6 +6625,25 @@ class DailyStateMixin:
             proactive_quote_message_id = self._planned_proactive_quote_message_id(user, str(user.get("umo") or ""))
             planned_opener_mode_for_send = str(user.get("planned_opener_mode") or "")
             planned_followup_kind_for_send = str(user.get("planned_followup_kind") or "")
+            if self._action_has_photo_text(planned_action_for_send) and not self._photo_text_available(user):
+                fallback_action = self._fallback_action_for_unavailable(planned_action_for_send, user)
+                if fallback_action != planned_action_for_send:
+                    logger.info(
+                        "[PrivateCompanion] 主动发图能力不可用,发送前已降级: user=%s requested=%s fallback=%s",
+                        user_id,
+                        planned_action_for_send,
+                        fallback_action,
+                    )
+                    planned_action_for_send = fallback_action
+                    async with self._data_lock:
+                        current_for_fallback = self._get_user(user_id)
+                        current_for_fallback["planned_proactive_action"] = fallback_action
+                        self._mark_planned_candidate_status(
+                            current_for_fallback,
+                            "accepted",
+                            "photo_text 后端不可用,已降级为普通主动消息",
+                        )
+                        self._save_data_sync()
             if (
                 planned_action_for_send == "message"
                 and str(user.get("planned_proactive_reason") or "") in {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}

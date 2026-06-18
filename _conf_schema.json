@@ -2550,6 +2550,15 @@
       "enable_group_companion": true
     }
   },
+  "group_repeat_count_distinct_users_only": {
+    "description": "复读只计不同用户",
+    "type": "bool",
+    "hint": "开启后，同一句话必须由 4 个不同群友说出才会触发复读跟读/打断；同一个人连续刷屏不会累计触发，也不会推高复读概率。",
+    "default": false,
+    "condition": {
+      "enable_group_repeat_follow": true
+    }
+  },
   "group_repeat_follow_probability": {
     "description": "复读跟读初始概率（%）",
     "type": "int",

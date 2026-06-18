@@ -1681,7 +1681,7 @@ class GroupObservationMixin:
                     return True
         return False
 
-    def _update_group_repeat_follow_state(self, group: dict[str, Any], text: str) -> dict[str, str]:
+    def _update_group_repeat_follow_state(self, group: dict[str, Any], text: str, sender_id: str = "") -> dict[str, str]:
         if not self.enable_group_repeat_follow:
             return {}
         cleaned = _single_line(text, 80)
@@ -1690,11 +1690,20 @@ class GroupObservationMixin:
             group["repeat_follow_state"] = {}
             return {}
         now = _now_ts()
+        sender_key = _single_line(sender_id, 64) or "unknown"
+        count_distinct_users = bool(getattr(self, "group_repeat_count_distinct_users_only", False))
         state = group.get("repeat_follow_state")
         if not isinstance(state, dict):
             state = {}
         if signature and signature == str(state.get("signature") or "") and now - _safe_float(state.get("last_ts"), 0) <= 120:
+            senders = state.get("senders") if isinstance(state.get("senders"), list) else []
+            sender_is_new = sender_key not in senders
+            if sender_is_new:
+                senders.append(sender_key)
+            state["senders"] = senders[-20:]
             state["count"] = _safe_int(state.get("count"), 1, 1) + 1
+            state["distinct_count"] = len(set(state["senders"]))
+            state["last_sender_id"] = sender_key
             state["last_ts"] = now
             state["text"] = cleaned
         else:
@@ -1702,14 +1711,18 @@ class GroupObservationMixin:
                 "signature": signature,
                 "text": cleaned,
                 "count": 1,
+                "distinct_count": 1,
+                "senders": [sender_key],
+                "last_sender_id": sender_key,
                 "first_ts": now,
                 "last_ts": now,
                 "acted": False,
                 "follow_probability": max(0.0, self.group_repeat_follow_probability),
                 "interrupt_probability": max(0.0, self.group_repeat_interrupt_probability),
             }
+            sender_is_new = True
         group["repeat_follow_state"] = state
-        count = _safe_int(state.get("count"), 1, 1)
+        count = _safe_int(state.get("distinct_count" if count_distinct_users else "count"), 1, 1)
         if count <= 3 or bool(state.get("acted")) or bool(state.get("followed")):
             return {}
         today = _today_key()
@@ -1725,6 +1738,8 @@ class GroupObservationMixin:
         total_probability = min(0.95, follow_probability + interrupt_probability)
         roll = random.random()
         if roll >= total_probability:
+            if count_distinct_users and not sender_is_new:
+                return {}
             step = max(0.0, self.group_repeat_interrupt_probability_step)
             state["follow_probability"] = min(0.85, follow_probability + step)
             state["interrupt_probability"] = min(0.85, interrupt_probability + step)
@@ -1741,7 +1756,11 @@ class GroupObservationMixin:
         return {"action": "follow", "text": cleaned, "image_path": ""}
 
     async def _maybe_group_interject(self, event: AstrMessageEvent, group: dict[str, Any], text: str) -> None:
-        repeat_action = self._update_group_repeat_follow_state(group, text)
+        try:
+            sender_id = str(event.get_sender_id())
+        except Exception:
+            sender_id = ""
+        repeat_action = self._update_group_repeat_follow_state(group, text, sender_id=sender_id)
         if repeat_action:
             repeat_reply = _single_line(repeat_action.get("text"), 80)
             image_path = str(repeat_action.get("image_path") or "")

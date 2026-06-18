@@ -2994,6 +2994,13 @@ class ProactiveEngineMixin:
                 return False
         return True
 
+    def _photo_text_planning_available(self, user: dict[str, Any] | None = None) -> bool:
+        try:
+            return bool(self._photo_text_available(user))
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 主动生图规划可用性检查失败: %s", _single_line(exc, 120))
+            return False
+
     def _recent_owner_generated_photo_path(self, *, max_age_hours: float = 24.0) -> str:
         users = self.data.get("users", {})
         if not isinstance(users, dict):
