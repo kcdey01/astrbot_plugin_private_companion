@@ -107,6 +107,28 @@ function normalizeFeatureDraft(features = {}) {
   return Object.fromEntries(Object.entries(features || {}).map(([key, value]) => [key, toBool(value)]));
 }
 
+function featureDraftFromOverview(overview = {}) {
+  const draft = normalizeFeatureDraft(overview.features || {});
+  const settings = overview.settings || {};
+  const settingBackedFeatureKeys = [
+    "enable_rest_reply_simulation",
+    "enable_worldview_perception",
+    "enable_group_persona_denoise",
+    "auto_voice_enabled",
+    "auto_voice_full_conversion_enabled",
+    "enable_tts_local_playback",
+    "enable_tts_local_playback_live_only",
+    "enable_tts_live_subtitle_sync",
+    "group_repeat_count_distinct_users_only",
+  ];
+  settingBackedFeatureKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(settings, key)) {
+      draft[key] = toBool(settings[key]);
+    }
+  });
+  return draft;
+}
+
 const pluginIntegrationAvailabilityRules = {
   enable_yesterday_screen_diary_context: () => Boolean(state.overview?.screen_companion?.available),
   enable_livingmemory_integration: () => Boolean(state.overview?.livingmemory?.available),
@@ -497,6 +519,7 @@ const featureGroups = [
 const embeddedFeatureParentByKey = {
   inject_passive_states: "enable_humanized_states",
   enable_cycle_state: "enable_humanized_states",
+  enable_rest_reply_simulation: "enable_humanized_states",
   enable_recall_cancel_reply: "enable_recall_enhancement",
   enable_recall_message_cache: "enable_recall_enhancement",
   enable_recall_transcribe_command: "enable_recall_enhancement",
@@ -531,13 +554,20 @@ const embeddedFeatureParentByKey = {
   enable_private_reading_boredom_read: "enable_private_reading_integration",
   enable_private_reading_ask_recommendation: "enable_private_reading_integration",
   enable_private_reading_preference_influence: "enable_private_reading_integration",
+  auto_voice_enabled: "enable_tts_enhancement",
+  auto_voice_full_conversion_enabled: "enable_tts_enhancement",
+  enable_tts_local_playback: "enable_tts_enhancement",
+  enable_tts_local_playback_live_only: "enable_tts_enhancement",
+  enable_tts_live_subtitle_sync: "enable_tts_enhancement",
   creative_hidden_mode: "enable_creative_writing",
 };
 
 const embeddedFeatureKeys = new Set(Object.keys(embeddedFeatureParentByKey));
 
 function visibleFeatureSwitchKey(key) {
-  return visibleConfigKey(key) && !embeddedFeatureKeys.has(key);
+  const detailSettingKeys = new Set(Object.values(featureSettingGroups || {}).flat());
+  const looksLikeFeatureToggle = key.startsWith("enable_") || key === "creative_hidden_mode" || key === "group_repeat_count_distinct_users_only";
+  return visibleConfigKey(key) && !embeddedFeatureKeys.has(key) && (looksLikeFeatureToggle || !detailSettingKeys.has(key));
 }
 
 function topLevelFeatureKey(key) {
@@ -688,7 +718,7 @@ const configLabels = {
   inject_passive_states: "被动状态注入",
   enable_rest_reply_simulation: "休息回复闸门",
   rest_reply_mode: "休息回复判定模式",
-  rest_reply_probability: "休息中概率回复",
+  rest_reply_probability: "休息中概率回复(%)",
   rest_reply_llm_threshold: "模型醒来阈值",
   REST_WAKEUP_PROVIDER_ID: "休息醒来判断模型",
   enable_cycle_state: "生理周期模拟",
@@ -865,12 +895,12 @@ const configDescriptions = {
   timer_pre_silence_minutes: "已有明确自预约/定时主动时，距离预约时间不足该分钟数会暂停普通主动、链式追问和未回复补一句。若预约文本带有休息/睡觉/起床语义，会从预约创建起静默到到点。",
   max_daily_messages: "每个私聊对象每天最多收到多少条插件主动消息。",
   passive_topic_memory_hours: "记录最近被动回复主题的时间窗口，用来判断短时间内是否又在重复同类话题。",
-  tts_generation_mode: "先决定语音从哪里来。hybrid：模型写了 <tts> 就用，否则可由自动语音兜底；direct：只接受模型自己写的 <tts>；convert：普通回复统一交给转换模型生成 TTS 格式。",
+  tts_generation_mode: "先决定语音从哪里来。快速标签模式追求低延迟：主模型可写 <pc_tts>，插件发送前轻处理。后处理模式追求稳定：主模型只写普通回复，发送前由 TTS 文本模型判断是否需要语音并完成翻译/改写。",
   tts_voice_language: "控制真正送入 TTS 的语音正文语种。可让聊天文本保留中文，<tts> 内使用日语或英语朗读；日语模式会尽量避免明显非日语文本直接进入 TTS，并会给缺少说明的外语语音块补中文释义。",
-  tts_conversion_provider_id: "用于 convert 路径、hybrid 自动语音和语种修正的文本模型，不是语音合成模型。留空时显式 <tts> 标签仍可直接由 AstrBot 当前会话 TTS provider 处理。",
+  tts_conversion_provider_id: "用于后处理判断+翻译、快速标签自动语音、语种修正和中文释义补全的文本模型，不是语音合成模型。转换时会参考当前 AstrBot 人格的语气、称呼和距离感；留空时后处理模式会保持纯文本，显式标签仍可由插件处理。",
   tts_extra_prompt: "只填写本人格或声线的额外要求。基础格式、语种和 provider 自适应规则会自动生成，留空最稳。",
-  tts_frequency_control_mode: "选择频率规则。全局频控：用概率影响 LLM 是否倾向输出 TTS，并控制 hybrid 自动语音和 convert 转换；弱约束下显式 <pc_tts>/<tts> 不再被概率剥离，只受 provider 和会话间隔保护；强约束下按约束强度硬拦。旧版行为按各路径旧逻辑触发。",
-  tts_constraint_mode: "仅全局频控生效。弱约束保持当前行为：概率未命中时用更明确的提示要求模型默认不用语音，但不硬剥离合理的 <pc_tts>/<tts>。强约束会在概率未命中或冷却内反向提示本轮禁止语音，并在发送前阻止语音生成。",
+  tts_frequency_control_mode: "选择频率规则。全局频控：用概率影响快速标签模式下 LLM 是否倾向输出 TTS，并控制后处理模式是否进入判断+翻译；弱约束下显式 <pc_tts>/<tts> 不再被概率剥离，只受 provider 和会话间隔保护；强约束下按约束强度硬拦。",
+  tts_constraint_mode: "仅快速标签模式 + 全局频控生效。弱约束用提示词引导模型默认少用语音；强约束会在概率未命中或冷却内反向提示本轮禁止语音，并在发送前阻止语音生成。后处理模式不使用该项。",
   tts_session_min_interval_seconds: "仅全局频控生效。私聊/群聊未单独覆盖时使用的默认最小间隔；0 表示不限制。",
   tts_private_min_interval_seconds: "仅全局频控生效。私聊会话的最小间隔覆盖值；-1 表示继承默认间隔，0 表示私聊不限制。",
   tts_group_min_interval_seconds: "仅全局频控生效。群聊会话的最小间隔覆盖值；-1 表示继承默认间隔，0 表示群聊不限制。建议群聊比私聊更长。",
@@ -883,12 +913,12 @@ const configDescriptions = {
   enable_tts_live_subtitle_sync: "开启后，TTS 生成音频时会把朗读文本同步推送到“我会直播圈米养你”的打字机字幕 overlay。",
   tts_live_subtitle_url: "直播插件字幕 overlay 的 /show 接口地址。默认对应 127.0.0.1:18081/show。",
   tts_local_playback_min_interval_seconds: "两次 TTS 本机播放之间的最小间隔。0 表示不限制。",
-  auto_voice_enabled: "仅 hybrid 生效。开启后，当模型没有写 <tts> 时，普通纯文本回复可以进入自动语音转换；direct/convert 不依赖这个开关。",
-  auto_voice_full_conversion_enabled: "仅 hybrid 自动语音生效。开启后，自动语音尽量把整条回复完整转换成一段语音；关闭时更偏向混合文本+语音。",
-  auto_voice_probability: "仅旧版行为下生效。控制 hybrid 自动语音的旧触发概率；全局频控下请使用 TTS 全局触发概率。",
-  auto_voice_max_chars: "仅 hybrid 自动语音生效。普通回复不超过该字数才参与自动语音；填 0 表示不限制。旧版主用户单独概率命中时不受此限制。",
-  auto_voice_cooldown_seconds: "仅旧版行为下生效。同一会话成功触发 hybrid 自动语音后，需要等待多少秒才能再次触发；全局频控下请使用 TTS 会话最小间隔秒数。",
-  main_user_voice_probability: "仅旧版行为下作为强触发概率使用。群聊中主用户本人发言或被 @ 到时，提高 hybrid 自动语音倾向；填 -1 表示继承旧自动语音概率。",
+  auto_voice_enabled: "仅快速标签模式生效。开启后，当模型没有写 <pc_tts>/<tts> 时，普通纯文本回复可以进入自动语音转换；后处理模式不依赖这个开关。",
+  auto_voice_full_conversion_enabled: "仅快速标签模式的自动语音生效。开启后，自动语音尽量把整条回复完整转换成一段语音；关闭时更偏向混合文本+语音。",
+  auto_voice_probability: "仅旧版行为下生效。控制快速标签自动语音的旧触发概率；全局频控下请使用 TTS 全局触发概率。",
+  auto_voice_max_chars: "仅快速标签模式的自动语音生效。普通回复不超过该字数才参与自动语音；填 0 表示不限制。旧版主用户单独概率命中时不受此限制。",
+  auto_voice_cooldown_seconds: "仅旧版行为下生效。同一会话成功触发自动语音后，需要等待多少秒才能再次触发；全局频控下请使用 TTS 会话最小间隔秒数。",
+  main_user_voice_probability: "仅旧版行为下作为强触发概率使用。群聊中主用户本人发言或被 @ 到时，提高快速标签自动语音倾向；填 -1 表示继承旧自动语音概率。",
   main_user_mention_voice_keywords: "仅旧版行为下作为强触发条件使用。群聊 @ 到主用户且命中这些关键词时，参与主用户关键词语音判定。多个关键词可用逗号、空格或换行分隔。",
   main_user_mention_voice_probability: "仅旧版行为下生效。命中 @主用户语音关键词后的触发概率，填写 0-100。",
   main_user_mention_voice_prompt: "主用户关键词规则命中后注入给模型的补充要求，例如更短、更贴近、使用某种声线。",
@@ -1466,22 +1496,22 @@ const featureSettingSections = {
   enable_tts_enhancement: [
     {
       title: "1. 生成路径",
-      note: "先决定语音从哪里来：模型写标签、插件自动补语音，还是统一后处理转换。",
+      note: "两条主路径：快速标签追求低延迟，后处理判断+翻译追求稳定。",
       keys: ["tts_generation_mode", "tts_voice_language", "tts_conversion_provider_id", "tts_extra_prompt"],
     },
     {
       title: "2. 频率策略",
-      note: "全局频控用默认概率和间隔控制三种路径；私聊/群聊覆盖项填 -1 则继承默认值。",
+      note: "全局频控用默认概率和间隔控制双路径；私聊/群聊覆盖项填 -1 则继承默认值。",
       keys: ["tts_frequency_control_mode", "tts_constraint_mode", "tts_session_min_interval_seconds", "tts_trigger_probability", "tts_private_min_interval_seconds", "tts_private_trigger_probability", "tts_group_min_interval_seconds", "tts_group_trigger_probability"],
     },
     {
-      title: "3. hybrid 自动语音",
-      note: "仅 hybrid 使用：模型没写 <tts> 时，是否把普通短文本转成语音。",
+      title: "3. 快速标签自动语音",
+      note: "仅快速标签模式使用：模型没写 <pc_tts>/<tts> 时，是否把普通短文本转成语音。",
       keys: ["auto_voice_enabled", "auto_voice_max_chars", "auto_voice_full_conversion_enabled"],
     },
     {
       title: "4. 旧版频率细项",
-      note: "仅“旧版行为”使用：保留旧的 hybrid 自动语音概率、冷却和主用户强触发。",
+      note: "仅“旧版行为”使用：保留旧的快速标签自动语音概率、冷却和主用户强触发。",
       keys: ["auto_voice_probability", "auto_voice_cooldown_seconds", "main_user_voice_probability", "main_user_mention_voice_keywords", "main_user_mention_voice_probability", "main_user_mention_voice_prompt"],
     },
     {
@@ -1494,8 +1524,8 @@ const featureSettingSections = {
 
 const featureSettingTypes = {
   forward_message_mode: { type: "select", options: [["inject", "注入"], ["transcribe", "转述"]] },
-  tts_generation_mode: { type: "select", options: [["hybrid", "hybrid"], ["direct", "direct"], ["convert", "convert"]] },
-  tts_frequency_control_mode: { type: "select", options: [["global", "全局频控：间隔+概率控制三种路径"], ["legacy", "旧版行为：按各路径原逻辑触发"]] },
+  tts_generation_mode: { type: "select", options: [["fast_tag", "快速标签：主模型写私有标签"], ["postprocess", "后处理：判断+翻译模型"]] },
+  tts_frequency_control_mode: { type: "select", options: [["global", "全局频控：间隔+概率控制双路径"], ["legacy", "旧版行为：按各路径原逻辑触发"]] },
   tts_constraint_mode: { type: "select", options: [["weak", "弱约束：提示词引导"], ["strong", "强约束：硬禁语音"]] },
   rest_reply_mode: { type: "select", options: [["probability", "仅概率醒来"], ["llm", "模型判断是否醒来"]] },
   REST_WAKEUP_PROVIDER_ID: { type: "provider" },
@@ -1569,6 +1599,7 @@ const percentSettingKeys = new Set([
   "tts_group_trigger_probability",
   "rest_reply_probability",
   "auto_voice_probability",
+  "main_user_voice_probability",
   "main_user_mention_voice_probability",
   "local_photo_cpu_busy_percent",
   "local_photo_memory_busy_percent",
@@ -1827,7 +1858,7 @@ async function loadAll() {
     state.diagnostics = diagnostics.items || [];
     state.availableProviders = availableProviders.items || [];
     state.tokenStats = tokenStats || null;
-    state.featureDraft = normalizeFeatureDraft(overview.features || {});
+    state.featureDraft = featureDraftFromOverview(overview);
     if (!state.selectedUserId && state.users[0]) state.selectedUserId = state.users[0].user_id;
     if (!state.selectedGroupId && state.groups[0]) state.selectedGroupId = state.groups[0].group_id;
     renderAll();
@@ -7733,8 +7764,32 @@ function featureRelatedSettings(key) {
 }
 
 function featureSettingVisibleForCurrentMode(featureKey, settingKey, settings = state.overview?.settings || {}) {
+  if (featureKey === "enable_humanized_states") {
+    const restChildren = new Set(["rest_reply_mode", "rest_reply_probability", "rest_reply_llm_threshold", "REST_WAKEUP_PROVIDER_ID"]);
+    if (restChildren.has(settingKey)) {
+      const restEnabled = Object.prototype.hasOwnProperty.call(state.featureDraft || {}, "enable_rest_reply_simulation")
+        ? Boolean(state.featureDraft.enable_rest_reply_simulation)
+        : Boolean(settings.enable_rest_reply_simulation);
+      return restEnabled;
+    }
+    return true;
+  }
   if (featureKey !== "enable_tts_enhancement") return true;
   const mode = String(settings.tts_frequency_control_mode || "global");
+  const rawGenerationMode = String(settings.tts_generation_mode || "fast_tag").toLowerCase();
+  const boolSetting = (name) => {
+    if (Object.prototype.hasOwnProperty.call(state.featureDraft || {}, name)) return Boolean(state.featureDraft[name]);
+    return toBool(settings[name]);
+  };
+  const generationMode = {
+    hybrid: "fast_tag",
+    direct: "fast_tag",
+    tag: "fast_tag",
+    fast: "fast_tag",
+    convert: "postprocess",
+    post: "postprocess",
+    llm: "postprocess",
+  }[rawGenerationMode] || rawGenerationMode;
   const globalOnly = new Set([
     "tts_constraint_mode",
     "tts_session_min_interval_seconds",
@@ -7752,6 +7807,43 @@ function featureSettingVisibleForCurrentMode(featureKey, settingKey, settings = 
     "main_user_mention_voice_probability",
     "main_user_mention_voice_prompt",
   ]);
+  const fastTagOnly = new Set([
+    "tts_constraint_mode",
+    "auto_voice_enabled",
+    "auto_voice_full_conversion_enabled",
+    "auto_voice_max_chars",
+    "auto_voice_probability",
+    "auto_voice_cooldown_seconds",
+    "main_user_voice_probability",
+    "main_user_mention_voice_keywords",
+    "main_user_mention_voice_probability",
+    "main_user_mention_voice_prompt",
+  ]);
+  const autoVoiceChildren = new Set([
+    "auto_voice_full_conversion_enabled",
+    "auto_voice_max_chars",
+  ]);
+  const legacyAutoVoiceChildren = new Set([
+    "auto_voice_probability",
+    "auto_voice_cooldown_seconds",
+    "main_user_voice_probability",
+    "main_user_mention_voice_keywords",
+    "main_user_mention_voice_probability",
+    "main_user_mention_voice_prompt",
+  ]);
+  const localPlaybackChildren = new Set([
+    "enable_tts_local_playback_live_only",
+    "tts_local_playback_volume",
+    "tts_local_playback_min_interval_seconds",
+  ]);
+  const liveSubtitleChildren = new Set([
+    "tts_live_subtitle_url",
+  ]);
+  if (generationMode === "postprocess" && fastTagOnly.has(settingKey)) return false;
+  if (autoVoiceChildren.has(settingKey) && !boolSetting("auto_voice_enabled")) return false;
+  if (legacyAutoVoiceChildren.has(settingKey) && !boolSetting("auto_voice_enabled")) return false;
+  if (localPlaybackChildren.has(settingKey) && !boolSetting("enable_tts_local_playback")) return false;
+  if (liveSubtitleChildren.has(settingKey) && !boolSetting("enable_tts_live_subtitle_sync")) return false;
   if (mode === "legacy") return !globalOnly.has(settingKey);
   return !legacyOnly.has(settingKey);
 }
@@ -7854,11 +7946,14 @@ function collectFeatureDetailPayload(featureKey, root = document) {
     } else {
       value = input.value;
     }
-    if (Object.prototype.hasOwnProperty.call(state.featureDraft || {}, key)) {
+    if (Object.prototype.hasOwnProperty.call(overviewSettings, key)) {
+      settings[key] = value;
+      if (Object.prototype.hasOwnProperty.call(state.featureDraft || {}, key)) {
+        state.featureDraft[key] = toBool(value);
+      }
+    } else if (Object.prototype.hasOwnProperty.call(state.featureDraft || {}, key)) {
       features[key] = toBool(value);
       state.featureDraft[key] = toBool(value);
-    } else if (Object.prototype.hasOwnProperty.call(overviewSettings, key)) {
-      settings[key] = value;
     } else {
       settings[key] = value;
     }
@@ -7909,7 +8004,7 @@ const featureDetailGuides = {
   },
   enable_tts_enhancement: {
     summary: "支持聊天文本保留中文、<tts> 内生成外语语音，并把 TTS 生成路径、标签规范化、语种控制、语音后中文释义和发送前朗读文本清洗统一收口处理。",
-    trigger: "LLM 请求、LLM 回复和发送前都会参与；hybrid/direct/convert 三种路径行为不同。",
+    trigger: "LLM 请求、LLM 回复和发送前都会参与；快速标签与后处理两条路径行为不同。",
     enabled: "可处理标准或错拼 <tts> 标签，外语语音块缺少中文含义时会自动补一句，并按配置把纯文本短回复转换为语音。",
     disabled: "只保留本插件原有主动 voice 行为，不额外改写普通回复。",
   },
@@ -8506,12 +8601,33 @@ function bindFeatureDetailActions() {
         input.addEventListener("change", () => {
           const label = input.closest(".feature-param-check")?.querySelector("span");
           if (label) label.textContent = input.checked ? "开启" : "关闭";
+          if (state.selectedFeatureKey === "enable_humanized_states" && input.dataset.featureParam === "enable_rest_reply_simulation") {
+            state.featureDraft.enable_rest_reply_simulation = input.checked;
+            state.overview.settings = state.overview.settings || {};
+            state.overview.settings.enable_rest_reply_simulation = input.checked;
+            renderFeatureSwitches();
+          }
+          if (
+            state.selectedFeatureKey === "enable_tts_enhancement"
+            && ["auto_voice_enabled", "enable_tts_local_playback", "enable_tts_live_subtitle_sync"].includes(input.dataset.featureParam)
+          ) {
+            state.overview.settings = state.overview.settings || {};
+            state.overview.settings[input.dataset.featureParam] = input.checked;
+            renderFeatureSwitches();
+          }
         });
       }
       if (state.selectedFeatureKey === "enable_tts_enhancement" && input.dataset.featureParam === "tts_frequency_control_mode") {
         input.addEventListener("change", () => {
           state.overview.settings = state.overview.settings || {};
           state.overview.settings.tts_frequency_control_mode = input.value || "global";
+          renderFeatureSwitches();
+        });
+      }
+      if (state.selectedFeatureKey === "enable_tts_enhancement" && input.dataset.featureParam === "tts_generation_mode") {
+        input.addEventListener("change", () => {
+          state.overview.settings = state.overview.settings || {};
+          state.overview.settings.tts_generation_mode = input.value || "fast_tag";
           renderFeatureSwitches();
         });
       }
@@ -9262,13 +9378,17 @@ async function runAction(action, successMessage = "", control = null) {
     const result = await action();
     if (result && typeof result === "object" && result.plugin && result.features) {
       state.overview = result;
-      state.featureDraft = normalizeFeatureDraft(result.features || {});
+      state.featureDraft = featureDraftFromOverview(result);
       renderAll();
       $("#subtitle").textContent = `${result.plugin.bot_name || "Private Companion"} · ${new Date().toLocaleString()}`;
     } else {
       await loadAll();
     }
-    showToast(successMessage || result?.message || "操作已完成");
+    if (result && result.config_saved === false) {
+      showToast("已应用到运行态，但配置持久化失败；重启或刷新后可能恢复旧值，请查看日志", "error");
+    } else {
+      showToast(successMessage || result?.message || "操作已完成");
+    }
     return result;
   } catch (error) {
     showToast(`操作失败：${error.message}`, "error");
@@ -9968,8 +10088,18 @@ $("#accessQuickGroups").addEventListener("click", async (event) => {
 });
 
 $("#saveFeaturesBtn").addEventListener("click", async () => {
-  const features = Object.fromEntries(Object.entries(state.featureDraft).filter(([key]) => visibleConfigKey(key)));
-  await runAction(() => postJson("/settings/update", { features }), "已保存功能开关", $("#saveFeaturesBtn"));
+  const overviewSettings = state.overview?.settings || {};
+  const features = {};
+  const settings = {};
+  Object.entries(state.featureDraft).forEach(([key, value]) => {
+    if (!visibleConfigKey(key)) return;
+    if (Object.prototype.hasOwnProperty.call(overviewSettings, key)) {
+      settings[key] = toBool(value);
+    } else {
+      features[key] = toBool(value);
+    }
+  });
+  await runAction(() => postJson("/settings/update", { features, settings }), "已保存功能开关", $("#saveFeaturesBtn"));
 });
 
 $("#enableSafeFeaturesBtn").addEventListener("click", () => {

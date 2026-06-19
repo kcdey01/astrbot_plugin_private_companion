@@ -3285,10 +3285,10 @@
   "tts_generation_mode": {
     "description": "TTS生成路径",
     "type": "string",
-    "default": "hybrid",
-    "options": ["hybrid", "direct", "convert"],
-    "labels": ["hybrid：标签优先+自动转换", "direct：只让主模型写标签", "convert：统一后处理转换"],
-    "hint": "先决定语音从哪里来。hybrid：模型写了 <tts> 就用，否则可由自动语音兜底；direct：只接受模型自己写的 <tts>；convert：普通回复统一交给转换模型生成 TTS 格式。",
+    "default": "fast_tag",
+    "options": ["fast_tag", "postprocess"],
+    "labels": ["快速标签：主模型写私有标签", "后处理：判断+翻译模型"],
+    "hint": "快速标签模式追求低延迟：主模型可写 <pc_tts>，插件发送前轻处理。后处理模式追求稳定：主模型只写普通回复，发送前由 TTS 文本模型判断是否需要语音并完成翻译/改写。旧 hybrid/direct 会自动兼容为快速标签，旧 convert 会兼容为后处理。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3309,7 +3309,7 @@
     "type": "string",
     "default": "",
     "_special": "select_provider",
-    "hint": "这是文本模型，用于 convert 路径、hybrid 自动语音和语种修正，不是语音合成模型。留空时会尽量用保守兜底，不影响显式 <tts> 标签解析；真正合成音频仍使用 AstrBot 当前会话的 TTS provider。",
+    "hint": "这是文本模型，用于后处理判断+翻译、快速标签下的自动语音、语种修正和中文释义补全，不是语音合成模型。转换时会参考当前 AstrBot 人格的语气、称呼和距离感，避免变成纯机器翻译。留空时后处理模式会保持纯文本；真正合成音频仍使用 AstrBot 当前会话的 TTS provider。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3328,8 +3328,8 @@
     "type": "string",
     "default": "global",
     "options": ["global", "legacy"],
-    "labels": ["全局频控：间隔+概率控制三种路径", "旧版行为：按各路径原逻辑触发"],
-    "hint": "选择频率规则。全局频控用概率影响 LLM 是否倾向输出 TTS，并控制 hybrid 自动语音和 convert 转换；弱约束下显式 <tts> 不再被概率剥离，只受 provider 和会话间隔保护；强约束下按约束强度硬拦。旧版行为按各路径旧逻辑触发。",
+    "labels": ["全局频控：间隔+概率控制双路径", "旧版行为：按各路径原逻辑触发"],
+    "hint": "选择频率规则。全局频控用概率影响快速标签模式下 LLM 是否倾向输出 TTS，并控制后处理模式是否进入判断+翻译；弱约束下显式 <pc_tts>/<tts> 不再被概率剥离，只受 provider 和会话间隔保护；强约束下按约束强度硬拦。旧版行为保留旧自动语音细项。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3340,7 +3340,7 @@
     "default": "weak",
     "options": ["weak", "strong"],
     "labels": ["弱约束：提示词引导，保留模型决定权", "强约束：未命中/冷却内硬禁语音"],
-    "hint": "仅全局频控生效。弱约束保持当前行为：概率未命中时用更明确的提示要求模型默认不用语音，显式 <pc_tts>/<tts> 仍交给插件处理。强约束会在概率未命中或会话冷却内注入“本轮禁止语音”的反向提示词，并在发送前阻止任何语音生成。",
+    "hint": "仅快速标签模式 + 全局频控生效。弱约束保持提示词引导：概率未命中时要求模型默认不用语音，显式 <pc_tts>/<tts> 仍交给插件处理。强约束会在概率未命中或会话冷却内注入“本轮禁止语音”的反向提示词，并在发送前阻止任何语音生成。后处理模式不显示也不使用该项。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3469,7 +3469,7 @@
     "description": "自动语音转换",
     "type": "bool",
     "default": false,
-    "hint": "仅 hybrid 生效。开启后，当模型没有写 <tts> 时，普通纯文本回复可以进入自动语音转换；direct/convert 不依赖这个开关。",
+    "hint": "仅快速标签模式生效。开启后，当模型没有写 <pc_tts>/<tts> 时，普通纯文本回复可以进入自动语音转换；后处理模式不依赖这个开关。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3478,7 +3478,7 @@
     "description": "自动语音完整转换",
     "type": "bool",
     "default": false,
-    "hint": "仅 hybrid 自动语音生效。开启后，自动语音尽量把整条回复完整转换为一段语音；关闭时更偏向混合文本+语音。",
+    "hint": "仅快速标签模式的自动语音生效。开启后，自动语音尽量把整条回复完整转换为一段语音；关闭时更偏向混合文本+语音。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3489,7 +3489,7 @@
     "default": 20,
     "min": 0,
     "max": 100,
-    "hint": "仅旧版行为下生效。控制 hybrid 自动语音的旧触发概率；全局频控下请使用“TTS全局触发概率(%)”。",
+    "hint": "仅旧版行为下生效。控制快速标签自动语音的旧触发概率；全局频控下请使用“TTS全局触发概率(%)”。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3499,7 +3499,7 @@
     "type": "int",
     "default": 50,
     "min": 0,
-    "hint": "仅 hybrid 自动语音生效。普通回复不超过该字数才参与自动语音；填 0 表示不限制。旧版主用户单独概率命中时不受此限制。",
+    "hint": "仅快速标签模式的自动语音生效。普通回复不超过该字数才参与自动语音；填 0 表示不限制。旧版主用户单独概率命中时不受此限制。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3509,7 +3509,7 @@
     "type": "int",
     "default": 120,
     "min": 0,
-    "hint": "仅旧版行为下生效。同一会话成功触发 hybrid 自动语音后，需要等待多少秒才能再次触发；全局频控下请使用“TTS会话最小间隔秒数”。",
+    "hint": "仅旧版行为下生效。同一会话成功触发快速标签自动语音后，需要等待多少秒才能再次触发；全局频控下请使用“TTS会话最小间隔秒数”。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3520,7 +3520,7 @@
     "default": -1,
     "min": -1,
     "max": 100,
-    "hint": "仅旧版行为下作为强触发概率使用。群聊中主用户本人发言或被 @ 到时，提高 hybrid 自动语音倾向；填 -1 表示继承旧自动语音概率。",
+    "hint": "仅旧版行为下作为强触发概率使用。群聊中主用户本人发言或被 @ 到时，提高快速标签自动语音倾向；填 -1 表示继承旧自动语音概率。",
     "condition": {
       "enable_tts_enhancement": true
     }

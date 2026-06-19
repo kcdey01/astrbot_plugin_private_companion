@@ -123,6 +123,12 @@ astrbot_plugin_private_companion
 
 安装后重启 AstrBot，并进入插件配置页填写目标用户、目标群和模型配置。
 
+### 配置页约定
+
+- 扩展页里的概率字段分两类：名称带“概率(%)”、描述写“百分比”或滑条范围为 0-100 的字段，统一按 `0-100` 填写和回显；插件运行时会自动换算成 `0-1` 小数参与随机判断。
+- 普通权重型概率仍按 `0-1` 填写，例如部分长线主动分享权重；页面会按字段类型自动给出 `0-1` 或 `0-100` 的输入范围。
+- 部分子开关本质上属于配置项而不是顶层功能，例如休息回复闸门、TTS 本机播放、TTS 自动语音等；扩展页会在保存时自动拆分到正确配置位置，避免刷新后看起来又被关闭。
+
 ### 方式二：从 GitHub 安装
 
 在 AstrBot WebUI 中进入“插件管理”，选择从 Git 安装，填写仓库地址：
@@ -193,9 +199,12 @@ C:\Users\你的用户名\.astrbot\data\plugins\astrbot_plugin_private_companion
 - 用途：支持主动 `voice` 短语音，并兼容插件私有 `<pc_tts>...</pc_tts>`、旧式 `<tts>...</tts>`、日语、双语或特殊 TTS 人格规则。
 - 配置边界：插件里的 `VOICE_PROMPT_PROVIDER_ID` 和 `tts_conversion_provider_id` 都是文本模型，只负责生成/修正语音文案和语音标记；真正把文本合成音频的是 AstrBot 当前会话的 TTS provider。阿里云百炼/CosyVoice 等语音合成模型需要在 AstrBot 的 TTS 配置中启用，本插件会读取当前会话的 TTS provider。
 - 标签链路：插件提示词会优先要求 LLM 使用 `<pc_tts>...</pc_tts>`，发送前再交给插件统一转成语音组件。这样可以避免 AstrBot 原生 `<tts>` 装饰器抢先处理，导致插件的语种修正、翻译和中文释义补全失效；历史或模型自行输出的 `<tts>` 仍会尽量兼容处理。
+- 生成路径：`tts_generation_mode=fast_tag` 是低延迟快速标签路径，主模型可按规则写插件私有 `<pc_tts>`，插件发送前统一清洗、翻译和合成；`tts_generation_mode=postprocess` 是稳定后处理路径，主模型只写普通回复，发送前由 `tts_conversion_provider_id` 对整条回复判断是否需要语音，并完成目标语种改写。
+- 人格保持：`tts_conversion_provider_id` 执行翻译、后处理、语种修正和中文释义补全时，会读取当前 AstrBot 人格的轻量语音风格参考，用于保留称呼、距离感、口癖和角色边界；不会把人格设定直接复述进消息。
+- 后处理判断：`postprocess` 模式会把用户本轮原话、插件规则快判线索和自动语音概率线索一起交给后处理模型，由模型判断用户是否要求/期待语音以及哪一小段适合转成语音；规则线索只作参考，不再直接把“是否语音”定死。
 - TTS 频率：`tts_frequency_control_mode=global` 时使用“间隔 + 概率”的新版频控。全局概率会作为提示词层面的方向约束：概率未命中时会明确要求模型在没有用户语音请求时必须纯文字，不主动输出 `<pc_tts>`、`<tts>` 或等价语音内容；弱约束下如果用户明确想听语音或模型仍合理输出语音标签，不会再被概率硬剥离，最终发送仍受 TTS provider 可用性和会话最小间隔保护。
-- TTS 约束强度：`tts_constraint_mode=weak` 是默认弱约束，保持上面的“提示词引导 + LLM 判断”为主；`tts_constraint_mode=strong` 是强约束，在全局频控概率未命中或会话冷却内不会注入 TTS 使用规则，改为注入“本轮禁止语音”的反向提示词，并在发送前阻止 LLM 已写出的 `<pc_tts>/<tts>`、hybrid 自动语音和 convert 转换语音。
-- 私聊/群聊覆盖：`tts_private_trigger_probability`、`tts_group_trigger_probability`、`tts_private_min_interval_seconds`、`tts_group_min_interval_seconds` 可分别覆盖默认概率和间隔；填 `-1` 表示继承全局，适合把群聊设得更低频、更长间隔。
+- TTS 约束强度：仅 `fast_tag` 快速标签路径使用。`tts_constraint_mode=weak` 是默认弱约束，保持“提示词引导 + LLM 判断”为主；`tts_constraint_mode=strong` 会在全局频控概率未命中或会话冷却内注入“本轮禁止语音”的反向提示词，并在发送前阻止 LLM 已写出的 `<pc_tts>/<tts>` 和快速标签自动语音。`postprocess` 后处理路径不使用该项，概率只作为后处理模型的保守线索，会话间隔仍决定是否实际发送语音。
+- 私聊/群聊覆盖：`tts_private_trigger_probability`、`tts_group_trigger_probability`、`tts_private_min_interval_seconds`、`tts_group_min_interval_seconds` 可分别覆盖默认概率和间隔；概率字段在扩展页按百分比 `0-100` 填写，填 `-1` 表示继承全局，适合把群聊设得更低频、更长间隔。
 - 旧版行为：`tts_frequency_control_mode=legacy` 时按旧路径逻辑触发，主要交给 LLM 判断是否“适合采用”语音，不使用新版的全局概率/间隔提示约束。
 - 首选仓库：<https://github.com/menglimi/astrbot_plugin_tts_modify-fishaudio->
 - 原始仓库：<https://github.com/L1ke40oz/astrbot_plugin_tts_modify>

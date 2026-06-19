@@ -29,6 +29,24 @@ PAGE_API_PREFIX = f"/{PLUGIN_NAME}/page"
 class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
     """AstrBot 官方插件拓展页面 API。"""
 
+    PERCENT_PROBABILITY_KEYS = {
+        "group_repeat_follow_probability",
+        "group_repeat_interrupt_probability",
+        "group_repeat_interrupt_probability_step",
+        "group_wakeup_interest_probability",
+        "group_wakeup_topic_interest_max_boost",
+        "group_wakeup_debounce_pending_penalty",
+        "tts_trigger_probability",
+        "auto_voice_probability",
+        "main_user_mention_voice_probability",
+        "rest_reply_probability",
+    }
+    INHERIT_PERCENT_PROBABILITY_KEYS = {
+        "tts_private_trigger_probability",
+        "tts_group_trigger_probability",
+        "main_user_voice_probability",
+    }
+
     def __init__(self, plugin: Any) -> None:
         self.plugin = plugin
         self._schema_bool_key_cache: set[str] | None = None
@@ -429,6 +447,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             for key, value in (payload.get("features") or {}).items():
                 if key in self._allowed_feature_keys():
                     changed[key] = self._normalize_bool_value(value)
+                elif key in self._schema_bool_keys() and key in self._allowed_setting_keys():
+                    changed[key] = self._normalize_bool_value(value)
             for key, value in (payload.get("providers") or {}).items():
                 if key in self._allowed_provider_keys():
                     changed[key] = self._single_line(value, 160)
@@ -437,12 +457,21 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     changed[key] = self._normalize_setting_value(key, value)
             for key, value in changed.items():
                 self._apply_config_value(key, value, changed)
+            config_saved = True
             if changed:
-                self._save_config_if_possible()
+                config_saved = await self._save_config_if_possible()
             overview = await self.get_overview()
             if overview.get("success"):
                 overview["data"]["changed"] = changed
-                overview["data"]["config_saved"] = self._can_save_config()
+                overview["data"]["config_saved"] = config_saved
+                data = overview.get("data") if isinstance(overview.get("data"), dict) else {}
+                features = data.get("features") if isinstance(data.get("features"), dict) else {}
+                settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+                for key, value in changed.items():
+                    if key in self._allowed_feature_keys():
+                        features[key] = self._normalize_bool_value(value)
+                    if key in self._allowed_setting_keys():
+                        settings[key] = value
             return overview
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 更新设置失败: {exc}", exc_info=True)
@@ -2286,11 +2315,12 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             for key, value in preset.get("features", {}).items():
                 if key in self._allowed_feature_keys():
                     self._apply_config_value(key, self._normalize_bool_value(value))
-            self._save_config_if_possible()
+            config_saved = await self._save_config_if_possible()
             overview = await self.get_overview()
             if overview.get("success"):
                 overview["data"]["preset"] = name
                 overview["data"]["preset_label"] = preset.get("label", name)
+                overview["data"]["config_saved"] = config_saved
             return overview
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 应用预设失败: {exc}", exc_info=True)
@@ -3530,6 +3560,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "auto_voice_probability": _percent_attr("auto_voice_probability", 0.2),
                 "main_user_voice_probability": _percent_attr("main_user_voice_probability", -0.01, inherit=True),
                 "main_user_mention_voice_probability": _percent_attr("main_user_mention_voice_probability", 0.0),
+                "rest_reply_probability": _percent_attr("rest_reply_probability", 0.18),
             }
         )
         return values
@@ -3764,7 +3795,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             provider_label = self._provider_name(provider, provider_id) if provider_id else getattr(provider, "__class__", type(provider)).__name__
         return {
             "enhancement_enabled": bool(getattr(self.plugin, "enable_tts_enhancement", False)),
-            "mode": self._single_line(getattr(self.plugin, "tts_generation_mode", ""), 24) or "hybrid",
+            "mode": self._single_line(getattr(self.plugin, "tts_generation_mode", ""), 24) or "fast_tag",
             "language": self.plugin._tts_language_label() if hasattr(self.plugin, "_tts_language_label") else "",
             "umo": umo,
             "settings_enabled": bool(provider_settings.get("enable", False)),
@@ -4117,16 +4148,23 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             return str(config.get(key, "") or "")
         return ""
 
-    def _save_config_if_possible(self) -> None:
+    async def _save_config_if_possible(self) -> bool:
         config = getattr(self.plugin, "config", None)
         for method_name in ("save_config", "save", "save_conf"):
             save = getattr(config, method_name, None)
             if callable(save):
                 try:
-                    save()
-                    return
+                    result = save()
+                    if asyncio.iscoroutine(result) or hasattr(result, "__await__"):
+                        await result
+                    return True
                 except TypeError:
                     continue
+                except Exception as exc:
+                    logger.warning("[PrivateCompanionPage] 配置保存失败(%s): %s", method_name, self._single_line(exc, 160))
+                    return False
+        logger.warning("[PrivateCompanionPage] 当前配置对象没有可用保存方法,本次改动可能只在运行态生效")
+        return False
 
     def _can_save_config(self) -> bool:
         config = getattr(self.plugin, "config", None)
@@ -4551,8 +4589,23 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         if key == "REST_WAKEUP_PROVIDER_ID":
             return str(value or "").strip()[:160]
         if key == "tts_generation_mode":
-            mode = str(value or "hybrid").strip().lower()
-            return mode if mode in {"hybrid", "direct", "convert"} else "hybrid"
+            mode = str(value or "fast_tag").strip().lower()
+            aliases = {
+                "hybrid": "fast_tag",
+                "direct": "fast_tag",
+                "tag": "fast_tag",
+                "fast": "fast_tag",
+                "快速": "fast_tag",
+                "标签": "fast_tag",
+                "标签直出": "fast_tag",
+                "convert": "postprocess",
+                "post": "postprocess",
+                "llm": "postprocess",
+                "后处理": "postprocess",
+                "判断翻译": "postprocess",
+            }
+            mode = aliases.get(mode, mode)
+            return mode if mode in {"fast_tag", "postprocess"} else "fast_tag"
         if key == "tts_frequency_control_mode":
             mode = str(value or "global").strip().lower()
             aliases = {
@@ -4718,13 +4771,13 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return max(0, min(5, int(value)))
             except (TypeError, ValueError):
                 return 1
-        if key in {"tts_trigger_probability", "auto_voice_probability", "rest_reply_probability"}:
+        if key in self.PERCENT_PROBABILITY_KEYS:
             try:
                 raw = float(value)
                 return max(0, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
             except (TypeError, ValueError):
                 return 18 if key == "rest_reply_probability" else 20
-        if key in {"tts_private_trigger_probability", "tts_group_trigger_probability"}:
+        if key in self.INHERIT_PERCENT_PROBABILITY_KEYS:
             try:
                 raw = float(value)
                 if raw < 0:
@@ -4732,18 +4785,6 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return max(0, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
             except (TypeError, ValueError):
                 return -1
-        if key == "main_user_voice_probability":
-            try:
-                raw = float(value)
-                return max(-1, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
-            except (TypeError, ValueError):
-                return -1
-        if key == "main_user_mention_voice_probability":
-            try:
-                raw = float(value)
-                return max(0, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
-            except (TypeError, ValueError):
-                return 0
         if key == "rest_reply_llm_threshold":
             try:
                 return max(0, min(100, int(value)))

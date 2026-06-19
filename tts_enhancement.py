@@ -71,9 +71,21 @@ class TtsEnhancementMixin:
 
     def _load_tts_enhancement_config(self, config: Any) -> None:
         self.enable_tts_enhancement = self._cfg_bool(config, "enable_tts_enhancement", False)
-        self.tts_generation_mode = self._cfg_str(config, "tts_generation_mode", "hybrid", "hybrid").lower()
-        if self.tts_generation_mode not in {"hybrid", "direct", "convert"}:
-            self.tts_generation_mode = "hybrid"
+        raw_mode = self._cfg_str(config, "tts_generation_mode", "fast_tag", "fast_tag").lower()
+        mode_aliases = {
+            "hybrid": "fast_tag",
+            "direct": "fast_tag",
+            "tag": "fast_tag",
+            "tags": "fast_tag",
+            "fast": "fast_tag",
+            "convert": "postprocess",
+            "post": "postprocess",
+            "llm": "postprocess",
+        }
+        self.tts_generation_mode = mode_aliases.get(raw_mode, raw_mode)
+        if self.tts_generation_mode not in {"fast_tag", "postprocess"}:
+            self.tts_generation_mode = "fast_tag"
+        self.tts_legacy_generation_mode = raw_mode
         self.tts_voice_language = self._cfg_str(config, "tts_voice_language", "ja", "ja").lower()
         if self.tts_voice_language not in {"ja", "zh", "en"}:
             self.tts_voice_language = "ja"
@@ -535,6 +547,7 @@ class TtsEnhancementMixin:
     def _tts_strong_constraint_enabled(self) -> bool:
         return (
             getattr(self, "tts_frequency_control_mode", "global") != "legacy"
+            and getattr(self, "tts_generation_mode", "fast_tag") == "fast_tag"
             and getattr(self, "tts_constraint_mode", "weak") == "strong"
         )
 
@@ -567,9 +580,13 @@ class TtsEnhancementMixin:
         return ""
 
     def _event_explicitly_requests_tts(self, event: Any) -> bool:
-        text = str(getattr(event, "message_str", "") or "").strip().lower()
+        return self._event_tts_request_signal(event)[0] == "positive"
+
+    def _event_tts_request_signal(self, event: Any) -> tuple[str, str, str]:
+        raw_text = str(getattr(event, "message_str", "") or "").strip()
+        text = raw_text.lower()
         if not text:
-            return False
+            return "uncertain", "", ""
         compact = re.sub(r"\s+", "", text)
         negative_patterns = (
             r"(不要|别|不用|不必|禁止|关闭|取消|别再|先别).{0,8}(语音|tts|朗读|念出来|读出来)",
@@ -577,8 +594,10 @@ class TtsEnhancementMixin:
             r"(不想|不是想|没想|暂时不想|先不想).{0,8}(听|听听|听一下|听见|听到).{0,8}(你|妳|你的|妳的).{0,4}(声音|声)",
             r"(不想|不是想|没想|暂时不想|先不想).{0,8}(你的|妳的).{0,4}(声音|声)",
         )
-        if any(re.search(pattern, compact, flags=re.IGNORECASE) for pattern in negative_patterns):
-            return False
+        for pattern in negative_patterns:
+            match = re.search(pattern, compact, flags=re.IGNORECASE)
+            if match:
+                return "negative", _single_line(match.group(0), 80), raw_text
         positive_patterns = (
             r"(用|发|来|回|回复|说|讲).{0,10}(语音|tts|朗读|念出来|读出来)",
             r"(语音|tts|朗读|念出来|读出来).{0,10}(回|回复|发|来|说|讲|一下|模式)",
@@ -587,7 +606,11 @@ class TtsEnhancementMixin:
             r"(想|想要).{0,6}(听|听听|听一下|听见|听到).{0,8}(你|妳|你的|妳的).{0,4}(声音|声)",
             r"(让我|给我|陪我).{0,6}(听|听听|听一下).{0,8}(你|妳|你的|妳的).{0,4}(声音|声)",
         )
-        return any(re.search(pattern, compact, flags=re.IGNORECASE) for pattern in positive_patterns)
+        for pattern in positive_patterns:
+            match = re.search(pattern, compact, flags=re.IGNORECASE)
+            if match:
+                return "positive", _single_line(match.group(0), 80), raw_text
+        return "uncertain", "", raw_text
 
     def _tts_trigger_probability_allows(self, event: Any, *, reason: str) -> bool:
         if getattr(self, "tts_frequency_control_mode", "global") == "legacy":
@@ -654,13 +677,16 @@ class TtsEnhancementMixin:
         if self._tts_visible_text_has_chinese(spoken):
             return spoken
         provider = await self._get_tts_conversion_provider(event) if event is not None else None
+        persona_context = await self._format_tts_persona_voice_context(event)
         prompt = f"""
 请把下面这句 TTS 朗读文本翻译成自然中文，只输出中文句子，不要解释，不要保留 <tts> 标签。
 要求：
 - 保留原本亲近、害羞、吐槽或撒娇的语气。
+- 翻译后的中文要像当前人格自己会发在聊天里的文字，而不是字幕腔或机器翻译腔。
 - 不要添加原文没有的新信息。
 - 输出适合作为聊天里语音后的可见中文说明。
 - 输出必须是完整自然中文句子，不能以“还/还是/或者/要不要/因为/所以/但是/然后/和/对/从/到/让”等连接词或半个问题结尾。
+{persona_context}
 
 TTS 朗读文本：
 {spoken}
@@ -749,14 +775,14 @@ TTS 朗读文本：
 
     def _build_tts_rule_prompt(self, provider_kind: str = "generic") -> str:
         lang = self._tts_language_label()
-        mode = getattr(self, "tts_generation_mode", "hybrid")
+        mode = getattr(self, "tts_generation_mode", "fast_tag")
         frequency_mode = getattr(self, "tts_frequency_control_mode", "global")
         bilingual_rule = (
             f"当语音正文目标语种不是中文时，每个 <pc_tts>...</pc_tts> 语音块后面都必须紧跟一句自然中文含义，方便用户看到语音对应中文；不要只输出外语语音块，也不要只在语音块前放一句无关中文。中文可见文本必须是完整自然句，不能以“还/还是/或者/要不要/因为/所以/但是/然后/和/对/从/到/让”等连接词或半个问题结尾；如果有多句中文含义，用换行分开。目标语种为日语时，<pc_tts> 内除极短语气词外必须包含假名，不要只写“喜欢/大丈夫”这类容易混淆的汉字词。"
             if getattr(self, "tts_voice_language", "ja") != "zh"
             else ""
         )
-        if mode in {"hybrid", "direct"}:
+        if mode == "fast_tag":
             if frequency_mode == "legacy":
                 tag_rule = (
                     "可以使用 <pc_tts>...</pc_tts> 标出真正需要朗读的内容；标签外文本会作为普通聊天文字保留。"
@@ -780,11 +806,11 @@ TTS 朗读文本：
         )
         position_rule = (
             "语音块可以出现在回复的开头、中间或结尾，只要读起来像自然聊天即可；不要为了使用语音而把整句都塞到结尾。"
-            if mode in {"hybrid", "direct"}
+            if mode == "fast_tag"
             else ""
         )
         examples = ""
-        if mode in {"hybrid", "direct"}:
+        if mode == "fast_tag":
             if getattr(self, "tts_voice_language", "ja") == "zh":
                 examples = (
                     "参考格式：\n"
@@ -841,6 +867,38 @@ TTS 朗读文本：
             return ""
         return _single_line(value, 800)
 
+    async def _tts_persona_voice_context(self, event: Any, *, max_chars: int = 900) -> str:
+        """Return a compact persona reference for TTS text-only models."""
+        umo = str(getattr(event, "unified_msg_origin", "") or "") if event is not None else ""
+        refresher = getattr(self, "_refresh_default_persona_prompt", None)
+        persona = ""
+        if callable(refresher):
+            try:
+                persona = str(await refresher(umo) or "").strip()
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] TTS读取人格上下文失败,使用缓存: %s", _single_line(exc, 120))
+        if not persona:
+            getter = getattr(self, "_get_default_persona_prompt", None)
+            if callable(getter):
+                try:
+                    persona = str(getter() or "").strip()
+                except Exception:
+                    persona = ""
+        if not persona:
+            return ""
+        persona = re.sub(r"\s+", "\n", persona).strip()
+        return _single_line(persona, max_chars)
+
+    async def _format_tts_persona_voice_context(self, event: Any) -> str:
+        persona = await self._tts_persona_voice_context(event)
+        if not persona:
+            return ""
+        return (
+            "人格语音风格参考：\n"
+            f"{persona}\n"
+            "使用方式：只用于保持当前人格的称呼、距离感、语气、口癖和角色边界；不要复述人格设定，不要添加原回复没有的新信息。"
+        )
+
     async def apply_tts_enhancement_request(self, event: Any, req: Any) -> None:
         if not getattr(self, "enabled", False) or not getattr(self, "enable_tts_enhancement", False):
             return
@@ -864,7 +922,7 @@ TTS 朗读文本：
                 session=_single_line(getattr(event, "unified_msg_origin", ""), 160) or "unknown",
                 title=title,
                 text=text,
-                mode=mode or str(getattr(self, "tts_generation_mode", "hybrid") or ""),
+                mode=mode or str(getattr(self, "tts_generation_mode", "fast_tag") or ""),
                 modules=[
                     {
                         "key": key,
@@ -876,7 +934,7 @@ TTS 朗读文本：
                 ],
                 metadata={
                     "语种": self._tts_language_label(),
-                    "模式": getattr(self, "tts_generation_mode", "hybrid"),
+                    "模式": getattr(self, "tts_generation_mode", "fast_tag"),
                     "频控": getattr(self, "tts_frequency_control_mode", "global"),
                     "provider": provider_kind,
                 },
@@ -884,7 +942,8 @@ TTS 朗读文本：
 
         user_requested_tts = self._event_explicitly_requests_tts(event)
         strong_block_reason = ""
-        if getattr(self, "tts_generation_mode", "hybrid") in {"hybrid", "direct", "convert"}:
+        mode = getattr(self, "tts_generation_mode", "fast_tag")
+        if mode == "fast_tag":
             strong_block_reason = self._tts_strong_constraint_block_reason(
                 event,
                 user_requested_tts=False,
@@ -893,10 +952,18 @@ TTS 朗读文本：
             )
             if strong_block_reason:
                 self._set_tts_hard_block(event, strong_block_reason)
-        if marker not in prompt and getattr(self, "tts_generation_mode", "hybrid") in {"hybrid", "direct"} and not strong_block_reason:
+        if marker not in prompt and mode == "fast_tag" and not strong_block_reason:
             rule_prompt = self._build_tts_rule_prompt(provider_kind)
             req.system_prompt = f"{prompt}\n\n{marker}\n{rule_prompt}".strip()
             await record_tts_fragment("TTS 基础规则注入", "tts.rule", rule_prompt)
+        elif marker not in prompt and mode == "postprocess" and not strong_block_reason:
+            postprocess_prompt = (
+                "【TTS 后处理模式】\n"
+                "本轮主回复请只输出普通聊天文字，不要主动写 <pc_tts>、<tts>、语音、朗读、音频或任何等价语音标签。"
+                "是否把其中一小段转成语音，将由插件发送前的 TTS 后处理模型统一判断。"
+            )
+            req.system_prompt = f"{prompt}\n\n{marker}\n{postprocess_prompt}".strip()
+            await record_tts_fragment("TTS 后处理模式注入", "tts.rule", postprocess_prompt, mode="postprocess")
         if strong_block_reason:
             reverse_prompt = (
                 "【本轮 TTS 强约束】\n"
@@ -908,7 +975,7 @@ TTS 朗读文本：
             await record_tts_fragment("TTS 强约束禁用注入", "tts.block", reverse_prompt, mode="strong_block")
         elif (
             not user_requested_tts
-            and getattr(self, "tts_generation_mode", "hybrid") in {"hybrid", "direct"}
+            and mode == "fast_tag"
             and getattr(self, "tts_frequency_control_mode", "global") != "legacy"
             and not self._tts_trigger_probability_allows(event, reason="llm_tts_prompt")
         ):
@@ -923,7 +990,7 @@ TTS 朗读文本：
                 f"{req.system_prompt}\n\n{frequency_prompt}"
             ).strip()
             await record_tts_fragment("TTS 频率控制注入", "tts.frequency", frequency_prompt, mode="frequency")
-        if self._should_force_tts_for_main_user_event(event) and not strong_block_reason:
+        if mode == "fast_tag" and self._should_force_tts_for_main_user_event(event) and not strong_block_reason:
             frequency_mode = getattr(self, "tts_frequency_control_mode", "global")
             if frequency_mode == "legacy":
                 force_rule = "这轮消息来自主用户或明确 @ 到主用户。若当前回复适合语音表达，适合采用一段 <pc_tts>...</pc_tts>；由你根据语境判断，仍需遵守目标语种和中文释义。"
@@ -934,7 +1001,7 @@ TTS 朗读文本：
                 f"{req.system_prompt}\n\n{force_prompt}"
             ).strip()
             await record_tts_fragment("TTS 主用户倾向注入", "tts.force", force_prompt, mode="main_user")
-        if user_requested_tts and getattr(self, "tts_generation_mode", "hybrid") in {"hybrid", "direct"} and not strong_block_reason:
+        if user_requested_tts and mode == "fast_tag" and not strong_block_reason:
             user_request_prompt = (
                 "【用户语音请求】\n"
                 "用户本轮明确希望听到语音或你的声音。请以回应用户需求为主：如果当前回复适合用语音表达，可以直接写一段 <pc_tts>...</pc_tts>；"
@@ -959,6 +1026,17 @@ TTS 朗读文本：
         text = self._normalize_tts_tags(str(getattr(resp, "completion_text", "") or ""))
         if text:
             if "<tts>" in text.lower() and "</tts>" in text.lower():
+                if getattr(self, "tts_generation_mode", "fast_tag") == "postprocess":
+                    cleaned = re.sub(r"<tts\b[^>]*>.*?</tts>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+                    cleaned = re.sub(TTS_TAG_PATTERN, "", cleaned).strip() or self._tts_visible_fallback_text(text)
+                    cleaned = cleaned or self._strip_any_tts_markup(text)
+                    resp.completion_text = cleaned
+                    logger.info(
+                        "[PrivateCompanion] TTS后处理模式已移除主模型自写语音标签,改由发送前后处理判断: session=%s preview=%s",
+                        _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
+                        _single_line(cleaned, 160),
+                    )
+                    return
                 if not self._tts_hard_block_reason(event):
                     try:
                         config = self.context.get_config(str(getattr(event, "unified_msg_origin", "") or "")) or {}
@@ -1160,9 +1238,7 @@ TTS 朗读文本：
                 ).strip() or previous_text
 
     async def _maybe_convert_plain_reply_to_tts(self, text: str, event: Any) -> list[Any]:
-        mode = getattr(self, "tts_generation_mode", "hybrid")
-        if mode == "direct":
-            return []
+        mode = getattr(self, "tts_generation_mode", "fast_tag")
         strong_block_reason = self._tts_strong_constraint_block_reason(
             event,
             user_requested_tts=self._event_explicitly_requests_tts(event),
@@ -1172,18 +1248,29 @@ TTS 朗读文本：
         if strong_block_reason:
             self._set_tts_hard_block(event, strong_block_reason)
             return []
-        should_convert = mode == "convert"
-        reason = "convert_mode" if should_convert else ""
+        should_convert = mode == "postprocess"
+        reason = "postprocess" if should_convert else ""
         if not should_convert:
             ok, reason = self._auto_voice_trigger_reason(text, event)
             should_convert = ok
         if not should_convert:
             return []
-        if not self._tts_trigger_probability_allows(event, reason=reason or mode):
+        user_requested_tts = self._event_explicitly_requests_tts(event)
+        if mode == "postprocess":
+            probability_allowed = self._tts_trigger_probability_allows(event, reason=reason or mode)
+            try:
+                setattr(event, "_private_companion_tts_postprocess_probability_allowed", bool(probability_allowed))
+            except Exception:
+                pass
+        else:
+            probability_allowed = (
+                user_requested_tts and not self._tts_strong_constraint_enabled()
+            ) or self._tts_trigger_probability_allows(event, reason=reason or mode)
+        if not probability_allowed and mode != "postprocess":
             if self._tts_strong_constraint_enabled():
                 self._set_tts_hard_block(event, "probability_miss")
             return []
-        converted = await self._convert_text_to_tts_markup(text, event, full=(mode == "convert" or self.auto_voice_full_conversion_enabled))
+        converted = await self._convert_text_to_tts_markup(text, event, full=(mode == "postprocess" or self.auto_voice_full_conversion_enabled))
         if not converted:
             return []
         chain = await self._process_tts_tags(converted, event, fallback_plain=text)
@@ -1271,6 +1358,8 @@ TTS 朗读文本：
     def _should_force_tts_for_main_user_event(self, event: Any) -> bool:
         if not getattr(self, "auto_voice_enabled", False):
             return False
+        if getattr(self, "tts_frequency_control_mode", "global") != "legacy":
+            return False
         if self._event_mentions_main_user_with_keyword(event) and self.main_user_mention_voice_probability > 0:
             return random.random() <= self.main_user_mention_voice_probability
         if self._event_targets_main_user(event) and self.main_user_voice_probability >= 0:
@@ -1298,7 +1387,11 @@ TTS 朗读文本：
         provider = await self._get_tts_conversion_provider(event)
         provider_kind = self._tts_provider_kind(provider_settings={})
         lang = self._tts_language_label()
+        mode = getattr(self, "tts_generation_mode", "fast_tag")
+        if mode == "postprocess":
+            return await self._postprocess_text_to_tts_markup(source, event, provider_kind=provider_kind)
         extra = _single_line(getattr(self, "main_user_mention_voice_prompt", ""), 500) if self._event_mentions_main_user_with_keyword(event) else ""
+        persona_context = await self._format_tts_persona_voice_context(event)
         if getattr(self, "tts_voice_language", "ja") == "zh":
             output_rule = "必须包含一个 <tts>...</tts> 语音块"
             display_rule = "语音和显示文本同为中文时，不需要额外翻译。"
@@ -1316,6 +1409,7 @@ TTS 朗读文本：
 语种规则：{language_rule}
 Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_allows_emotion_tags(provider_kind) else "按普通朗读文本处理"}
 补充要求：{extra or "无"}
+{persona_context}
 
 原回复：
 {source}
@@ -1335,6 +1429,91 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
         if "<tts>" not in converted.lower():
             converted = f"<tts>{converted}</tts>"
         return converted
+
+    async def _postprocess_text_to_tts_markup(self, text: str, event: Any, *, provider_kind: str) -> str:
+        source = _single_line(text, 1600)
+        if not source:
+            return ""
+        provider = await self._get_tts_conversion_provider(event)
+        if provider is None:
+            return ""
+        lang = self._tts_language_label()
+        tts_signal, tts_signal_match, user_text = self._event_tts_request_signal(event)
+        extra = _single_line(getattr(self, "tts_extra_prompt", ""), 800)
+        if not extra:
+            extra = self._legacy_nondefault_tts_prompt()
+        persona_context = await self._format_tts_persona_voice_context(event)
+        probability_allowed = getattr(event, "_private_companion_tts_postprocess_probability_allowed", None)
+        if isinstance(probability_allowed, bool):
+            probability_hint = "命中，正常判断是否适合语音" if probability_allowed else "未命中，除非你判断用户本轮确实在要求语音，否则应保持纯文本"
+        else:
+            probability_hint = "未记录，按普通后处理规则判断"
+        prompt = f"""
+你是 TTS 后处理模型。请判断这条已经生成好的聊天回复是否需要把其中一小段转成语音，并在需要时完成目标语种改写。
+
+目标语种：{lang}
+用户本轮原话：
+{user_text or "（无）"}
+插件规则快判语音请求线索：{tts_signal}{"；命中片段：" + tts_signal_match if tts_signal_match else ""}
+本轮自动语音概率线索：{probability_hint}
+补充规则：{extra or "无"}
+{persona_context}
+
+判断规则：
+- 你要自己根据用户原话、规则线索和回复内容判断用户是否在要求或期待语音；规则快判只是线索，不是最终结论。
+- 如果用户明确要求语音、想听声音或要求朗读，可以更积极使用语音。
+- 如果规则线索为 negative，通常不要使用语音；除非原话里有更强的相反语境，否则 use_tts=false。
+- 如果用户没有明确要求，只有在非常适合被听见、情绪很贴近、短句更有表现力时才使用语音。
+- 不要为了展示功能而使用语音；普通说明、长解释、信息密集回复应保持纯文字。
+- 只选择一小段最适合朗读的内容，不要把整条长回复都转成语音。
+- visible_text 是最终聊天可见中文文本。若 use_tts=true，visible_text 仍要包含完整中文含义。
+- voice_text 是送入 TTS 的朗读文本。目标语种不是中文时，voice_text 必须是自然目标语种；日语除极短语气词外必须包含假名。
+- voice_text 和 visible_text 都要保持当前人格的说话方式、称呼和距离感。
+- 不要添加原回复没有的新信息。
+
+原回复：
+{source}
+
+只输出 JSON：
+{{
+  "use_tts": true/false,
+  "reason": "一句话说明",
+  "visible_text": "最终可见文本",
+  "voice_text": "需要朗读的目标语种文本；不用语音则为空"
+}}
+""".strip()
+        try:
+            resp = await self._tts_provider_text_chat(provider, prompt, max_tokens=700, task="tts_postprocess")
+            raw = str(getattr(resp, "completion_text", resp) or "").strip()
+            extractor = getattr(self, "_extract_json_payload", None)
+            payload = extractor(raw) if callable(extractor) else json.loads(raw)
+            if not isinstance(payload, dict):
+                return ""
+            use_tts = bool(payload.get("use_tts"))
+            visible = _single_line(payload.get("visible_text"), 900) or source
+            voice = self._normalize_tts_spoken_text(str(payload.get("voice_text") or ""), provider_kind=provider_kind)
+            reason = _single_line(payload.get("reason"), 120)
+            if not use_tts or not voice:
+                logger.info(
+                    "[PrivateCompanion] TTS 后处理判定不使用语音: session=%s reason=%s",
+                    _single_line(getattr(event, "unified_msg_origin", ""), 100) or "unknown",
+                    reason or "no_voice",
+                )
+                return ""
+            if getattr(self, "tts_voice_language", "ja") != "zh" and not self._tts_visible_text_has_chinese(visible):
+                visible = source
+            logger.info(
+                "[PrivateCompanion] TTS 后处理判定使用语音: session=%s reason=%s voice=%s",
+                _single_line(getattr(event, "unified_msg_origin", ""), 100) or "unknown",
+                reason or "use_voice",
+                _single_line(voice, 80),
+            )
+            if getattr(self, "tts_voice_language", "ja") == "zh":
+                return f"<tts>{voice}</tts>\n{visible}" if visible and visible != voice else f"<tts>{voice}</tts>"
+            return f"<tts>{voice}</tts>\n{visible}"
+        except Exception as exc:
+            logger.warning("[PrivateCompanion] TTS 后处理判断失败,已保持纯文本: %s", _single_line(exc, 120))
+            return ""
 
     async def _get_tts_conversion_provider(self, event: Any) -> Any:
         provider_id = str(getattr(self, "tts_conversion_provider_id", "") or "").strip()
@@ -1746,12 +1925,15 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
     async def _convert_text_to_spoken_language(self, text: str, event: Any, *, provider_kind: str) -> str:
         provider = await self._get_tts_conversion_provider(event) if event is not None else None
         lang = self._tts_language_label()
+        persona_context = await self._format_tts_persona_voice_context(event)
         prompt = f"""
 把下面内容改写成自然{lang}口语，只输出朗读文本，不要解释。
 要求：
 - 作品名、人名、专有名词可以按原文保留或自然音译。
 - 中文评价、语气词和说明句必须改成{lang}，不要夹中文。
-- 保留原本害羞、轻声、亲近的语气。
+- 保留原回复的情绪，并贴合当前人格的称呼、距离感、口癖和说话方式。
+- 不要添加原文没有的新信息。
+{persona_context}
 
 原文：
 {text}
