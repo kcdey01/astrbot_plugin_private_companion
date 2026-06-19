@@ -600,6 +600,7 @@ const configLabels = {
   tts_private_trigger_probability: "私聊TTS触发概率(%)",
   tts_group_trigger_probability: "群聊TTS触发概率(%)",
   enable_tts_local_playback: "TTS生成后本机播放",
+  enable_tts_local_playback_live_only: "直播时仅播放直播回应消息",
   tts_local_playback_volume: "本机播放音量",
   enable_tts_live_subtitle_sync: "同步到直播打字机字幕",
   tts_live_subtitle_url: "直播字幕推送地址",
@@ -860,6 +861,7 @@ const configDescriptions = {
   tts_private_trigger_probability: "仅全局频控生效。私聊触发概率覆盖值；-1 表示继承默认概率，0 表示私聊默认不主动使用 TTS。",
   tts_group_trigger_probability: "仅全局频控生效。群聊触发概率覆盖值；-1 表示继承默认概率。建议群聊低于私聊，避免打扰。",
   enable_tts_local_playback: "开启后，TTS 音频生成成功时会在运行 AstrBot 的电脑上直接播放。默认关闭，避免群聊自动语音频繁出声。",
+  enable_tts_local_playback_live_only: "默认关闭：启用本机播放后，所有来源的 TTS 都会尝试在本机出声。开启后，只播放直播插件生成的直播回应语音，普通私聊、群聊或主动消息的 TTS 不会在本机播放。",
   tts_local_playback_volume: "TTS 生成后在本机播放时使用的音量百分比。默认 35，避免突然满音量播放；0 表示静音。",
   enable_tts_live_subtitle_sync: "开启后，TTS 生成音频时会把朗读文本同步推送到“我会直播圈米养你”的打字机字幕 overlay。",
   tts_live_subtitle_url: "直播插件字幕 overlay 的 /show 接口地址。默认对应 127.0.0.1:18081/show。",
@@ -1186,7 +1188,8 @@ const featureSettingGroups = {
   enable_private_reading_ask_recommendation: ["private_reading_ask_probability"],
   enable_private_reading_preference_influence: ["private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_unanswered_screen_peek_followup: ["unanswered_screen_peek_after_minutes", "unanswered_screen_peek_cooldown_minutes"],
-  enable_tts_enhancement: ["tts_generation_mode", "tts_voice_language", "tts_conversion_provider_id", "tts_extra_prompt", "tts_frequency_control_mode", "tts_session_min_interval_seconds", "tts_private_min_interval_seconds", "tts_group_min_interval_seconds", "tts_trigger_probability", "tts_private_trigger_probability", "tts_group_trigger_probability", "enable_tts_local_playback", "tts_local_playback_volume", "enable_tts_live_subtitle_sync", "tts_live_subtitle_url", "tts_local_playback_min_interval_seconds", "auto_voice_enabled", "auto_voice_full_conversion_enabled", "auto_voice_max_chars", "auto_voice_cooldown_seconds", "main_user_voice_probability", "main_user_mention_voice_keywords", "main_user_mention_voice_probability", "main_user_mention_voice_prompt"],
+  enable_tts_enhancement: ["tts_generation_mode", "tts_voice_language", "tts_conversion_provider_id", "tts_extra_prompt", "tts_frequency_control_mode", "tts_session_min_interval_seconds", "tts_private_min_interval_seconds", "tts_group_min_interval_seconds", "tts_trigger_probability", "tts_private_trigger_probability", "tts_group_trigger_probability", "enable_tts_local_playback", "enable_tts_local_playback_live_only", "tts_local_playback_volume", "enable_tts_live_subtitle_sync", "tts_live_subtitle_url", "tts_local_playback_min_interval_seconds", "auto_voice_enabled", "auto_voice_full_conversion_enabled", "auto_voice_max_chars", "auto_voice_cooldown_seconds", "main_user_voice_probability", "main_user_mention_voice_keywords", "main_user_mention_voice_probability", "main_user_mention_voice_prompt"],
+  enable_tts_local_playback: ["enable_tts_local_playback_live_only", "tts_local_playback_volume", "tts_local_playback_min_interval_seconds"],
   enable_creative_writing: ["creative_hidden_mode", "creative_inspiration_probability", "creative_share_probability", "creative_chars_per_session", "creative_max_active_projects"],
   creative_hidden_mode: ["creative_share_probability"],
 };
@@ -1466,7 +1469,7 @@ const featureSettingSections = {
     {
       title: "5. 本机与直播联动",
       note: "TTS 音频生成后可在运行 AstrBot 的电脑播放，并同步推送到直播插件打字机字幕。",
-      keys: ["enable_tts_local_playback", "tts_local_playback_volume", "tts_local_playback_min_interval_seconds", "enable_tts_live_subtitle_sync", "tts_live_subtitle_url"],
+      keys: ["enable_tts_local_playback", "enable_tts_local_playback_live_only", "tts_local_playback_volume", "tts_local_playback_min_interval_seconds", "enable_tts_live_subtitle_sync", "tts_live_subtitle_url"],
     },
   ],
 };
@@ -2297,8 +2300,8 @@ function renderTroubleshooting() {
   const eventsEl = $("#troubleshootingEvents");
   const sqliteEl = $("#troubleshootingSqlite");
   const chainEl = $("#troubleshootingChainTests");
-  const debounceEl = $("#troubleshootingDebounceTrace");
-  if (!summaryEl || !checksEl || !eventsEl || !sqliteEl || !chainEl || !debounceEl) return;
+  const injectionsEl = $("#troubleshootingPromptInjections");
+  if (!summaryEl || !checksEl || !eventsEl || !sqliteEl || !chainEl || !injectionsEl) return;
   const data = state.troubleshooting || {};
   const summary = data.summary || {};
   const counts = summary.counts || {};
@@ -2327,7 +2330,7 @@ function renderTroubleshooting() {
     <section class="troubleshooting-reasons">
       <header>
         <b>${escapeHtml(selected === "all" ? "待处理原因" : `${troubleshootingLevelLabel(selected)}原因`)}</b>
-        <span>${escapeHtml(selected === "all" ? "只展示需要处理的错误和警告；普通信息可点信息查看" : "筛选同时作用于常见问题检查和最近异常")}</span>
+        <span>${escapeHtml(selected === "all" ? "只展示需要处理的错误和警告；普通信息可点信息查看" : "筛选同时作用于常见问题检查和最近问题")}</span>
       </header>
       ${reasonItems.length ? reasonItems.map((item) => `
         <button type="button" class="${escapeHtml(item.level || "info")}" ${item.jump ? `data-jump-tab="${escapeHtml(item.jump)}"` : ""}>
@@ -2345,7 +2348,7 @@ function renderTroubleshooting() {
     : `<div class="empty small">暂无${escapeHtml(selected === "all" ? "" : troubleshootingLevelLabel(selected))}常见问题检查项</div>`;
   eventsEl.innerHTML = filteredEvents.length
     ? filteredEvents.map((item) => troubleshootingEventMarkup(item)).join("")
-    : `<div class="empty small">暂无${escapeHtml(selected === "all" ? "" : troubleshootingLevelLabel(selected))}最近异常记录</div>`;
+    : `<div class="empty small">暂无${escapeHtml(selected === "all" ? "" : troubleshootingLevelLabel(selected))}最近问题记录</div>`;
   const sqlite = data.sqlite || {};
   const sqliteItems = Array.isArray(sqlite.items) ? sqlite.items : [];
   sqliteEl.innerHTML = sqliteItems.length
@@ -2358,7 +2361,7 @@ function renderTroubleshooting() {
     `).join("")
     : `<div class="empty small">没有检测到候选 SQLite 数据库文件</div>`;
   chainEl.innerHTML = troubleshootingChainTestMarkup(data.chain_tests || {});
-  debounceEl.innerHTML = troubleshootingDebounceTraceMarkup(data.message_debounce || {});
+  injectionsEl.innerHTML = troubleshootingPromptInjectionMarkup(data.prompt_injections || {});
 }
 
 function troubleshootingReasonItems(checks, events, selected) {
@@ -2552,6 +2555,94 @@ function debounceDecisionLabel(decision) {
     incomplete: "等待",
     fixed: "固定等待",
   }[decision] || decision || "记录";
+}
+
+function troubleshootingPromptInjectionMarkup(data) {
+  const groups = [
+    ["proactive", "主动消息注入", "主动主链提示词"],
+    ["passive", "被动回复注入", "system prompt 片段"],
+  ];
+  return groups.map(([key, title, note]) => {
+    const items = Array.isArray(data?.[key]) ? data[key] : [];
+    return `
+      <section class="troubleshooting-injection-group">
+        <header>
+          <div>
+            <b>${escapeHtml(title)}</b>
+            <span>${escapeHtml(note)} · 最近 ${escapeHtml(items.length || 0)} 条</span>
+          </div>
+        </header>
+        ${items.length ? items.map((item) => troubleshootingPromptInjectionItemMarkup(item)).join("") : `<div class="empty small">暂无${escapeHtml(title)}记录</div>`}
+      </section>
+    `;
+  }).join("");
+}
+
+function troubleshootingPromptInjectionItemMarkup(item) {
+  const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const metaRows = Object.entries(metadata).filter(([key, value]) => key && value);
+  const modules = Array.isArray(item?.modules) ? item.modules : [];
+  const meta = [
+    item.time || "",
+    item.mode ? `mode=${item.mode}` : "",
+    item.chars ? `${item.chars} chars` : "",
+    modules.length ? `${modules.length} 个模块` : "",
+    item.truncated ? "已截断" : "",
+  ].filter(Boolean).join(" · ");
+  return `
+    <details class="troubleshooting-injection-item">
+      <summary>
+        <span>
+          <b>${escapeHtml(item.title || "注入内容")}</b>
+          <small>${escapeHtml(item.session || "")}</small>
+        </span>
+        <em>${escapeHtml(meta)}</em>
+      </summary>
+      ${metaRows.length ? `
+        <dl>
+          ${metaRows.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
+        </dl>
+      ` : ""}
+      ${item.preview ? `<p>${escapeHtml(item.preview)}</p>` : ""}
+      ${modules.length ? `
+        <div class="troubleshooting-injection-modules">
+          ${modules.map((module) => troubleshootingPromptInjectionModuleMarkup(module)).join("")}
+        </div>
+      ` : `<pre>${escapeHtml(item.content || "")}</pre>`}
+      ${modules.length ? `
+        <details class="troubleshooting-injection-raw">
+          <summary>查看完整合并文本${item.truncated ? "（已截断）" : ""}</summary>
+          <pre>${escapeHtml(item.content || "")}</pre>
+        </details>
+      ` : ""}
+    </details>
+  `;
+}
+
+function troubleshootingPromptInjectionModuleMarkup(module) {
+  const content = String(module?.content || "");
+  const chars = Number(module?.chars || content.length || 0);
+  const meta = [
+    module?.source ? `source=${module.source}` : "",
+    module?.key ? `key=${module.key}` : "",
+    Number.isFinite(Number(module?.priority)) ? `priority=${module.priority}` : "",
+    chars ? `${chars} chars` : "",
+    module?.truncated ? "已截断" : "",
+  ].filter(Boolean).join(" · ");
+  const shouldOpen = content.length > 0 && content.length <= 900;
+  return `
+    <details class="troubleshooting-injection-module" ${shouldOpen ? "open" : ""}>
+      <summary>
+        <span>
+          <b>${escapeHtml(module?.title || "提示词片段")}</b>
+          ${module?.description ? `<small>${escapeHtml(module.description)}</small>` : ""}
+        </span>
+        <em>${escapeHtml(meta)}</em>
+      </summary>
+      ${module?.preview && content.length > 900 ? `<p>${escapeHtml(module.preview)}</p>` : ""}
+      <pre>${escapeHtml(content)}</pre>
+    </details>
+  `;
 }
 
 function debounceOutcomeLabel(outcome) {
@@ -3421,7 +3512,14 @@ function renderUsers() {
       await renderUserDetail(true);
     });
   });
+  renderPrivateDebounceTrace();
   renderUserDetail();
+}
+
+function renderPrivateDebounceTrace() {
+  const root = $("#privateDebounceTrace");
+  if (!root) return;
+  root.innerHTML = troubleshootingDebounceTraceMarkup(state.overview?.message_debounce || {});
 }
 
 async function renderUserDetail(forceFetch = false) {
@@ -5561,38 +5659,23 @@ function renderProactiveTasks() {
   const items = Array.isArray(data.items) ? data.items : [];
   const auditItems = Array.isArray(data.audit_items) ? data.audit_items : [];
   const runtimeHtml = proactiveRuntimeHtml(data.runtime || {});
-  const taskHtml = items.length ? items.map((item) => {
-    const status = proactiveTaskStatusLabel(item.status);
-    const source = proactiveTaskSourceLabel(item.source, item.has_timer_event);
-    const title = item.topic || item.reason || "未命名主动任务";
-    const meta = [
-      `用户：${item.user_label || item.user_id || "-"}`,
-      `来源：${source}`,
-      `动作：${item.action || "message"}`,
-      `计划：${item.scheduled || "-"}`,
-      item.last_skip_reason ? `最近${item.last_skip_prefix || "跳过"}：${item.last_skip_reason}` : "",
-      item.last_skip_ts ? `记录：${item.last_skip || "-"}` : "",
-      item.created_ts ? `登记：${item.created || "-"}` : "",
-      item.raw_time ? `原始时间：${item.raw_time}` : "",
-      item.trigger_message_id ? `触发消息：${item.trigger_message_id}` : "",
-      item.silence_until_due ? "到点前静默" : "",
-    ].filter(Boolean);
-    return `
-      <section class="proactive-task ${escapeHtml(item.status || "scheduled")}">
-        <div class="proactive-task-head">
-          <div>
-            <b>${escapeHtml(title)}</b>
-            <span>${escapeHtml(item.user_label || item.user_id || "-")} · ${escapeHtml(item.user_role_label || "-")} · ${escapeHtml(source)}</span>
+  const priorityTasks = items.filter((item) => ["due", "overdue"].includes(item.status || ""));
+  const compactTasks = [...priorityTasks, ...items.filter((item) => !priorityTasks.includes(item))].slice(0, 6);
+  const hiddenTasks = items.filter((item) => !compactTasks.includes(item));
+  const taskHtml = items.length ? `
+      <div class="proactive-task-compact-note">
+        <span>默认显示 ${escapeHtml(compactTasks.length)} / ${escapeHtml(items.length)} 条，优先展示到点和过期任务。</span>
+      </div>
+      ${compactTasks.map((item) => proactiveTaskMarkup(item)).join("")}
+      ${hiddenTasks.length ? `
+        <details class="proactive-task-more">
+          <summary>展开其余 ${escapeHtml(hiddenTasks.length)} 条已登记任务</summary>
+          <div class="proactive-task-more-list">
+            ${hiddenTasks.map((item) => proactiveTaskMarkup(item)).join("")}
           </div>
-          <span class="badge">${escapeHtml(status)}</span>
-        </div>
-        <p>${escapeHtml(item.motive || "暂无登记动机")}</p>
-        <div class="proactive-meta">
-          ${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}
-        </div>
-      </section>
-    `;
-  }).join("") : `
+        </details>
+      ` : ""}
+    ` : `
       <div class="proactive-task-empty">
         <b>当前没有已登记的主动任务</b>
         <span>如果 Bot 只是说“我等一下提醒你”，但这里没有记录，就说明没有真正进入插件主动调度。</span>
@@ -5605,6 +5688,39 @@ function renderProactiveTasks() {
     ${taskHtml}
     <div class="proactive-task-section-title">最近执行审计</div>
     ${proactiveAuditHtml(auditItems)}
+  `;
+}
+
+function proactiveTaskMarkup(item) {
+  const status = proactiveTaskStatusLabel(item.status);
+  const source = proactiveTaskSourceLabel(item.source, item.has_timer_event);
+  const title = item.topic || item.reason || "未命名主动任务";
+  const meta = [
+    `用户：${item.user_label || item.user_id || "-"}`,
+    `来源：${source}`,
+    `动作：${item.action || "message"}`,
+    `计划：${item.scheduled || "-"}`,
+    item.last_skip_reason ? `最近${item.last_skip_prefix || "跳过"}：${item.last_skip_reason}` : "",
+    item.last_skip_ts ? `记录：${item.last_skip || "-"}` : "",
+    item.created_ts ? `登记：${item.created || "-"}` : "",
+    item.raw_time ? `原始时间：${item.raw_time}` : "",
+    item.trigger_message_id ? `触发消息：${item.trigger_message_id}` : "",
+    item.silence_until_due ? "到点前静默" : "",
+  ].filter(Boolean);
+  return `
+    <section class="proactive-task ${escapeHtml(item.status || "scheduled")}">
+      <div class="proactive-task-head">
+        <div>
+          <b>${escapeHtml(title)}</b>
+          <span>${escapeHtml(item.user_label || item.user_id || "-")} · ${escapeHtml(item.user_role_label || "-")} · ${escapeHtml(source)}</span>
+        </div>
+        <span class="badge">${escapeHtml(status)}</span>
+      </div>
+      <p>${escapeHtml(item.motive || "暂无登记动机")}</p>
+      <div class="proactive-meta">
+        ${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}
+      </div>
+    </section>
   `;
 }
 

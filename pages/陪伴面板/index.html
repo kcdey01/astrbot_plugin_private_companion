@@ -291,6 +291,13 @@ QQ空间 = 公开札记
           <label>身份别名归并 <textarea name="private_user_aliases" rows="3" placeholder="临时ID=主QQ&#10;机器人侧ID=主QQ"></textarea></label>
           <button type="submit">保存归并规则</button>
         </form>
+        <article class="private-debounce-panel">
+          <div>
+            <h2>消息收口追踪</h2>
+            <span class="muted">查看文本、图片、转发补话为什么等待或放行；这里属于私聊消息策略，不再塞进排障中心</span>
+          </div>
+          <div id="privateDebounceTrace" class="troubleshooting-debounce-trace"></div>
+        </article>
         <div class="table-wrap">
           <table class="private-user-table">
             <thead>
@@ -643,15 +650,15 @@ QQ空间 = 公开札记
             </div>
             <div id="troubleshootingChainTests" class="troubleshooting-chain-tests"></div>
           </article>
-          <article class="troubleshooting-debounce-panel">
+          <article class="troubleshooting-injection-panel">
             <div>
-              <h2>消息防抖追踪</h2>
-              <span class="muted">查看智能文本收口最近为什么等待、为什么放行、是否学到误判</span>
+              <h2>最近注入内容</h2>
+              <span class="muted">最近 5 条主动与被动消息实际写入主链/提示词的内容，用于排查污染、错时和上下文串线</span>
             </div>
-            <div id="troubleshootingDebounceTrace" class="troubleshooting-debounce-trace"></div>
+            <div id="troubleshootingPromptInjections" class="troubleshooting-prompt-injections"></div>
           </article>
           <div class="troubleshooting-toolbar">
-            <div class="troubleshooting-filter" role="group" aria-label="异常筛选">
+            <div class="troubleshooting-filter" role="group" aria-label="问题筛选">
               <button type="button" data-troubleshooting-filter="all" class="is-active">全部</button>
               <button type="button" data-troubleshooting-filter="error">错误</button>
               <button type="button" data-troubleshooting-filter="warn">警告</button>
@@ -664,7 +671,7 @@ QQ空间 = 公开札记
               <div id="troubleshootingChecks" class="troubleshooting-checks"></div>
             </article>
             <article>
-              <h2>最近异常</h2>
+              <h2>最近问题</h2>
               <div id="troubleshootingEvents" class="troubleshooting-events"></div>
             </article>
             <article>

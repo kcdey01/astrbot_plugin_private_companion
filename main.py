@@ -1524,6 +1524,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             _single_line(segments[0], 120),
             _single_line(text, 420),
         )
+        activity_baseline = self._event_inbound_activity_ts(event)
         if await self._send_segmented_event_forward_message(event, segments, source="decorating_result"):
             empty_result = self._build_result_from_chain([])
             try:
@@ -1543,6 +1544,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     segments[1:],
                     previous_segment=segments[0],
                     source="decorating_result",
+                    started_at=activity_baseline,
                 )
             )
 
@@ -1553,13 +1555,14 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         *,
         previous_segment: str = "",
         source: str = "",
+        started_at: float | None = None,
     ) -> None:
         """后台补发被动分段的剩余片段，避免阻塞主链首包。"""
         prev = previous_segment
         total = len([item for item in segments if str(item or "").strip()])
         sent_index = 0
         scope = self._event_scope_key(event)
-        started_at = _now_ts()
+        started_at = _safe_float(started_at, 0.0, 0.0) or self._event_inbound_activity_ts(event)
         for segment in segments:
             segment = str(segment or "").strip()
             if not segment:
@@ -1802,6 +1805,22 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         environment_injection = await self._format_environment_perception(event)
         if environment_injection:
             req.system_prompt = f"{current_prompt}\n\n{marker}\n{environment_injection}".strip()
+
+    async def _format_passive_environment_fragment(self, event: AstrMessageEvent, *, lightweight: bool = False) -> str:
+        if not lightweight:
+            return await self._format_environment_perception(event)
+        if not self.enable_environment_perception:
+            return ""
+        current = self._environment_now()
+        lines = [
+            "【轻量环境感知】",
+            "这是当前消息的轻量环境边界,只影响时间感、平台语境和回复节奏；不要主动声明“我读取到环境/系统时间”。",
+            f"发送时间：{current.strftime('%Y-%m-%d %H:%M')}",
+        ]
+        platform = await self._format_platform_perception(event)
+        if platform:
+            lines.append(f"平台环境：{platform}")
+        return "\n".join(lines)
 
     async def _append_capability_boundary_to_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
         marker = "<!-- private_companion_capability_boundary_v1 -->"
@@ -2080,6 +2099,14 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         identity_anchor = self._format_private_identity_anchor_for_prompt(user_id, current_user, event)
         if identity_anchor:
             prompt_surface.add("identity.anchor", identity_anchor, priority=30, source="identity")
+        environment_fragment = await self._format_passive_environment_fragment(event, lightweight=lightweight_passive)
+        if environment_fragment:
+            prompt_surface.add(
+                "environment.lightweight" if lightweight_passive else "environment.perception",
+                environment_fragment,
+                priority=35,
+                source="environment",
+            )
         buffered_image_context = self._take_buffered_private_image_context_for_event(event)
         buffered_images = (
             [str(item) for item in buffered_image_context.get("images", []) if str(item or "").strip()]
@@ -2420,19 +2447,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         current_prompt = req.system_prompt or ""
         if marker in current_prompt:
             await self._append_conditional_tool_instructions_to_request(event, req)
-            if not lightweight_passive:
-                await self._append_environment_perception_to_request(event, req)
             return
         if not injection:
             logger.debug("[PrivateCompanion] 被动状态提示词片段为空,跳过状态 marker 注入")
             await self._append_conditional_tool_instructions_to_request(event, req)
-            if not lightweight_passive:
-                await self._append_environment_perception_to_request(event, req)
             return
         req.system_prompt = f"{current_prompt}\n\n{marker}\n{injection}".strip()
         await self._append_conditional_tool_instructions_to_request(event, req)
-        if not lightweight_passive:
-            await self._append_environment_perception_to_request(event, req)
         state_log_parts = [
             f"心理能量={state.get('energy', 70)}/100",
             f"情绪底色={state.get('mood_bias', '平稳')}",
@@ -2445,6 +2466,22 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             self._format_plan_item_for_prompt(current_item),
             current_user,
         ) or "无当前日程"
+        recorder = getattr(self, "_record_prompt_injection_snapshot", None)
+        if callable(recorder):
+            await recorder(
+                kind="passive",
+                session=_single_line(getattr(event, "unified_msg_origin", ""), 160) or self._event_scope_key(event),
+                title="被动回复注入",
+                text=injection,
+                mode="light" if lightweight_passive else "full",
+                modules=prompt_surface.rendered_fragments(),
+                metadata={
+                    "状态": "｜".join(state_log_parts),
+                    "当前日程": current_schedule,
+                    "会话": _single_line(getattr(event, "unified_msg_origin", ""), 160) or "unknown",
+                    "发送者": _single_line(self._event_sender_id(event), 80),
+                },
+            )
         logger.info(
             "[PrivateCompanion] 已注入被动状态提示词到 %s: mode=%s chars=%s 状态=%s；当前日程=%s",
             _single_line(getattr(event, "unified_msg_origin", ""), 80) or "unknown_session",

@@ -3342,6 +3342,15 @@
       "enable_tts_enhancement": true
     }
   },
+  "enable_tts_local_playback_live_only": {
+    "description": "直播时仅播放直播回应消息",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭：只要启用本机播放，所有来源的 TTS 音频都会尝试本机播放。开启后，本机播放只响应直播插件生成的直播回应语音；普通私聊、群聊或主动消息生成的 TTS 不会在本机出声。",
+    "condition": {
+      "enable_tts_local_playback": true
+    }
+  },
   "enable_tts_live_subtitle_sync": {
     "description": "同步到直播打字机字幕",
     "type": "bool",

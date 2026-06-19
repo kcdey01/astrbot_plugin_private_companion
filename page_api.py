@@ -122,6 +122,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "worldbook": self._worldbook_summary(data),
                     "proactive_candidates": self._proactive_candidate_summary(data),
                     "proactive_tasks": self._proactive_task_summary(data),
+                    "message_debounce": self._message_debounce_summary(data),
                     "bilibili": self._bilibili_summary(data),
                     "news": self._news_summary(data),
                     "web_exploration": self._web_exploration_summary(data),
@@ -504,7 +505,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "diagnostics": diagnostics,
                     "sqlite": sqlite_status,
                     "chain_tests": self._troubleshooting_test_results(data),
-                    "message_debounce": self._message_debounce_summary(data),
+                    "prompt_injections": self._prompt_injection_summary(data),
                     "proactive_runtime": proactive_tasks.get("runtime", {}),
                     "token_budget": token_stats.get("budget", {}),
                     "cache": cache,
@@ -701,6 +702,71 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             if isinstance(value, dict)
         }
 
+    def _prompt_injection_summary(self, data: dict[str, Any]) -> dict[str, Any]:
+        raw = data.get("recent_prompt_injections")
+        if not isinstance(raw, dict):
+            raw = {}
+
+        def normalize_item(item: Any) -> dict[str, Any] | None:
+            if not isinstance(item, dict):
+                return None
+            ts = self._float(item.get("ts"))
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            raw_modules = item.get("modules") if isinstance(item.get("modules"), list) else []
+            if not raw_modules:
+                normalizer = getattr(self.plugin, "_normalize_prompt_injection_modules", None)
+                if callable(normalizer):
+                    try:
+                        raw_modules = normalizer(str(item.get("content") or ""), None)
+                    except Exception:
+                        raw_modules = []
+            modules: list[dict[str, Any]] = []
+            for index, module in enumerate(raw_modules[:28]):
+                if not isinstance(module, dict):
+                    continue
+                content = str(module.get("content") or "")[:6500]
+                if not content.strip():
+                    continue
+                modules.append(
+                    {
+                        "key": self._single_line(module.get("key"), 100) or f"module.{index + 1}",
+                        "source": self._single_line(module.get("source"), 80),
+                        "priority": self._int(module.get("priority")),
+                        "title": self._single_line(module.get("title"), 80) or "提示词片段",
+                        "description": self._single_line(module.get("description"), 260),
+                        "chars": self._int(module.get("chars")),
+                        "truncated": bool(module.get("truncated")),
+                        "preview": self._single_line(module.get("preview"), 220),
+                        "content": content,
+                    }
+                )
+            return {
+                "ts": ts,
+                "time": self.plugin._format_timestamp_elapsed(ts),
+                "kind": self._single_line(item.get("kind"), 20),
+                "session": self._single_line(item.get("session"), 160),
+                "title": self._single_line(item.get("title"), 80),
+                "mode": self._single_line(item.get("mode"), 40),
+                "chars": self._int(item.get("chars")),
+                "truncated": bool(item.get("truncated")),
+                "preview": self._single_line(item.get("preview"), 260),
+                "content": str(item.get("content") or "")[:13000],
+                "modules": modules,
+                "metadata": {
+                    self._single_line(key, 40): self._single_line(value, 240)
+                    for key, value in metadata.items()
+                    if self._single_line(key, 40) and self._single_line(value, 240)
+                },
+            }
+
+        result: dict[str, Any] = {}
+        for kind in ("proactive", "passive"):
+            items = raw.get(kind) if isinstance(raw.get(kind), list) else []
+            normalized = [entry for entry in (normalize_item(item) for item in items[:5]) if entry]
+            result[kind] = normalized
+        result["total"] = len(result.get("proactive", [])) + len(result.get("passive", []))
+        return result
+
     def _sanitize_troubleshooting_test_result(self, result: dict[str, Any]) -> dict[str, Any]:
         return {
             "type": self._single_line(result.get("type"), 40),
@@ -757,16 +823,19 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
 
         for item in proactive_tasks.get("audit_items", [])[:40]:
             status = self._single_line(item.get("status"), 24)
-            if status not in {"failed", "dropped", "deferred", "cancelled"}:
+            if status not in {"failed", "dropped", "deferred"}:
                 continue
-            level = "error" if status == "failed" else ("warn" if status in {"dropped", "deferred"} else "info")
+            note = self._single_line(item.get("note"), 180)
+            if status in {"dropped", "deferred"} and not self._proactive_audit_note_needs_troubleshooting(note):
+                continue
+            level = "error" if status == "failed" else "warn"
             title = item.get("topic") or item.get("reason") or item.get("note") or "主动执行异常"
             detail = "；".join(
                 part
                 for part in [
                     f"用户 {item.get('user_label') or item.get('user_id') or '-'}",
                     f"动作 {item.get('action') or 'message'}",
-                    item.get("note") or "",
+                    note,
                     item.get("text_preview") or "",
                 ]
                 if part
@@ -777,27 +846,19 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             if self._single_line(item.get("status"), 24) != "blocked":
                 continue
             note = self._single_line(item.get("note"), 180)
+            if self._proactive_candidate_block_is_normal(note):
+                continue
             title = item.get("topic") or item.get("reason") or "主动候选被拦截"
-            normal_blocked_notes = {
-                "已有更早主动候选",
-                "近期主题过于相似",
-                "已有用户预约/定时主动",
-                "用户明确休息中",
-                "当前时段主动已足够,已避开扎堆",
-                "朋友主动已按日内节奏延后",
-            }
-            is_normal_filter = note in normal_blocked_notes
             detail = "；".join(
                 part
                 for part in [
                     f"用户 {item.get('user_label') or item.get('user_id') or '-'}",
                     f"动作 {item.get('action') or 'message'}",
-                    f"调度过滤：{note}" if is_normal_filter and note else note,
+                    note,
                 ]
                 if part
             )
-            level = "info" if is_normal_filter else "warn"
-            add(level, "主动候选", title, detail, ts=self._float(item.get("last_seen_ts") or item.get("created_ts")), jump="proactive")
+            add("warn", "主动候选", title, detail, ts=self._float(item.get("last_seen_ts") or item.get("created_ts")), jump="proactive")
 
         for item in token_stats.get("recent", [])[:50]:
             if bool(item.get("success", True)):
@@ -815,6 +876,80 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
 
         events.sort(key=lambda item: self._float(item.get("ts")), reverse=True)
         return events
+
+    def _proactive_candidate_block_is_normal(self, note: str) -> bool:
+        text = self._single_line(note, 180)
+        if not text:
+            return True
+        exact_normal = {
+            "已有更早主动候选",
+            "近期主题过于相似",
+            "已有用户预约/定时主动",
+            "用户明确休息中",
+            "当前时段主动已足够,已避开扎堆",
+            "朋友主动已按日内节奏延后",
+            "已有更早主动候选",
+        }
+        if text in exact_normal:
+            return True
+        normal_tokens = (
+            "已有更早",
+            "近期主题",
+            "过于相似",
+            "用户明确休息",
+            "休息中",
+            "免打扰",
+            "已避开扎堆",
+            "按日内节奏延后",
+            "额度",
+            "冷却",
+            "间隔",
+            "频率",
+            "调度过滤",
+        )
+        return any(token in text for token in normal_tokens)
+
+    def _proactive_audit_note_needs_troubleshooting(self, note: str) -> bool:
+        text = self._single_line(note, 180)
+        if not text:
+            return False
+        normal_tokens = (
+            "主动行为失败或不适合发送",
+            "不适合发送",
+            "用户明确休息",
+            "休息中",
+            "免打扰",
+            "已有更早",
+            "调度过滤",
+            "已避开扎堆",
+            "按日内节奏延后",
+            "冷却",
+            "间隔",
+            "频率",
+            "额度",
+            "低分",
+            "未达到阈值",
+        )
+        if any(token in text for token in normal_tokens):
+            return False
+        error_tokens = (
+            "异常",
+            "报错",
+            "Traceback",
+            "Error",
+            "Exception",
+            "provider",
+            "模型",
+            "超时",
+            "不可用",
+            "发送失败",
+            "生成失败",
+            "调用失败",
+            "保存失败",
+            "处理失败",
+            "database is locked",
+        )
+        return any(token in text for token in error_tokens)
 
     def _troubleshooting_checks(
         self,
@@ -2871,6 +3006,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "tts_private_trigger_probability",
             "tts_group_trigger_probability",
             "enable_tts_local_playback",
+            "enable_tts_local_playback_live_only",
             "enable_tts_live_subtitle_sync",
             "tts_live_subtitle_url",
             "tts_local_playback_min_interval_seconds",
@@ -3629,6 +3765,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "tts_private_trigger_probability",
             "tts_group_trigger_probability",
             "enable_tts_local_playback",
+            "enable_tts_local_playback_live_only",
             "enable_tts_live_subtitle_sync",
             "tts_live_subtitle_url",
             "tts_local_playback_min_interval_seconds",
@@ -3889,6 +4026,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "tts_private_trigger_probability",
             "tts_group_trigger_probability",
             "enable_tts_local_playback",
+            "enable_tts_local_playback_live_only",
             "enable_tts_live_subtitle_sync",
             "tts_live_subtitle_url",
             "tts_local_playback_min_interval_seconds",
@@ -6001,10 +6139,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "total": len(items),
             "source_counts": source_counts,
             "status_counts": status_counts,
-            "items": items[:80],
+            "items": items[:30],
             "audit_total": len(audit_items),
             "audit_status_counts": audit_status_counts,
-            "audit_items": audit_items[:80],
+            "audit_items": audit_items[:40],
             "user_states": sorted(
                 user_states,
                 key=lambda item: (
@@ -6012,7 +6150,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     self._float(item.get("next_proactive_ts")) if self._float(item.get("next_proactive_ts")) > 0 else 9999999999,
                     self._single_line(item.get("user_label"), 40),
                 ),
-            )[:80],
+            )[:40],
             "runtime": {
                 "last_tick_started_ts": last_tick_started,
                 "last_tick_started": self.plugin._format_timestamp_elapsed(last_tick_started),

@@ -1673,6 +1673,23 @@ class ProactiveMessageMixin:
             action_context=action_context,
             motive=motive,
         )
+        recorder = getattr(self, "_record_prompt_injection_snapshot", None)
+        if callable(recorder):
+            await recorder(
+                kind="proactive",
+                session=umo,
+                title="主动消息提示词",
+                text=prompt,
+                mode=reason,
+                metadata={
+                    "用户": _single_line(user.get("user_id"), 80),
+                    "称呼": name,
+                    "原因": reason,
+                    "动作": action,
+                    "动机": motive,
+                    "话题": _single_line(user.get("planned_proactive_topic"), 80),
+                },
+            )
         try:
             raw_text = await self._run_framework_agent_text(
                 umo=umo,
@@ -1919,6 +1936,31 @@ class ProactiveMessageMixin:
                 )
                 return True
         return False
+
+    def _proactive_time_mismatch_reason(self, text: str, *, reason: str, action: str) -> str:
+        cleaned = _single_line(text, 240)
+        if not cleaned or action != "message":
+            return ""
+        now = self._environment_now()
+        minutes = now.hour * 60 + now.minute
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        current_text = _single_line(self._format_plan_item_for_prompt(current_item), 180)
+        current_is_school_or_afternoon = bool(re.search(r"(上课|课间|放学|校门|教室|作业|书包|回家路上)", current_text))
+        if reason == "morning_greeting" and re.search(r"(晚上|晚安|睡觉|好梦|睡前|夜里|放学|下班)", cleaned):
+            return f"早间主动含有非早间场景: {cleaned}"
+        if reason == "noon_greeting" and re.search(r"(早安|刚醒|赖床|晚安|好梦|睡觉|夜里)", cleaned):
+            return f"午间主动含有错时问候: {cleaned}"
+        if reason == "evening_greeting" and re.search(r"(早安|刚醒|赖床|上午|中午吃了吗)", cleaned):
+            return f"晚间主动含有错时问候: {cleaned}"
+        if minutes < 12 * 60 and re.search(r"(放学|放学就|放学后|放学回来|下课回来|下午回来|傍晚回来|晚上回来)", cleaned):
+            return f"上午主动提前叙述放学/傍晚场景: {cleaned}"
+        if minutes < 15 * 60 and re.search(r"(五点|5点|17点|下午五点|傍晚|晚上见|晚点回来找你)", cleaned):
+            return f"当前时段过早,主动含有傍晚/五点场景: {cleaned}"
+        if minutes >= 22 * 60 and re.search(r"(放学|下课|下午|傍晚|出去走走|等我回来找你)", cleaned):
+            return f"夜间主动含有已过时段场景: {cleaned}"
+        if re.search(r"(放学|下课|校门|教室|书包|回家路上)", cleaned) and not current_is_school_or_afternoon and not (14 * 60 <= minutes <= 19 * 60):
+            return f"主动文本与当前日程不匹配: 当前={current_text or '无'} 文本={cleaned}"
+        return ""
 
 
     def _collapse_multi_candidate_proactive_text(self, text: str, *, user: dict[str, Any], name: str = "") -> str:

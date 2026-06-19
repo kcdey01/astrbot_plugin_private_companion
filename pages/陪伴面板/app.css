@@ -4050,6 +4050,202 @@ input[type="search"] {
   box-shadow: var(--shadow-ring);
 }
 
+.private-debounce-panel {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0;
+  border: 1px solid rgba(222, 217, 206, 0.72);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: var(--shadow-ring);
+}
+
+.troubleshooting-injection-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(222, 217, 206, 0.72);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: var(--shadow-ring);
+}
+
+.troubleshooting-prompt-injections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.troubleshooting-injection-group {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.troubleshooting-injection-group header b {
+  display: block;
+}
+
+.troubleshooting-injection-group header span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.troubleshooting-injection-item {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.troubleshooting-injection-item summary {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  list-style: none;
+}
+
+.troubleshooting-injection-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.troubleshooting-injection-item summary b,
+.troubleshooting-injection-item summary small,
+.troubleshooting-injection-item summary em {
+  display: block;
+}
+
+.troubleshooting-injection-item summary small,
+.troubleshooting-injection-item summary em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.troubleshooting-injection-item dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0 12px 10px;
+}
+
+.troubleshooting-injection-item dl div {
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.troubleshooting-injection-item dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.troubleshooting-injection-item dd {
+  margin: 3px 0 0;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.troubleshooting-injection-item p,
+.troubleshooting-injection-item pre {
+  margin: 0 12px 12px;
+}
+
+.troubleshooting-injection-item p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.troubleshooting-injection-item pre {
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 14px;
+  background: #0f172a;
+  color: #e5eefc;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.troubleshooting-injection-modules {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.troubleshooting-injection-module,
+.troubleshooting-injection-raw {
+  border: 1px solid rgba(222, 217, 206, 0.7);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.74);
+  overflow: hidden;
+}
+
+.troubleshooting-injection-module summary,
+.troubleshooting-injection-raw summary {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  list-style: none;
+}
+
+.troubleshooting-injection-module summary::-webkit-details-marker,
+.troubleshooting-injection-raw summary::-webkit-details-marker {
+  display: none;
+}
+
+.troubleshooting-injection-module summary b,
+.troubleshooting-injection-module summary small,
+.troubleshooting-injection-module summary em {
+  display: block;
+}
+
+.troubleshooting-injection-module summary small {
+  max-width: 520px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.troubleshooting-injection-module summary em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  text-align: right;
+}
+
+.troubleshooting-injection-module p {
+  margin: 0 10px 10px;
+}
+
+.troubleshooting-injection-module pre {
+  max-height: 280px;
+  margin: 0 10px 10px;
+  background: #111827;
+}
+
+.troubleshooting-injection-raw {
+  margin: 0 12px 12px;
+}
+
+.troubleshooting-injection-raw summary {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.troubleshooting-injection-raw pre {
+  margin: 0 10px 10px;
+}
+
 .troubleshooting-debounce-trace {
   display: grid;
   gap: 10px;
@@ -5899,6 +6095,41 @@ input[type="search"] {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0;
+}
+
+.proactive-task-compact-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.proactive-task-more {
+  border: 1px dashed var(--line-soft);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.58);
+  overflow: hidden;
+}
+
+.proactive-task-more summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.proactive-task-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.proactive-task-more-list {
+  display: grid;
+  gap: 10px;
+  padding: 0 10px 10px;
 }
 
 .proactive-user-state-grid {
@@ -9525,6 +9756,8 @@ pre {
   .troubleshooting-grid,
   .troubleshooting-reasons,
   .troubleshooting-chain-tests,
+  .troubleshooting-prompt-injections,
+  .troubleshooting-injection-item dl,
   .debounce-log-list {
     grid-template-columns: 1fr;
   }

@@ -236,6 +236,71 @@ _PLATFORM_DISPLAY_NAMES = {
     "discord": "Discord",
 }
 
+_PROMPT_MODULE_DESCRIPTIONS: dict[str, tuple[str, str]] = {
+    "state.lightweight": ("轻量状态", "短句/轻量被动回复使用的当前状态底色，降低无关日程和长背景干扰。"),
+    "state.full": ("完整状态", "注入当前日程、天气、情绪和状态边界，让回复贴合当下生活片段。"),
+    "worldview.adaptation": ("世界观适配", "补充当前人格/世界观的表达边界，避免回复和设定脱节。"),
+    "identity.anchor": ("身份锚点", "固定私聊对象身份和称呼，降低昵称变化、群名片或历史记忆导致的认错。"),
+    "turn.continuation": ("连续补话", "把用户短时间内连续补充的内容视作同一轮输入，避免逐条误回。"),
+    "recall.query": ("历史召回查询", "当用户询问此前聊过什么时，提供近期可自然引用的消息。"),
+    "image.direct": ("图片直挂", "说明图片已交给视觉主模型，要求同时理解画面和用户借图表达。"),
+    "image.vision": ("图片视觉摘要", "当前主模型不能可靠直接看图时，注入视觉模型摘要和回复目标。"),
+    "image.fallback": ("图片兜底", "图片存在但没有可用视觉摘要时，防止模型编造画面内容。"),
+    "image.only.vision": ("单图视觉摘要", "用户只发图没有文字时，注入该图摘要并要求自然接住图片表达。"),
+    "image.only.fallback": ("单图兜底", "用户只发图但识图失败时，要求不要沉默也不要编造。"),
+    "image.reply.vision": ("引用图片摘要", "用户引用/回复某张图时，把被引用图片作为本轮主要依据。"),
+    "image.reply.fallback": ("引用图片兜底", "引用图片无法识别时，避免把旧图或历史内容当成当前引用目标。"),
+    "creative.hidden": ("创作上下文", "在用户触发创作相关话题时，补充必要的创作状态和边界。"),
+    "bookshelf.secret": ("书柜隐藏线索", "在合适场景提供书柜相关的隐藏上下文，不主动暴露机制。"),
+    "bookshelf.reading": ("阅读上下文", "补充近期阅读/书柜内容对本轮回复的影响。"),
+    "private_reading.preference": ("阅读偏好", "让私聊回复更贴近用户已形成的阅读偏好。"),
+    "news.recent": ("近期新闻", "用户聊到新闻/时事时，提供近期阅读过的新闻上下文。"),
+    "skill.growth": ("能力成长", "注入角色近期能力变化，帮助回复体现可成长性。"),
+    "companion.planner": ("陪伴规划", "整合关系画像、互动节奏和回复策略，控制陪伴感与边界。"),
+    "proactive.reply_context": ("主动承接", "用户回复上一条主动消息时，对齐上一条主动内容和本轮承接关系。"),
+    "detail.injection": ("日程细节", "补充当前生活片段和可用碎片，让回复有具体落点。"),
+    "timer.scheduling": ("主动预约", "允许模型在合适时隐藏预约下一次主动开口。"),
+    "environment.lightweight": ("轻量环境", "短句被动回复使用的时间和平台边界，避免完全丢失当前语境。"),
+    "environment.perception": ("环境感知", "完整被动回复使用的时间、日期、平台和模型环境边界。"),
+}
+
+_PROMPT_MODULE_PREFIX_DESCRIPTIONS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("state.", ("状态片段", "提供当前拟人状态、情绪、日程或天气相关信息。")),
+    ("image.", ("图片片段", "帮助模型理解当前图片、引用图片或识图失败时的回复边界。")),
+    ("bookshelf.", ("书柜片段", "提供书柜/阅读相关上下文。")),
+    ("private_reading.", ("阅读偏好片段", "提供私聊阅读偏好和阅读状态。")),
+    ("proactive.", ("主动相关片段", "处理主动消息承接、节奏和边界。")),
+    ("timer.", ("预约片段", "处理模型可见的主动预约规则。")),
+    ("creative.", ("创作片段", "提供创作状态或创作相关边界。")),
+    ("environment.", ("环境片段", "提供当前时间、日期、平台、模型或消息媒介边界。")),
+)
+
+_PROMPT_SECTION_DESCRIPTIONS: dict[str, str] = {
+    "内容选择菜单": "限制本次主动消息可选内容类型，避免把多个动机拼成一条。",
+    "主动能力检索": "提示模型可使用的主动能力和素材来源。",
+    "状态表现层": "把当前状态转成可自然表达的生活氛围。",
+    "怎么写这条消息": "约束主动消息的写法、长度、语气和输出格式。",
+    "禁止事项": "列出主动消息不能触碰的回复式承接、幻觉和污染项。",
+    "最近主动行为闭环": "提供最近主动行为后的反馈，用于降低打扰和重复。",
+    "主动意图具体化": "要求主动消息围绕一个具体由头，减少泛泛关心。",
+    "语言风格疲劳": "提示模型避开最近重复的开头、口癖和句式。",
+    "主动承接边界": "说明本轮是独立主动还是续接来源，防止把历史写成当前对话。",
+    "媒体真实性边界": "当本轮不会发图/媒体时，禁止正文假装发了照片或图片。",
+    "新闻阅读上下文": "提供新闻阅读或分享相关背景。",
+    "人格": "当前会话人格和表达站位。",
+    "对象": "收信人身份、称呼或关系背景。",
+    "收信人": "主动消息目标用户和关系上下文。",
+    "主动原因": "本次主动触发原因和动机。",
+    "当前状态": "当前拟人状态、日程和情绪底色。",
+    "当前拟人状态": "当前状态和生活片段。",
+    "当前日程背景": "当前日程素材和时段背景。",
+    "当前会话 TTS 规则": "当前会话语音/TTS 的格式和使用规则。",
+    "必须满足的格式重点": "语音或特殊输出格式的硬性要求。",
+    "当前版本": "当前输出格式或功能版本说明。",
+    "这次想分享的画面钩子": "图片/画面类主动消息的素材落点。",
+    "生图风格": "图片生成或图片分享相关风格要求。",
+}
+
 class EventDispatchMixin:
     """事件分发"""
 
@@ -328,12 +393,17 @@ class EventDispatchMixin:
             return
         sender_id = self._event_sender_id(event)
         self_id = self._event_self_id(event)
+        noted_at = _now_ts()
+        try:
+            setattr(event, "_private_companion_inbound_ts", noted_at)
+        except Exception:
+            pass
         activity = getattr(self, "_recent_inbound_activity_by_scope", None)
         if not isinstance(activity, dict):
             activity = {}
             self._recent_inbound_activity_by_scope = activity
         activity[scope] = {
-            "ts": _now_ts(),
+            "ts": noted_at,
             "message_id": self._event_message_id(event),
             "sender_id": sender_id,
             "from_self": bool(sender_id and self_id and sender_id == self_id),
@@ -358,6 +428,173 @@ class EventDispatchMixin:
         if ignore_self and bool(item.get("from_self")):
             return False
         return True
+
+    def _event_inbound_activity_ts(self, event: AstrMessageEvent) -> float:
+        ts = _safe_float(getattr(event, "_private_companion_inbound_ts", 0), 0.0, 0.0)
+        if ts > 0:
+            return ts
+        raw = self._event_raw_payload(event)
+        raw_ts = _safe_float(raw.get("time") or raw.get("timestamp"), 0.0, 0.0)
+        if raw_ts > 0:
+            return raw_ts
+        return _now_ts()
+
+    def _prompt_module_info(self, key: str, fallback_title: str = "") -> tuple[str, str]:
+        normalized_key = _single_line(key, 80)
+        if normalized_key in _PROMPT_MODULE_DESCRIPTIONS:
+            return _PROMPT_MODULE_DESCRIPTIONS[normalized_key]
+        for prefix, info in _PROMPT_MODULE_PREFIX_DESCRIPTIONS:
+            if normalized_key.startswith(prefix):
+                return info
+        title = _single_line(fallback_title, 60)
+        if title in _PROMPT_SECTION_DESCRIPTIONS:
+            return title, _PROMPT_SECTION_DESCRIPTIONS[title]
+        if normalized_key.startswith("section."):
+            return title or "提示词段落", _PROMPT_SECTION_DESCRIPTIONS.get(title, "按标题从完整 prompt 中拆出的段落，用于定位主动主链提示词来源。")
+        return title or normalized_key or "提示词片段", "提示词组装中的一个片段；用于排查它对本轮模型输入的影响。"
+
+    def _split_prompt_modules_by_heading(self, content: str) -> list[dict[str, Any]]:
+        text = str(content or "").strip()
+        if not text:
+            return []
+        matches = list(re.finditer(r"(?m)^【([^】\n]{1,40})】\s*$", text))
+        modules: list[dict[str, Any]] = []
+        if not matches:
+            title, description = self._prompt_module_info("prompt.full", "完整提示词")
+            return [
+                {
+                    "key": "prompt.full",
+                    "source": "merged_prompt",
+                    "priority": 100,
+                    "title": title,
+                    "description": description,
+                    "content": text,
+                    "chars": len(text),
+                }
+            ]
+        if matches[0].start() > 0:
+            intro = text[: matches[0].start()].strip()
+            if intro:
+                title, description = self._prompt_module_info("section.0.intro", "开场说明")
+                modules.append(
+                    {
+                        "key": "section.0.intro",
+                        "source": "prompt_heading_split",
+                        "priority": 0,
+                        "title": title,
+                        "description": description,
+                        "content": intro,
+                        "chars": len(intro),
+                    }
+                )
+        for index, match in enumerate(matches):
+            heading = _single_line(match.group(1), 60) or f"段落 {index + 1}"
+            start = match.start()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            part = text[start:end].strip()
+            title, description = self._prompt_module_info(f"section.{index + 1}.{heading}", heading)
+            modules.append(
+                {
+                    "key": f"section.{index + 1}.{heading}",
+                    "source": "prompt_heading_split",
+                    "priority": index + 1,
+                    "title": title,
+                    "description": description,
+                    "content": part,
+                    "chars": len(part),
+                }
+            )
+        return modules
+
+    def _normalize_prompt_injection_modules(self, content: str, modules: Any = None) -> list[dict[str, Any]]:
+        raw_modules = modules if isinstance(modules, list) else self._split_prompt_modules_by_heading(content)
+        result: list[dict[str, Any]] = []
+        max_modules = 28
+        max_content = 6000
+        for index, raw in enumerate(raw_modules[:max_modules]):
+            if not isinstance(raw, dict):
+                continue
+            module_content = str(raw.get("content") or "").strip()
+            if not module_content:
+                continue
+            key = _single_line(raw.get("key"), 100) or f"module.{index + 1}"
+            source = _single_line(raw.get("source"), 80)
+            raw_title = _single_line(raw.get("title"), 80)
+            title, description = self._prompt_module_info(key, raw_title)
+            if raw.get("description"):
+                description = _single_line(raw.get("description"), 220) or description
+            chars = _safe_int(raw.get("chars"), len(module_content), 0)
+            truncated = len(module_content) > max_content
+            if truncated:
+                module_content = module_content[:max_content] + "\n...[模块内容已截断]"
+            result.append(
+                {
+                    "key": key,
+                    "source": source,
+                    "priority": _safe_int(raw.get("priority"), index, 0),
+                    "title": title,
+                    "description": description,
+                    "chars": chars,
+                    "truncated": truncated,
+                    "preview": _single_line(module_content, 180),
+                    "content": module_content,
+                }
+            )
+        return result
+
+    async def _record_prompt_injection_snapshot(
+        self,
+        *,
+        kind: str,
+        session: str,
+        title: str,
+        text: str,
+        mode: str = "",
+        metadata: dict[str, Any] | None = None,
+        modules: list[dict[str, Any]] | None = None,
+    ) -> None:
+        content = str(text or "").strip()
+        kind = _single_line(kind, 20) or "unknown"
+        if kind not in {"passive", "proactive"} or not content:
+            return
+        now = _now_ts()
+        max_content = 12000
+        truncated = len(content) > max_content
+        if truncated:
+            content = content[:max_content] + "\n...[已截断]"
+        item = {
+            "ts": now,
+            "time": self._format_timestamp_elapsed(now) if hasattr(self, "_format_timestamp_elapsed") else "",
+            "kind": kind,
+            "session": _single_line(session, 160) or "unknown",
+            "title": _single_line(title, 80),
+            "mode": _single_line(mode, 40),
+            "chars": len(str(text or "")),
+            "truncated": truncated,
+            "preview": _single_line(content, 220),
+            "content": content,
+            "modules": self._normalize_prompt_injection_modules(str(text or ""), modules),
+            "metadata": {
+                _single_line(key, 40): _single_line(value, 220)
+                for key, value in (metadata or {}).items()
+                if _single_line(key, 40) and _single_line(value, 220)
+            },
+        }
+        async with self._data_lock:
+            root = self.data.setdefault("recent_prompt_injections", {})
+            if not isinstance(root, dict):
+                root = {}
+                self.data["recent_prompt_injections"] = root
+            items = root.setdefault(kind, [])
+            if not isinstance(items, list):
+                items = []
+                root[kind] = items
+            items.insert(0, item)
+            del items[5:]
+        try:
+            self._schedule_data_save(delay=2.0)
+        except Exception:
+            pass
 
     def _segmented_remainder_lock(self, scope: str) -> asyncio.Lock:
         key = _single_line(scope, 160) or "unknown"

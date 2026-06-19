@@ -38,10 +38,10 @@ class PromptSurface:
             if isinstance(fragment, PromptFragment):
                 self.add(fragment.key, fragment.content, priority=fragment.priority, source=fragment.source)
 
-    def render(self) -> str:
+    def _rendered_fragments(self) -> list[PromptFragment]:
         seen_keys: set[str] = set()
         seen_content: set[str] = set()
-        parts: list[str] = []
+        rendered: list[PromptFragment] = []
         for fragment in sorted(self._fragments, key=lambda item: (item.priority, item.index)):
             key = fragment.normalized_key()
             content = str(fragment.content or "").strip()
@@ -54,7 +54,28 @@ class PromptSurface:
                 seen_keys.add(key)
             if content_sig:
                 seen_content.add(content_sig)
-            parts.append(content)
+            rendered.append(fragment)
+        return rendered
+
+    def rendered_fragments(self) -> list[dict[str, object]]:
+        result: list[dict[str, object]] = []
+        for fragment in self._rendered_fragments():
+            content = str(fragment.content or "").strip()
+            result.append(
+                {
+                    "key": fragment.normalized_key(),
+                    "source": _single_line(fragment.source, 80),
+                    "priority": int(fragment.priority),
+                    "content": content,
+                    "chars": len(content),
+                }
+            )
+        return result
+
+    def render(self) -> str:
+        parts: list[str] = []
+        for fragment in self._rendered_fragments():
+            parts.append(str(fragment.content or "").strip())
         return "\n\n".join(parts)
 
     def __len__(self) -> int:

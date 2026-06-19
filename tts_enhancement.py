@@ -141,6 +141,7 @@ class TtsEnhancementMixin:
             self._cfg_str(config, "admin_mention_keyword_voice_prompt", ""),
         )
         self.enable_tts_local_playback = self._cfg_bool(config, "enable_tts_local_playback", False)
+        self.enable_tts_local_playback_live_only = self._cfg_bool(config, "enable_tts_local_playback_live_only", False)
         self.enable_tts_live_subtitle_sync = self._cfg_bool(config, "enable_tts_live_subtitle_sync", False)
         self.tts_live_subtitle_url = self._cfg_str(config, "tts_live_subtitle_url", "http://127.0.0.1:18081/show", "http://127.0.0.1:18081/show")
         self.tts_local_playback_volume = self._cfg_int(config, "tts_local_playback_volume", 35, 0, 100)
@@ -352,6 +353,25 @@ class TtsEnhancementMixin:
         if spoken:
             return f"语音：{spoken}"
         return "语音消息"
+
+    def _tts_audio_source_for_event(self, event: Any | None) -> str:
+        if event is None:
+            return "private_companion"
+        try:
+            get_extra = getattr(event, "get_extra", None)
+            if callable(get_extra) and bool(get_extra("bili_live_auto_reply")):
+                return "bili_live_auto_reply"
+        except Exception:
+            pass
+        try:
+            if bool(getattr(event, "bili_live_auto_reply", False)):
+                return "bili_live_auto_reply"
+        except Exception:
+            pass
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        if "bili_live_" in umo or "live_stream" in umo:
+            return "bili_live_auto_reply"
+        return "private_companion"
 
     def _tts_chain_log_text(self, chain: list[Any]) -> str:
         parts: list[str] = []
@@ -841,7 +861,14 @@ TTS 朗读文本：
                 new_chain = list(new_chain) + non_plain_tail
         ordered_chunks = self._split_tts_chain_for_ordered_send(new_chain)
         if len(ordered_chunks) > 1:
-            remainder_started_at = time.time()
+            inbound_ts_getter = getattr(self, "_event_inbound_activity_ts", None)
+            if callable(inbound_ts_getter):
+                try:
+                    remainder_started_at = float(inbound_ts_getter(event))
+                except Exception:
+                    remainder_started_at = time.time()
+            else:
+                remainder_started_at = time.time()
             event.set_result(self._build_result_from_chain(ordered_chunks[0]))
             asyncio.create_task(
                 self._send_tts_chain_chunks_after_first(
@@ -1379,14 +1406,22 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
             if is_live_reply
             else None
         )
-        if is_live_reply and bool(getattr(self, "enable_tts_local_playback", False)):
+        local_playback_enabled = bool(getattr(self, "enable_tts_local_playback", False))
+        live_only = bool(getattr(self, "enable_tts_local_playback_live_only", False))
+        should_play_local = local_playback_enabled and (is_live_reply or not live_only)
+        if should_play_local:
             interval = max(0.0, float(getattr(self, "tts_local_playback_min_interval_seconds", 0.0) or 0.0))
             now = time.time()
             if interval <= 0 or now - float(getattr(self, "_tts_local_playback_last_at", 0.0) or 0.0) >= interval:
                 self._tts_local_playback_last_at = now
                 try:
                     await asyncio.to_thread(self._open_tts_audio_file_local, audio_path)
-                    logger.info("[PrivateCompanion] 已触发 TTS 本机播放: %s", _single_line(audio_path, 160))
+                    logger.info(
+                        "[PrivateCompanion] 已触发 TTS 本机播放: source=%s live_only=%s path=%s",
+                        source or "unknown",
+                        live_only,
+                        _single_line(audio_path, 160),
+                    )
                 except Exception as exc:
                     logger.warning("[PrivateCompanion] TTS 本机播放失败: %s", _single_line(exc, 120))
         if subtitle_task is not None:
@@ -1459,6 +1494,7 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
                 provider_settings,
                 config or {},
                 source_text=fallback_plain or source_spoken,
+                source=self._tts_audio_source_for_event(event),
             )
             if record is not None:
                 output.append(record)
@@ -1558,6 +1594,7 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
         config: dict[str, Any],
         *,
         source_text: str = "",
+        source: str = "private_companion",
     ) -> Any | None:
         provider_kind = self._tts_provider_kind(tts_provider, provider_settings)
         sanitized = self._sanitize_tts_spoken_text(spoken, provider_kind=provider_kind)
@@ -1590,7 +1627,7 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
             self._after_tts_audio_generated(
                 str(audio_path),
                 sanitized,
-                source="private_companion",
+                source=source or "private_companion",
             )
         )
         if provider_settings.get("use_file_service", False):

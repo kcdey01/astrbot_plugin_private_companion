@@ -6752,6 +6752,44 @@ class DailyStateMixin:
                     )
                     self._debug_tick_skip(user_id, "同一日常碎片刚刚已分享给其他私聊对象", prefix="取消")
                     continue
+            time_mismatch_reason = ""
+            checker = getattr(self, "_proactive_time_mismatch_reason", None)
+            if callable(checker):
+                try:
+                    time_mismatch_reason = checker(
+                        text,
+                        reason=reason,
+                        action=effective_action_for_send or planned_action_for_send or "message",
+                    )
+                except Exception as exc:
+                    logger.debug("[PrivateCompanion] 主动消息时间一致性复核失败: %s", _single_line(exc, 120))
+                    time_mismatch_reason = ""
+            if time_mismatch_reason:
+                logger.info(
+                    "[PrivateCompanion] 主动消息时间不一致,已取消发送: user=%s reason=%s",
+                    user_id,
+                    _single_line(time_mismatch_reason, 160),
+                )
+                async with self._data_lock:
+                    current_for_time_guard = self._get_user(user_id)
+                    current_for_time_guard["proactive_sending"] = False
+                    current_for_time_guard["proactive_sending_started_at"] = 0
+                    current_for_time_guard["next_proactive_at"] = 0
+                    current_for_time_guard["planned_proactive_reason"] = ""
+                    current_for_time_guard["planned_proactive_action"] = ""
+                    current_for_time_guard["planned_proactive_source"] = ""
+                    current_for_time_guard["planned_proactive_motive"] = ""
+                    current_for_time_guard["planned_proactive_topic"] = ""
+                    current_for_time_guard["planned_event_chain"] = []
+                    current_for_time_guard["planned_opener_mode"] = ""
+                    current_for_time_guard["planned_followup_kind"] = ""
+                    current_for_time_guard["planned_proactive_quota_exempt"] = False
+                    self._mark_planned_candidate_status(current_for_time_guard, "blocked", time_mismatch_reason)
+                    self._update_proactive_audit(audit_id, status="cancelled", note=time_mismatch_reason)
+                    self._schedule_next_proactive(current_for_time_guard, now=_now_ts(), delay_hours=(1.5, 4.0))
+                    self._save_data_sync()
+                self._debug_tick_skip(user_id, "主动消息时间不一致", prefix="取消")
+                continue
             async with self._data_lock:
                 current_after_render = self._get_user(user_id)
                 has_new_user_message = (
