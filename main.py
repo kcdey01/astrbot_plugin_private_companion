@@ -4324,6 +4324,19 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     _single_line(forward_id, 40) or "inline",
                     bool(forward_payload),
                 )
+        if not text and not forward_only_prompt and not self._private_event_has_image(event):
+            component_types: list[str] = []
+            try:
+                for item in self._event_components(event):
+                    component_types.append(_single_line(self._component_type_name(item), 40))
+            except Exception:
+                component_types = []
+            logger.info(
+                "[PrivateCompanion] 忽略空私聊事件,避免占用主链会话锁: user=%s components=%s",
+                user_id,
+                ",".join([item for item in component_types if item]) or "-",
+            )
+            return
         reference_media_with_text = False
         if text and not forward_only_prompt:
             reference_media_with_text = await self._event_references_media_or_forward_with_text(event, text)

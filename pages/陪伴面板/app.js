@@ -1274,7 +1274,7 @@ const featureSettingGroups = {
   enable_dialogue_episode_memory: ["episode_memory_refresh_messages", "episode_memory_refresh_minutes", "max_dialogue_episodes"],
   enable_open_loop_tracking: ["max_dialogue_episodes"],
   enable_user_habit_learning: ["user_habit_min_count", "user_habit_max_items"],
-  enable_proactive_only_mode: ["framework_session_lock_mode"],
+  enable_proactive_only_mode: [],
   enable_humanized_states: ["humanized_state_intensity", "inject_passive_states", "enable_rest_reply_simulation", "rest_reply_mode", "rest_reply_probability", "rest_reply_llm_threshold", "REST_WAKEUP_PROVIDER_ID", "enable_cycle_state"],
   enable_rest_reply_simulation: ["rest_reply_mode", "rest_reply_probability", "rest_reply_llm_threshold", "REST_WAKEUP_PROVIDER_ID"],
   enable_segmented_proactive_reply: ["segmented_proactive_scope", "segmented_proactive_chat_scope", "segmented_proactive_threshold", "segmented_proactive_min_segment_chars", "segmented_proactive_max_segments", "segmented_proactive_send_as_forward", "segmented_proactive_split_mode", "segmented_proactive_regex", "segmented_proactive_split_words", "enable_segmented_proactive_content_cleanup", "segmented_proactive_content_cleanup_scope", "segmented_proactive_content_cleanup_rule", "segmented_proactive_content_cleanup_words", "segmented_proactive_interval_method", "segmented_proactive_interval_min", "segmented_proactive_interval_max", "segmented_proactive_log_base"],
@@ -8090,6 +8090,7 @@ function renderProactiveOnlyModeCard() {
   const checked = toBool(state.featureDraft[key]);
   const settings = state.overview?.settings || {};
   const injectionPosition = String(settings.passive_injection_position || "prompt");
+  const frameworkLockMode = String(settings.framework_session_lock_mode || "auto");
   root.innerHTML = `
     <div class="proactive-mode-stack">
       <section class="proactive-mode-card ${checked ? "on" : "off"}">
@@ -8125,6 +8126,24 @@ function renderProactiveOnlyModeCard() {
           <button type="button" data-proactive-injection-reset>恢复默认</button>
         </div>
       </form>
+      <form class="proactive-mode-injection-card" data-framework-lock-form>
+        <div>
+          <div class="proactive-mode-kicker">兼容模式 · 旧版 AstrBot</div>
+          <h3>${escapeHtml(configLabel("framework_session_lock_mode"))}</h3>
+          <p>${escapeHtml(configDescriptions.framework_session_lock_mode || "")}</p>
+          <small>${escapeHtml("framework_session_lock_mode")}</small>
+        </div>
+        <div class="proactive-mode-injection-control">
+          <select name="framework_session_lock_mode">
+            ${[
+              ["auto", "自动（仅旧版兼容）"],
+              ["off", "关闭（新版本推荐）"],
+              ["always", "始终启用（旧版排障）"],
+            ].map(([value, label]) => `<option value="${escapeHtml(value)}"${frameworkLockMode === value ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+          </select>
+          <button type="submit">保存模式</button>
+        </div>
+      </form>
     </div>
   `;
   root.querySelector("[data-proactive-only-mode-toggle]")?.addEventListener("change", (event) => {
@@ -8153,6 +8172,16 @@ function renderProactiveOnlyModeCard() {
       () => postJson("/settings/update", { settings: { passive_injection_position: "prompt" } }),
       "已恢复默认注入位置",
       button,
+    );
+  });
+  root.querySelector("[data-framework-lock-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const value = form.querySelector('[name="framework_session_lock_mode"]')?.value || "auto";
+    await runAction(
+      () => postJson("/settings/update", { settings: { framework_session_lock_mode: value } }),
+      "已保存主链会话锁兼容模式",
+      form.querySelector("button[type='submit']"),
     );
   });
 }

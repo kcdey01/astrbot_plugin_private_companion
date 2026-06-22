@@ -3610,7 +3610,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "worldview_adaptation_mode",
             "worldview_adaptation_prompt",
             "quiet_hours",
+            "passive_injection_position",
             "framework_session_lock_mode",
+            "response_review_mode",
+            "response_review_max_chars",
             "passive_topic_memory_hours",
             "tts_generation_mode",
             "tts_voice_language",
@@ -3628,6 +3631,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_tts_local_playback_live_only",
             "enable_tts_live_subtitle_sync",
             "tts_live_subtitle_url",
+            "tts_local_playback_volume",
             "tts_local_playback_min_interval_seconds",
             "auto_voice_enabled",
             "auto_voice_full_conversion_enabled",
@@ -3746,6 +3750,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_wakeup_context_words",
             "group_wakeup_interest_keywords",
             "group_wakeup_interest_probability",
+            "group_wakeup_short_text_wait_seconds",
             "group_wakeup_question_threshold",
             "group_wakeup_cold_group_threshold",
             "group_wakeup_cooldown_seconds",
@@ -3813,6 +3818,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
             "enable_ai_daily_watch",
+            "ai_daily_sources",
+            "ai_daily_prefer_text_version",
             "enable_external_event_self_link",
             "news_min_interval_hours",
             "news_share_probability",
@@ -4422,6 +4429,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_tts_local_playback_live_only",
             "enable_tts_live_subtitle_sync",
             "tts_live_subtitle_url",
+            "tts_local_playback_volume",
             "tts_local_playback_min_interval_seconds",
             "auto_voice_enabled",
             "auto_voice_full_conversion_enabled",
@@ -4508,7 +4516,22 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         config = getattr(self.plugin, "config", None)
         if isinstance(config, dict):
             return str(config.get(key, "") or "")
-        return ""
+        getter = getattr(config, "get", None)
+        if callable(getter):
+            try:
+                return str(getter(key, "") or "")
+            except Exception:
+                pass
+        data = getattr(config, "data", None)
+        if isinstance(data, dict):
+            return str(data.get(key, "") or "")
+        raw = getattr(config, "config", None)
+        if isinstance(raw, dict):
+            return str(raw.get(key, "") or "")
+        try:
+            return str(getattr(config, key, "") or "")
+        except Exception:
+            return ""
 
     async def _save_config_if_possible(self) -> bool:
         config = getattr(self.plugin, "config", None)
@@ -4583,6 +4606,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_forward_message_adaptation",
             "enable_group_reality_promise_guard",
             "enable_group_wakeup_enhancement",
+            "enable_group_wakeup_question",
+            "enable_group_wakeup_cold_group",
             "enable_group_high_intensity_mode",
             "enable_private_image_self_recognition",
             "enable_private_image_gif_enhancement",
@@ -4688,6 +4713,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "worldview_adaptation_mode",
             "worldview_adaptation_prompt",
             "quiet_hours",
+            "framework_session_lock_mode",
             "passive_topic_memory_hours",
             "tts_generation_mode",
             "tts_voice_language",
@@ -4705,6 +4731,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_tts_local_playback_live_only",
             "enable_tts_live_subtitle_sync",
             "tts_live_subtitle_url",
+            "tts_local_playback_volume",
             "tts_local_playback_min_interval_seconds",
             "auto_voice_enabled",
             "auto_voice_full_conversion_enabled",
@@ -4812,6 +4839,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_wakeup_context_words",
             "group_wakeup_interest_keywords",
             "group_wakeup_interest_probability",
+            "group_wakeup_short_text_wait_seconds",
             "group_wakeup_question_threshold",
             "group_wakeup_cold_group_threshold",
             "group_wakeup_cooldown_seconds",
@@ -4878,6 +4906,9 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_news_integration",
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
+            "enable_ai_daily_watch",
+            "ai_daily_sources",
+            "ai_daily_prefer_text_version",
             "enable_external_event_self_link",
             "news_min_interval_hours",
             "news_share_probability",
