@@ -809,7 +809,9 @@ class WorldbookMixin:
 
     def _worldbook_self_registration_block_reply_text(self) -> str:
         reply = _single_line(getattr(self, "worldbook_self_registration_block_reply", ""), 80)
-        return reply or "这个称呼我先不记。"
+        if reply == "这个称呼我先不记。":
+            reply = ""
+        return reply or "你是小猪"
 
     def _extract_worldbook_self_intro(self, text: str) -> dict[str, Any] | None:
         cleaned = str(text or "")
@@ -903,7 +905,7 @@ class WorldbookMixin:
                         name,
                         conflict,
                     )
-                    return {"blocked_reply": "你是小猪"}
+                    return {"blocked_reply": self._worldbook_self_registration_block_reply_text()}
                 pending.pop(sender_id, None)
                 payload = self._create_worldbook_self_registration_profile(
                     group_id=group_id,
@@ -930,7 +932,7 @@ class WorldbookMixin:
                 group_id or "-",
                 sender_id,
             )
-            return {"blocked_reply": "你是小猪"}
+            return {"blocked_reply": self._worldbook_self_registration_block_reply_text()}
         name = _single_line(intro.get("name"), 40) or sender_id
         aliases = [
             _single_line(item, 40)
@@ -956,7 +958,7 @@ class WorldbookMixin:
                 name,
                 conflict,
             )
-            return {"blocked_reply": "你是小猪"}
+            return {"blocked_reply": self._worldbook_self_registration_block_reply_text()}
         profiles = self.data.setdefault("worldbook_member_profiles", {})
         if not isinstance(profiles, dict):
             profiles = {}

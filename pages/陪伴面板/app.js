@@ -1055,8 +1055,8 @@ const configLabels = {
   worldbook_auto_import: "启动时刷新关系网",
   worldbook_member_match_aliases: "允许别名辅助匹配",
   worldbook_self_registration: "允许群聊自登记",
-  worldbook_self_registration_block_words: "自登记屏蔽词",
-  worldbook_self_registration_block_reply: "屏蔽词命中回复",
+  worldbook_self_registration_block_words: "自登记拒绝词",
+  worldbook_self_registration_block_reply: "自登记拒绝回复",
   worldbook_auto_pending_observations: "低频待确认观察",
   worldbook_member_inject_limit: "单次注入节点数",
   worldbook_config_paths: "关系网配置路径",
@@ -1414,7 +1414,7 @@ const configDescriptions = {
   worldbook_member_match_aliases: "提到别名或称呼时辅助匹配 QQ 锚点，但 QQ 号仍是身份主锚点。",
   worldbook_self_registration: "群成员 @Bot 说“我是 XX”时，允许进入二次确认的自登记流程。",
   worldbook_self_registration_block_words: "命中这些词的自报名字、别名或原始自登记文本会被直接拒绝，不进入关系网待确认流程。",
-  worldbook_self_registration_block_reply: "命中自登记屏蔽词后，Bot 返回给用户的回复文案。留空时回退到默认回复。",
+  worldbook_self_registration_block_reply: "自登记命中屏蔽词、称呼不合规或疑似冒领/冲突时，Bot 返回给用户的统一拒绝文案。留空时回退到默认回复。",
   worldbook_auto_pending_observations: "根据低频互动生成待确认观察，不直接写死到资料正文。",
   worldbook_member_inject_limit: "单次回复最多自动注入多少个相关用户词条。",
   worldbook_config_paths: "关系网资料来源路径。用于读取既有资料，不应写死在代码里。",
@@ -5253,7 +5253,7 @@ function renderWorldbook() {
     worldbookStat("身份节点", worldbook.enabled_member_count || 0, `${worldbook.member_count || 0} 个关系节点`),
     worldbookStat("群资料", worldbook.group_count || 0, "可用于群聊上下文"),
     worldbookStat("待确认观察", worldbook.pending_observation_total || 0, "确认后才写入重要记忆"),
-    worldbookStat("自登记屏蔽", worldbook.self_registration_block_word_count || 0, worldbook.self_registration ? "命中后直接拒绝" : "自登记已关闭"),
+    worldbookStat("自登记拒绝词", worldbook.self_registration_block_word_count || 0, worldbook.self_registration ? "命中后直接拒绝" : "自登记已关闭"),
     worldbookStat("识别方式", worldbook.enabled ? "QQ 精确" : "关闭", worldbook.match_aliases ? "称呼辅助开启" : "仅 QQ 确认"),
   ].join("");
   const clearPendingButton = $("#worldbookClearPendingBtn");
@@ -8109,7 +8109,7 @@ function renderModuleWorkbench(settings) {
       body: `${worldbook.enabled_member_count || 0}/${worldbook.member_count || 0} 个节点启用，用来稳定识别昵称、群名片和关系备注。`,
       meta: [
         toBool(settings.worldbook_self_registration) ? "允许群聊自登记" : "自登记关闭",
-        `自登记屏蔽词 ${worldbook.self_registration_block_word_count || 0} 条`,
+        `自登记拒绝词 ${worldbook.self_registration_block_word_count || 0} 条`,
         toBool(settings.enable_atrelay_tools) ? "跨群转述工具开启" : "跨群转述关闭",
       ],
       actions: [

@@ -957,8 +957,11 @@ class PrivateCompanionPlugin(
         self.worldbook_self_registration_block_reply = self._cfg_str(
             c,
             "worldbook_self_registration_block_reply",
-            "这个称呼我先不记。",
+            "你是小猪",
         )
+        if self.worldbook_self_registration_block_reply == "这个称呼我先不记。":
+            self.worldbook_self_registration_block_reply = "你是小猪"
+            _set_into_config(c, "worldbook_self_registration_block_reply", self.worldbook_self_registration_block_reply)
         self.worldbook_auto_pending_observations = self._cfg_bool(c, "worldbook_auto_pending_observations", True)
         self.worldbook_member_inject_limit = self._cfg_int(c, "worldbook_member_inject_limit", 6, 1, 20)
         self.worldbook_config_paths = self._cfg_str(c, "worldbook_config_paths", "")

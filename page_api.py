@@ -5548,8 +5548,6 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_recall_cancel_reply",
             "enable_recall_message_cache",
             "enable_recall_transcribe_command",
-            "recall_message_cache_ttl_seconds",
-            "recall_message_cache_max_items",
             "enable_forbidden_word_recall",
             "recall_forbidden_words",
             "recall_forbidden_scope",
@@ -6303,7 +6301,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 self.plugin.worldbook_self_registration_block_words = value
             return
         if key == "worldbook_self_registration_block_reply":
-            self.plugin.worldbook_self_registration_block_reply = str(value or "").strip()
+            reply = str(value or "").strip()
+            self.plugin.worldbook_self_registration_block_reply = "你是小猪" if reply == "这个称呼我先不记。" else reply
             return
         if key in {"group_repeat_follow_probability", "group_repeat_interrupt_probability", "group_repeat_interrupt_probability_step"}:
             raw = float(value or 0)
@@ -6941,7 +6940,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         if key == "worldbook_self_registration_block_words":
             return str(value or "").strip()[:1200]
         if key == "worldbook_self_registration_block_reply":
-            return str(value or "").strip()[:200]
+            reply = str(value or "").strip()[:200]
+            return "你是小猪" if reply == "这个称呼我先不记。" else reply
         if key == "QZONE_COOKIE":
             return str(value or "").replace("\r", ";").replace("\n", ";").strip()[:8000]
         if key in {"group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "recall_forbidden_words"}:
@@ -7446,11 +7446,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_recall_cancel_reply",
             "enable_recall_message_cache",
             "enable_recall_transcribe_command",
-            "recall_message_cache_ttl_seconds",
-            "recall_message_cache_max_items",
             "enable_forbidden_word_recall",
-            "recall_forbidden_words",
-            "recall_forbidden_scope",
             "recall_forbidden_word_case_sensitive",
             "enable_semantic_message_debounce",
             "enable_proactive_quote_trigger_message",
@@ -7473,8 +7469,6 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "worldbook_auto_import",
             "worldbook_member_match_aliases",
             "worldbook_self_registration",
-            "worldbook_self_registration_block_words",
-            "worldbook_self_registration_block_reply",
             "enable_atrelay_tools",
             "enable_cross_user_memory_bridge",
             "atrelay_require_worldbook_first",
