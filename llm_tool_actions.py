@@ -798,7 +798,7 @@ class LlmToolActionsMixin:
         at_recipient = self._atrelay_bool_flag(kwargs.get("at_recipient", kwargs.get("at", False)))
         expire_hours = kwargs.get("expire_hours", kwargs.get("ttl_hours", 24))
 
-        text = _single_line(message, 800)
+        text = self._normalize_atrelay_text(message, limit=800)
         recipient = _single_line(recipient_hint, 80)
         if not text:
             return json.dumps({"status": "error", "message": "缺少 message/text 内容"}, ensure_ascii=False)
@@ -858,6 +858,7 @@ class LlmToolActionsMixin:
                 text=text,
                 relay_mode=relay_mode,
             )
+            send_text = self._normalize_atrelay_text(send_text, limit=800)
             if delay_until_seen:
                 if not recipient:
                     return json.dumps({"status": "need_recipient", "message": "延迟转述需要目标群友"}, ensure_ascii=False)
@@ -944,6 +945,7 @@ class LlmToolActionsMixin:
             text=text,
             relay_mode=relay_mode,
         )
+        send_text = self._normalize_atrelay_text(send_text, limit=800)
         result = await self._pc_send_to_private_user_impl(
             event,
             user_id=target_user,
@@ -989,7 +991,7 @@ class LlmToolActionsMixin:
         relay_mode = kwargs.get("relay_mode") or kwargs.get("mode") or ""
         sensitive_confirmed = kwargs.get("sensitive_confirmed", kwargs.get("confirmed", False))
         target_group = _single_line(group_id, 40)
-        text = _single_line(message, 800)
+        text = self._normalize_atrelay_text(message, limit=800)
         relay_mode_normalized = self._normalize_atrelay_relay_mode(relay_mode)
         if not target_group.isdigit():
             return "发送失败：群号格式不正确"
@@ -1065,7 +1067,7 @@ class LlmToolActionsMixin:
         )
         receipt_expire_hours = kwargs.get("receipt_expire_hours", kwargs.get("expire_hours", kwargs.get("ttl_hours", 12)))
         target_user = _single_line(user_id, 40)
-        text = _single_line(message, 800)
+        text = self._normalize_atrelay_text(message, limit=800)
         relay_mode_normalized = self._normalize_atrelay_relay_mode(relay_mode)
         if not target_user.isdigit():
             return "发送失败：QQ 号格式不正确"
@@ -1170,7 +1172,7 @@ class LlmToolActionsMixin:
         sensitive_confirmed = kwargs.get("sensitive_confirmed", kwargs.get("confirmed", False))
         expire_hours = kwargs.get("expire_hours", kwargs.get("ttl_hours", 24))
         target_group = _single_line(group_id, 40) or self._extract_group_id_from_event(event)
-        text = _single_line(message, 800)
+        text = self._normalize_atrelay_text(message, limit=800)
         if not target_group.isdigit():
             return "挂起失败：群号格式不正确"
         if not text:

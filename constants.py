@@ -225,6 +225,7 @@ _DEFAULT_USER_TEMPLATE = {
     "style": "",
     "umo": "",
     "last_seen": 0,
+    "last_activity_at": 0,
     "last_sent": 0,
     "sent_day": "",
     "sent_today": 0,

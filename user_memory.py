@@ -989,6 +989,45 @@ class UserMemoryMixin:
                 )
         del loops[:-12]
 
+    def _remove_open_loop_entry(self, user: dict[str, Any], value: str) -> str:
+        loops = user.get("open_loops")
+        if not isinstance(loops, list) or not loops:
+            user["open_loops"] = []
+            return "当前没有未完话头。"
+
+        keyword = _single_line(value, 60)
+        if not keyword:
+            return "请提供要删除的话头关键词，或用“全部”清空所有未完话头。"
+
+        if keyword.lower() in {"全部", "所有", "all", "清空"}:
+            kept_pending: list[dict[str, Any]] = []
+            removed_count = 0
+            for item in loops:
+                if isinstance(item, dict) and str(item.get("status") or "") in {"已完成", "已取消"}:
+                    kept_pending.append(item)
+                else:
+                    removed_count += 1
+            user["open_loops"] = kept_pending[-12:]
+            return f"已清空 {removed_count} 条未完话头。" if removed_count else "当前没有未完话头。"
+
+        if len(keyword) < 2:
+            return "关键词太短，请提供至少 2 个字，避免误删多条话头。"
+
+        kept: list[dict[str, Any]] = []
+        removed: list[str] = []
+        for item in loops:
+            if not isinstance(item, dict):
+                continue
+            text = _single_line(item.get("text"), 120)
+            if text and keyword in text and str(item.get("status") or "") not in {"已完成", "已取消"}:
+                removed.append(text)
+            else:
+                kept.append(item)
+        user["open_loops"] = kept[-12:]
+        if not removed:
+            return "没有找到匹配的未完话头。"
+        return "已删除未完话头：\n" + "\n".join(f"- {item}" for item in removed)
+
     def _update_action_preferences_from_message(self, user: dict[str, Any], text: str) -> None:
         cleaned = _single_line(text, 240)
         if not cleaned:
@@ -2247,7 +2286,55 @@ target 只能是 bot/self/other/ambiguous/none。
         recent.append({"ts": _now_ts(), "signature": signature, "text": _single_line(text, 120)})
         del recent[:-18]
 
-    async def _review_and_rewrite_response(self, user: dict[str, Any], inbound_text: str, response_text: str) -> str:
+    @staticmethod
+    def _music_album_reply_needs_disambiguation_fix(text: str) -> bool:
+        compact = re.sub(r"\s+", "", str(text or ""))
+        if not compact:
+            return False
+        return any(
+            token in compact
+            for token in (
+                "哪个专辑",
+                "哪一个专辑",
+                "我不太确定你说的是哪一个",
+                "你说的是哪一个",
+                "发到哪里",
+                "私聊里还是群里",
+            )
+        )
+
+    @staticmethod
+    def _music_album_reply_from_context(context: dict[str, Any], *, user_text: str = "") -> str:
+        album = _single_line(context.get("album"), 60)
+        artist = _single_line(context.get("artist"), 40)
+        platform = _single_line(context.get("platform"), 24)
+        parts: list[str] = []
+        if artist and album:
+            parts.append(f"看到了，这是 {artist} 的《{album}》专辑。")
+        elif album:
+            parts.append(f"看到了，这张是《{album}》专辑。")
+        elif artist:
+            parts.append(f"看到了，这是 {artist} 的专辑卡。")
+        else:
+            parts.append("看到了，这是一张音乐专辑卡。")
+        if platform:
+            parts.append(f"来源是{platform}。")
+        if re.search(r"(发|列|整理|曲目|歌单|几首歌)", str(user_text or "")):
+            parts.append("如果你要，我可以直接把这张专辑的曲目列出来。")
+        if re.search(r"(发到哪里|私聊|群里)", str(user_text or "")):
+            parts.append("你要是愿意，也可以告诉我发到私聊还是群里。")
+        else:
+            parts.append("你要是愿意，我也可以直接帮你把曲目列出来。")
+        return "".join(parts)
+
+    async def _review_and_rewrite_response(
+        self,
+        user: dict[str, Any],
+        inbound_text: str,
+        response_text: str,
+        *,
+        music_album_context: dict[str, Any] | None = None,
+    ) -> str:
         relay_claim_checker = getattr(self, "_unexecuted_relay_claim_reason", None)
         if callable(relay_claim_checker):
             relay_claim_note = relay_claim_checker(response_text)
@@ -2264,6 +2351,15 @@ target 只能是 bot/self/other/ambiguous/none。
         trimmed = self._trim_abrupt_closing_topic_shift(response_text, inbound_text=inbound_text)
         if trimmed and trimmed != str(response_text or "").strip():
             return trimmed
+        if isinstance(music_album_context, dict) and self._music_album_reply_needs_disambiguation_fix(response_text):
+            fallback = self._music_album_reply_from_context(music_album_context, user_text=inbound_text)
+            if fallback:
+                logger.info(
+                    "[PrivateCompanion] 音乐专辑回复已按卡片上下文纠偏: before=%s after=%s",
+                    _single_line(response_text, 120),
+                    _single_line(fallback, 160),
+                )
+                return fallback
         flags = self._response_review_flags(response_text, user)
         if not flags:
             return response_text

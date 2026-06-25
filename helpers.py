@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 import zoneinfo
 from datetime import date, datetime
 from typing import Any
@@ -57,6 +58,35 @@ def _single_line(text: Any, limit: int = 80) -> str:
     return normalized[:limit]
 
 
+_GARBLED_TEXT_MARKERS = ("Ã", "â", "鈥", "銆", "鏉", "锟", "Ð", "Ê", "¤", "\ufffd")
+_BINARY_TEXT_PREFIXES = ("JFIF", "EXIF", "GIF87A", "GIF89A", "%PDF-", "PK\x03\x04")
+
+
+def _text_looks_garbled(text: Any) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    compact = re.sub(r"\s+", "", normalized)
+    if not compact:
+        return False
+    head = compact[:32].upper()
+    if any(head.startswith(prefix) for prefix in _BINARY_TEXT_PREFIXES):
+        return True
+    replacement_count = compact.count("\ufffd")
+    if replacement_count >= 2:
+        return True
+    mojibake_count = sum(compact.count(marker) for marker in _GARBLED_TEXT_MARKERS if marker != "\ufffd")
+    if mojibake_count >= 3 and len(compact) >= 12:
+        return True
+    control_count = 0
+    for ch in compact[:400]:
+        if ch in "\n\r\t":
+            continue
+        if unicodedata.category(ch).startswith("C"):
+            control_count += 1
+    return control_count >= 2
+
+
 def _strip_internal_message_blocks(text: Any) -> str:
     normalized = str(text or "")
     normalized = re.sub(r"\[\[TTSBLOCK:[^\]]*\]\]", "", normalized)
@@ -88,6 +118,54 @@ def _strip_outbound_control_blocks(
     normalized = re.sub(r"<timer\b[^>]*>.*?</timer>", "", normalized, flags=re.IGNORECASE | re.DOTALL)
     normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
     return normalized
+
+
+_LEGACY_TAG_PATTERN = re.compile(r"&&([A-Za-z_][A-Za-z0-9_]*)&&")
+_LEGACY_TAG_CANONICAL_ALIASES = {
+    "morning": "morning_greeting",
+    "noon": "noon_greeting",
+    "evening": "evening_greeting",
+    "daily_greeting": "daily_greeting",
+    "pending_followup": "pending_followup",
+    "followup": "pending_followup",
+    "random": "random",
+    "state": "state_share",
+    "event": "event",
+    "group": "group_share",
+    "diary": "diary_share",
+    "check_in": "check_in",
+    "quiet_care": "quiet_care",
+}
+_LEGACY_TAG_LABEL_ALIASES = {
+    "morning_greeting": "早安",
+    "noon_greeting": "午安",
+    "evening_greeting": "晚安",
+    "daily_greeting": "日常招呼",
+    "pending_followup": "补一句",
+    "random": "轻微想念",
+    "state_share": "身体状态",
+    "event": "具体事件",
+    "group_share": "群里那点事",
+    "diary_share": "日记碎片",
+    "check_in": "顺手问候",
+    "quiet_care": "轻轻关心",
+}
+
+
+def normalize_legacy_tag_text(value: Any, *, label: bool = False) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+
+    def _replace(match: re.Match[str]) -> str:
+        token = str(match.group(1) or "").strip().lower()
+        canonical = _LEGACY_TAG_CANONICAL_ALIASES.get(token, token)
+        if label:
+            return _LEGACY_TAG_LABEL_ALIASES.get(canonical, canonical.replace("_", " ") if canonical else "")
+        return canonical
+
+    normalized = _LEGACY_TAG_PATTERN.sub(_replace, text)
+    return normalized.strip()
 
 
 _MISSING = object()

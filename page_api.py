@@ -20,7 +20,7 @@ from astrbot.api import logger
 from quart import request, send_file
 
 from .constants import _REASON_TEXT
-from .helpers import _flat_get, _safe_int, _set_into_config, _strip_internal_message_blocks, _today_key
+from .helpers import _flat_get, _safe_int, _set_into_config, _strip_internal_message_blocks, _text_looks_garbled, _today_key
 from .page_api_users_groups import PrivateCompanionPageApiUsersGroupsMixin
 
 PLUGIN_NAME = "astrbot_plugin_private_companion"
@@ -529,7 +529,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         try:
             backup_id = self._single_line(payload.get("id") or payload.get("name"), 160)
             path = self._resolve_migration_backup_path(backup_id)
-            package = json.loads(path.read_text(encoding="utf-8"))
+            package = json.loads(path.read_text(encoding="utf-8-sig"))
             package = self._extract_migration_package(package)
             normalized = self._normalize_migration_package(package)
             overview = await self._apply_migration_normalized(normalized, mode="replace", conflict="use_backup")
@@ -5124,7 +5124,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "checksum_ok": False,
             }
             try:
-                package = json.loads(path.read_text(encoding="utf-8"))
+                package = json.loads(path.read_text(encoding="utf-8-sig"))
                 item["version"] = str(package.get("version") or "")
                 item["exported_at"] = int(float(package.get("exported_at") or 0))
                 item["included_sections"] = [str(value) for value in package.get("included_sections", []) if str(value).strip()]
@@ -8082,14 +8082,22 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "topic": self._single_line(digest.get("topic"), 60),
                 "headline": self._single_line(digest.get("headline"), 120),
                 "source": self._single_line(digest.get("selected_source"), 40),
-                "impression": self._single_line(digest.get("impression"), 180),
+                "impression": self._sanitize_news_text(
+                    digest.get("impression"),
+                    180,
+                    fallback="这条新闻的正文解析异常，建议稍后重新阅读。",
+                ),
                 "link": self._single_line(digest.get("selected_link"), 400),
             },
             "latest_items": [
                 {
                     "source": self._single_line(item.get("source"), 40),
                     "title": self._single_line(item.get("title"), 120),
-                    "summary": self._single_line(item.get("summary"), 160),
+                    "summary": self._sanitize_news_text(
+                        item.get("summary"),
+                        160,
+                        fallback="这条新闻摘要暂时解析异常，建议打开原文查看。",
+                    ),
                     "link": self._single_line(item.get("link"), 400),
                 }
                 for item in latest_items[:8]
@@ -10329,6 +10337,13 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
     def _single_line(value: Any, limit: int) -> str:
         text = " ".join(str(value or "").strip().split())
         return text[:limit]
+
+    @classmethod
+    def _sanitize_news_text(cls, value: Any, limit: int, *, fallback: str = "") -> str:
+        text = cls._single_line(value, limit)
+        if text and _text_looks_garbled(text):
+            return fallback
+        return text
 
     @staticmethod
     def _multi_line(value: Any, limit: int) -> str:

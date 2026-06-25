@@ -104,7 +104,7 @@ from .dreaming import (
     recent_diary_tags,
     weighted_unique_fragment_sample,
 )
-from .helpers import _date_key, _now_ts, _safe_float, _safe_int, _single_line, _strip_internal_message_blocks, _today_key
+from .helpers import _date_key, _now_ts, _safe_float, _safe_int, _single_line, _strip_internal_message_blocks, _today_key, normalize_legacy_tag_text
 from .planning import (
     build_daily_plan_prompt,
     build_detail_enhancement_prompt,
@@ -1052,11 +1052,11 @@ class ProactiveEngineMixin:
             }
         return self._proactive_candidate_semantics(
             user,
-            reason=_single_line(user.get("planned_proactive_reason"), 40) or "check_in",
-            action=_single_line(user.get("planned_proactive_action"), 60) or "message",
+            reason=self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40) or "check_in",
+            action=self._normalize_legacy_proactive_text(user.get("planned_proactive_action"), limit=60) or "message",
             motive=_single_line(user.get("planned_proactive_motive"), 180),
             topic=_single_line(user.get("planned_proactive_topic"), 100),
-            source=_single_line(user.get("planned_proactive_source"), 40),
+            source=self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40),
             chain=user.get("planned_event_chain") if isinstance(user.get("planned_event_chain"), list) else [],
             trigger_message_id=_single_line(user.get("planned_proactive_trigger_message_id"), 120),
             trigger_ts=_safe_float(user.get("planned_proactive_trigger_ts"), 0),
@@ -1070,11 +1070,11 @@ class ProactiveEngineMixin:
     ) -> dict[str, Any]:
         return self._proactive_persona_alignment(
             user,
-            reason=_single_line(user.get("planned_proactive_reason"), 40) or "check_in",
-            action=_single_line(user.get("planned_proactive_action"), 40) or "message",
+            reason=self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40) or "check_in",
+            action=self._normalize_legacy_proactive_text(user.get("planned_proactive_action"), limit=40) or "message",
             motive=_single_line(user.get("planned_proactive_motive"), 180),
             topic=_single_line(user.get("planned_proactive_topic"), 80),
-            source=_single_line(user.get("planned_proactive_source"), 40),
+            source=self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40),
             now=now,
         )
 
@@ -1086,9 +1086,9 @@ class ProactiveEngineMixin:
         semantics = self._planned_proactive_semantics(user)
         parts = [
             self._private_user_role(user),
-            user.get("planned_proactive_source"),
-            user.get("planned_proactive_reason"),
-            user.get("planned_proactive_action"),
+            self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40),
+            self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40),
+            self._normalize_legacy_proactive_text(user.get("planned_proactive_action"), limit=40),
             user.get("planned_proactive_topic"),
             user.get("planned_proactive_motive"),
             user.get("planned_proactive_impulse_id"),
@@ -1136,22 +1136,22 @@ class ProactiveEngineMixin:
         threshold = _safe_int(getattr(self, "proactive_persona_judge_send_threshold", 62), 62, 0, 100)
         if decision == "send" and score > 0 and score < threshold:
             decision = "defer"
-        reason = _single_line(payload.get("reason"), 140) or "模型人格判定"
+        reason = self._normalize_legacy_proactive_text(payload.get("reason"), limit=140) or "模型人格判定"
         result = {
             "decision": decision,
             "score": score,
             "reason": reason,
             "delay_minutes": _safe_int(payload.get("delay_minutes"), 90, 20, 360),
-            "reason_field": _single_line(payload.get("planned_reason") or payload.get("reason_field"), 40),
-            "action": _single_line(payload.get("action"), 40),
+            "reason_field": self._normalize_legacy_proactive_text(payload.get("planned_reason") or payload.get("reason_field"), limit=40),
+            "action": self._normalize_legacy_proactive_text(payload.get("action"), limit=40),
             "topic": _single_line(payload.get("topic"), 80),
             "motive": self._normalize_internal_motive_text(_single_line(payload.get("motive"), 180)),
         }
         return result
 
     def _format_proactive_source_model_hint(self, user: dict[str, Any]) -> str:
-        source = _single_line(user.get("planned_proactive_source"), 40)
-        reason = _single_line(user.get("planned_proactive_reason"), 40)
+        source = self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40)
+        reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40)
         if source in {"pending_followup", "followup"}:
             return "\n".join(
                 [
@@ -1166,10 +1166,10 @@ class ProactiveEngineMixin:
             return "\n".join(
                 [
                     "【来源专项改写：日常招呼】",
-                    "这类来源的价值在时机，不在“问候词”本身。",
-                    "如果现在的 topic/motive 只是早安午安晚安、吃了吗、忙吗、在干嘛，优先 rewrite。",
+                    "这类来源的价值在“当天这个时段的第一句主动开口”，不是在任何空档里补一声问候。",
+                    "如果今天已经发过别的主动、或者已经和对方有来回互动，就别再硬写 morning_greeting/noon_greeting/evening_greeting。",
                     "rewrite 后必须落在当前时段的一个小片段上：早晨刚醒/洗漱/出门前，中午刚吃完/发懒/准备午休，晚上收尾/回家/窝下来。",
-                    "最终效果要像按这个时段顺手冒个头，不像模板化签到。",
+                    "最终效果要像这个时段第一次顺手冒头，不像模板化签到，也不像聊到一半又补来的礼貌问候。",
                 ]
             )
         if source == "random":
@@ -1250,8 +1250,8 @@ class ProactiveEngineMixin:
 - Bot 当前开口欲/关系温度：{_safe_float(inner_readiness.get("score"), 0.55):.2f}｜{_single_line(inner_readiness.get("label"), 60)}｜{_single_line(inner_readiness.get("detail"), 180)}
 
 【当前主动计划】
-- source：{_single_line(user.get("planned_proactive_source"), 40) or "unknown"}
-- reason：{_single_line(user.get("planned_proactive_reason"), 40) or "check_in"}
+- source：{self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40) or "unknown"}
+- reason：{self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40) or "check_in"}
 - action：{_single_line(user.get("planned_proactive_action"), 40) or "message"}
 - topic：{_single_line(user.get("planned_proactive_topic"), 100) or "无"}
 - motive：{_single_line(user.get("planned_proactive_motive"), 220) or "无"}
@@ -1271,7 +1271,7 @@ class ProactiveEngineMixin:
         check_now = _now_ts() if now is None else now
         if not bool(getattr(self, "enable_llm_proactive_persona_judge", True)):
             return {"decision": "send", "score": 100, "reason": "模型人格判定关闭"}
-        if str(user.get("planned_proactive_source") or "") in {"timer", "troubleshooting", "simulation"}:
+        if self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40) in {"timer", "troubleshooting", "simulation"}:
             return {"decision": "send", "score": 100, "reason": "特权计划跳过模型人格判定"}
         signature = self._planned_proactive_model_judge_signature(user)
         cached = self._cached_proactive_model_judgement(user, signature=signature, now=check_now)
@@ -1324,14 +1324,16 @@ class ProactiveEngineMixin:
 
     def _apply_proactive_model_rewrite(self, user: dict[str, Any], judgement: dict[str, Any]) -> bool:
         changed = False
-        new_reason = _single_line(judgement.get("reason_field"), 40)
-        new_action = _single_line(judgement.get("action"), 40)
+        new_reason = self._normalize_legacy_proactive_text(judgement.get("reason_field"), limit=40)
+        new_action = self._normalize_legacy_proactive_text(judgement.get("action"), limit=40)
         new_topic = _single_line(judgement.get("topic"), 80)
         new_motive = self._normalize_internal_motive_text(_single_line(judgement.get("motive"), 180))
-        if new_reason and new_reason != str(user.get("planned_proactive_reason") or ""):
+        current_reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40)
+        current_action = self._normalize_legacy_proactive_text(user.get("planned_proactive_action"), limit=40)
+        if new_reason and new_reason != current_reason:
             user["planned_proactive_reason"] = new_reason
             changed = True
-        if new_action and self._action_is_available(new_action, user) and new_action != str(user.get("planned_proactive_action") or ""):
+        if new_action and self._action_is_available(new_action, user) and new_action != current_action:
             user["planned_proactive_action"] = new_action
             changed = True
         if new_topic and new_topic != _single_line(user.get("planned_proactive_topic"), 80):
@@ -1343,8 +1345,8 @@ class ProactiveEngineMixin:
         if changed and self._private_user_role(user) == "friend":
             sanitized = self._sanitize_friend_proactive_plan_fields(
                 user,
-                reason=str(user.get("planned_proactive_reason") or "check_in"),
-                action=str(user.get("planned_proactive_action") or "message"),
+                reason=self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40) or "check_in",
+                action=self._normalize_legacy_proactive_text(user.get("planned_proactive_action"), limit=40) or "message",
                 topic=_single_line(user.get("planned_proactive_topic"), 80),
                 motive=_single_line(user.get("planned_proactive_motive"), 180),
             )
@@ -1367,8 +1369,8 @@ class ProactiveEngineMixin:
         impulse = self._planned_proactive_impulse(user)
         if isinstance(impulse, dict):
             return self._score_proactive_impulse(user, impulse, now=now)
-        reason = str(user.get("planned_proactive_reason") or "")
-        source = str(user.get("planned_proactive_source") or "")
+        reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40)
+        source = self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40)
         value = 0.62
         if source in {"timer", "troubleshooting", "simulation"}:
             value += 0.35
@@ -1519,9 +1521,9 @@ class ProactiveEngineMixin:
             selected = future[0]
             review_at = _safe_float(selected.get("window_start_at"), check_now)
         candidate = {
-            "source": _single_line(selected.get("source"), 40) or "impulse",
-            "reason": _single_line(selected.get("reason"), 40) or "check_in",
-            "action": _single_line(selected.get("action"), 40) or "message",
+            "source": self._normalize_legacy_proactive_text(selected.get("source"), limit=40) or "impulse",
+            "reason": self._normalize_legacy_proactive_text(selected.get("reason"), limit=40) or "check_in",
+            "action": self._normalize_legacy_proactive_text(selected.get("action"), limit=40) or "message",
             "scheduled_ts": max(review_at, _safe_float(selected.get("window_start_at"), review_at)),
             "topic": _single_line(selected.get("topic"), 80),
             "motive": self._motive_with_hesitation_memory(selected, _single_line(selected.get("motive"), 180)),
@@ -1535,9 +1537,9 @@ class ProactiveEngineMixin:
             user=user,
         )
         user["next_proactive_at"] = candidate["scheduled_ts"]
-        user["planned_proactive_reason"] = candidate["reason"]
-        user["planned_proactive_action"] = candidate["action"]
-        user["planned_proactive_source"] = candidate["source"]
+        user["planned_proactive_reason"] = self._normalize_legacy_proactive_text(candidate["reason"], limit=40) or "check_in"
+        user["planned_proactive_action"] = self._normalize_legacy_proactive_text(candidate["action"], limit=40) or "message"
+        user["planned_proactive_source"] = self._normalize_legacy_proactive_text(candidate["source"], limit=40) or "impulse"
         user["planned_proactive_motive"] = self._normalize_internal_motive_text(candidate["motive"])
         user["planned_proactive_topic"] = candidate["topic"]
         user["planned_proactive_impulse_id"] = _single_line(selected.get("id"), 20)
@@ -1711,7 +1713,7 @@ class ProactiveEngineMixin:
             self._remember_silenced_candidate_for_timer(user, candidate, now=now)
             self._record_proactive_candidate(user_id, candidate, status="blocked", note="已有聊天临时预约临近", user=user)
             return False
-        if _safe_float(user.get("next_proactive_at"), 0) > 0 and str(user.get("planned_proactive_source") or "") == "timer":
+        if _safe_float(user.get("next_proactive_at"), 0) > 0 and self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40) == "timer":
             current_timer = self._get_active_llm_timer(user)
             if self._llm_timer_can_use_internal_scheduler(current_timer if isinstance(current_timer, dict) else None):
                 self._record_proactive_candidate(user_id, candidate, status="blocked", note="已有用户预约/定时主动", user=user)
@@ -1748,9 +1750,9 @@ class ProactiveEngineMixin:
         if isinstance(impulse, dict):
             self._queue_proactive_impulse(user, impulse)
         user["next_proactive_at"] = scheduled
-        user["planned_proactive_reason"] = _single_line(candidate.get("reason"), 40) or "check_in"
-        user["planned_proactive_action"] = action
-        user["planned_proactive_source"] = source
+        user["planned_proactive_reason"] = self._normalize_legacy_proactive_text(candidate.get("reason"), limit=40) or "check_in"
+        user["planned_proactive_action"] = self._normalize_legacy_proactive_text(action, limit=40) or "message"
+        user["planned_proactive_source"] = self._normalize_legacy_proactive_text(source, limit=40) or "proactive"
         user["planned_proactive_motive"] = self._normalize_internal_motive_text(
             _single_line(candidate.get("motive"), 180)
         )
@@ -1836,13 +1838,13 @@ class ProactiveEngineMixin:
         event = self._get_active_llm_timer(user)
         if not isinstance(event, dict):
             return
-        planned_source = str(user.get("planned_proactive_source") or "")
+        planned_source = self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40)
         if planned_source == "timer":
             return
         topic = _single_line(user.get("planned_proactive_topic"), 80)
         motive = _single_line(user.get("planned_proactive_motive"), 160)
-        reason = _single_line(user.get("planned_proactive_reason"), 40)
-        action = _single_line(user.get("planned_proactive_action"), 32)
+        reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40)
+        action = self._normalize_legacy_proactive_text(user.get("planned_proactive_action"), limit=32)
         if not any((topic, motive, reason)):
             return
         existing = event.get("deferred_context")
@@ -1896,8 +1898,8 @@ class ProactiveEngineMixin:
         if scheduled_ts <= 0 or scheduled_ts > check_now:
             return False
         user["next_proactive_at"] = scheduled_ts
-        user["planned_proactive_reason"] = _single_line(event.get("reason"), 40) or "check_in"
-        user["planned_proactive_action"] = _single_line(event.get("action"), 24) or "message"
+        user["planned_proactive_reason"] = self._normalize_legacy_proactive_text(event.get("reason"), limit=40) or "check_in"
+        user["planned_proactive_action"] = self._normalize_legacy_proactive_text(event.get("action"), limit=24) or "message"
         user["planned_proactive_source"] = "timer"
         user["planned_proactive_motive"] = self._normalize_internal_motive_text(_single_line(event.get("motive"), 140))
         user["planned_proactive_topic"] = _single_line(event.get("topic"), 60)
@@ -1936,8 +1938,8 @@ class ProactiveEngineMixin:
         if scheduled_ts <= check_now:
             return False
         user["next_proactive_at"] = scheduled_ts
-        user["planned_proactive_reason"] = _single_line(event.get("reason"), 40) or "check_in"
-        user["planned_proactive_action"] = _single_line(event.get("action"), 24) or "message"
+        user["planned_proactive_reason"] = self._normalize_legacy_proactive_text(event.get("reason"), limit=40) or "check_in"
+        user["planned_proactive_action"] = self._normalize_legacy_proactive_text(event.get("action"), limit=24) or "message"
         user["planned_proactive_source"] = "timer"
         user["planned_proactive_motive"] = self._normalize_internal_motive_text(_single_line(event.get("motive"), 140))
         user["planned_proactive_topic"] = _single_line(event.get("topic"), 60)
@@ -1968,7 +1970,7 @@ class ProactiveEngineMixin:
     def _should_send(self, user: dict[str, Any]) -> tuple[bool, str]:
         self._recover_stale_proactive_sending(user)
         user_id = str(user.get("user_id") or user.get("id") or "")
-        planned_source = str(user.get("planned_proactive_source") or "")
+        planned_source = self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40)
         is_troubleshooting = planned_source == "troubleshooting"
         if not self._user_enabled_for_proactive(user_id, user):
             self._clear_pending_proactive_plan(user)
@@ -2048,11 +2050,11 @@ class ProactiveEngineMixin:
             )
             return False, adjusted_reason
 
-        planned_reason = str(user.get("planned_proactive_reason") or "")
+        planned_reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40)
         if due_timer_active and planned_source != "timer":
             self._promote_due_llm_timer_plan(user, now=now)
-            planned_reason = str(user.get("planned_proactive_reason") or "")
-            planned_source = str(user.get("planned_proactive_source") or planned_source)
+            planned_reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40)
+            planned_source = self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40) or planned_source
         next_at = _safe_float(user.get("next_proactive_at"), 0)
         planned_impulse_id = _single_line(user.get("planned_proactive_impulse_id"), 20)
         planned_expire_at = _safe_float(user.get("planned_proactive_expire_at"), 0)
@@ -2091,7 +2093,7 @@ class ProactiveEngineMixin:
                 self._schedule_next_proactive(user, now=now, delay_hours=(1.0, 3.0))
             return False, "低价值念头已过最佳窗口,已重新挑选"
         if not is_troubleshooting and self._promote_earlier_daily_greeting_event(user, now=now):
-            planned_reason = str(user.get("planned_proactive_reason") or "")
+            planned_reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40)
             next_at = _safe_float(user.get("next_proactive_at"), 0)
             impulse_value = self._planned_impulse_value(user, now=now)
             window_phase, window_detail = self._planned_impulse_window_phase(user, now=now)
@@ -2141,20 +2143,48 @@ class ProactiveEngineMixin:
             self._clear_pending_proactive_plan(user)
             self._schedule_next_proactive(user, now=now, delay_hours=(1.5, 4.5))
             return False, social_relay_note
+        suppressed_raw = user.get("greetings_suppressed_by_inbound", [])
+        suppressed_greetings: set[str] = set()
+        if isinstance(suppressed_raw, list):
+            suppressed_greetings = {str(item).strip() for item in suppressed_raw if str(item).strip()}
+        if (
+            not is_troubleshooting
+            and planned_reason in suppressed_greetings
+            and self._is_greeting_reason(planned_reason)
+            and planned_source != "timer"
+            and not due_timer_active
+        ):
+            self._mark_planned_candidate_status(user, "blocked", "用户在该问候窗口内已经活跃过")
+            self._clear_pending_proactive_plan(user)
+            self._schedule_next_proactive(user, now=now, delay_hours=(2, 5))
+            return False, "用户在该问候窗口内已经活跃过"
 
         self._reset_daily_counter_if_needed(user)
+        sent_today = _safe_int(user.get("sent_today"), 0)
+        if (
+            not is_troubleshooting
+            and planned_reason == "morning_greeting"
+            and planned_source != "timer"
+            and not due_timer_active
+            and sent_today > 0
+        ):
+            self._mark_planned_candidate_status(user, "blocked", "早安只适合作为当天第一句主动消息")
+            self._clear_pending_proactive_plan(user)
+            self._schedule_next_proactive(user, now=now, delay_hours=(2, 5))
+            return False, "早安只适合作为当天第一句主动消息"
         if not is_troubleshooting and _safe_int(user.get("sent_today"), 0) >= daily_limit:
             if not due_timer_active:
                 self._schedule_next_proactive(user, now=now, delay_hours=(8, 16))
             return False, "已达每日上限"
         idle_minutes = self._effective_user_idle_minutes(user)
-        if not is_troubleshooting and not due_timer_active and now - _safe_float(user.get("last_seen"), 0) < idle_minutes * 60:
+        recent_activity_at = self._latest_user_activity_ts(user)
+        if not is_troubleshooting and not due_timer_active and now - recent_activity_at < idle_minutes * 60:
             idle_limit = (
                 self._effective_user_greeting_idle_minutes(user) * 60
                 if self._is_greeting_reason(planned_reason)
                 else idle_minutes * 60
             )
-            if now - _safe_float(user.get("last_seen"), 0) < idle_limit:
+            if now - recent_activity_at < idle_limit:
                 if self._is_sticky_greeting_reason(planned_reason):
                     self._reschedule_greeting_within_window(user, planned_reason, now=now)
                 else:
@@ -2189,8 +2219,8 @@ class ProactiveEngineMixin:
         if not is_troubleshooting and callable(normalizer):
             emotion_note = normalizer(user, now=now)
             if emotion_note:
-                planned_reason = str(user.get("planned_proactive_reason") or planned_reason)
-                planned_action = str(user.get("planned_proactive_action") or planned_action or "message")
+                planned_reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40) or planned_reason
+                planned_action = self._normalize_legacy_proactive_text(user.get("planned_proactive_action"), limit=40) or planned_action or "message"
                 if _safe_float(user.get("next_proactive_at"), 0) > now + 1:
                     return False, emotion_note
         if not is_troubleshooting and self._private_user_role(user) == "friend":
@@ -2337,8 +2367,8 @@ class ProactiveEngineMixin:
         return self._proactive_topic_signature(
             user.get("planned_proactive_topic"),
             user.get("planned_proactive_motive"),
-            user.get("planned_proactive_source"),
-            user.get("planned_proactive_reason"),
+            self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40),
+            self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40),
         )
 
     def _planned_proactive_recently_repeated(self, user: dict[str, Any]) -> bool:
@@ -2356,12 +2386,12 @@ class ProactiveEngineMixin:
     ) -> str:
         if not isinstance(item, dict):
             return ""
-        normalized_source = str(source or item.get("source") or item.get("planned_proactive_source") or "").strip()
+        normalized_source = self._normalize_legacy_proactive_text(source or item.get("source") or item.get("planned_proactive_source"), limit=40)
         if normalized_source in {"timer", "troubleshooting", "simulation", "group_share"}:
             return ""
         if has_trigger:
             return ""
-        reason = str(item.get("reason") or item.get("planned_proactive_reason") or "")
+        reason = self._normalize_legacy_proactive_text(item.get("reason") or item.get("planned_proactive_reason"), limit=40)
         if reason in {"group_share", "news_share", "bili_video_share", "web_exploration_share"}:
             return ""
         if normalized_source not in {"event", "random", "unknown", ""}:
@@ -2526,7 +2556,7 @@ class ProactiveEngineMixin:
             )
 
         due_timer_active = self._has_due_llm_timer(user, now=now)
-        source = str(user.get("planned_proactive_source") or "")
+        source = self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40)
         rest_until = self._user_rest_silence_until(user, now=now)
         rest_blocked = rest_until > now and not due_timer_active and source != "timer"
         add(
@@ -2575,7 +2605,7 @@ class ProactiveEngineMixin:
         )
 
         next_at = _safe_float(user.get("next_proactive_at"), 0)
-        planned_reason = str(user.get("planned_proactive_reason") or "")
+        planned_reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40)
         if next_at <= 0:
             add("planned", "候选计划", False, -12, "尚未安排下一次候选")
         else:
@@ -2886,8 +2916,8 @@ class ProactiveEngineMixin:
             "user_id": str(user_id or user.get("user_id") or user.get("id") or ""),
             "status": _single_line(status, 32) or "unknown",
             "note": _single_line(note, 180),
-            "source": _single_line(user.get("planned_proactive_source"), 40) or "proactive",
-            "reason": _single_line(reason or user.get("planned_proactive_reason"), 40),
+            "source": self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40) or "proactive",
+            "reason": self._normalize_legacy_proactive_text(reason or user.get("planned_proactive_reason"), limit=40),
             "action": _single_line(action or user.get("planned_proactive_action"), 60) or "message",
             "topic": _single_line(user.get("planned_proactive_topic"), 100),
             "motive": _single_line(user.get("planned_proactive_motive"), 180),
@@ -2979,9 +3009,9 @@ class ProactiveEngineMixin:
         decision, reason = self._should_send(probe)
         now = _now_ts()
         snapshot = self._proactive_decision_snapshot(probe, now=now)
-        planned_reason = str(probe.get("planned_proactive_reason") or "")
+        planned_reason = self._normalize_legacy_proactive_text(probe.get("planned_proactive_reason"), limit=40)
         planned_action = str(probe.get("planned_proactive_action") or "message")
-        planned_source = str(probe.get("planned_proactive_source") or "")
+        planned_source = self._normalize_legacy_proactive_text(probe.get("planned_proactive_source"), limit=40)
         planned_motive = _single_line(probe.get("planned_proactive_motive"), 48)
         next_at = _safe_float(probe.get("next_proactive_at"), 0)
         planned_impulse_id = _single_line(probe.get("planned_proactive_impulse_id"), 20)
@@ -3003,9 +3033,9 @@ class ProactiveEngineMixin:
         suppressed_greetings = probe.get("greetings_suppressed_by_inbound")
         if not isinstance(suppressed_greetings, list):
             suppressed_greetings = []
-        last_seen_at = _safe_float(probe.get("last_seen"), 0)
+        last_activity_at = self._latest_user_activity_ts(probe)
         last_sent_at = _safe_float(probe.get("last_sent"), 0)
-        last_seen_gap = now - last_seen_at if last_seen_at > 0 else -1
+        last_seen_gap = now - last_activity_at if last_activity_at > 0 else -1
         last_sent_gap = now - last_sent_at if last_sent_at > 0 else -1
         idle_limit = (
             self._effective_user_greeting_idle_minutes(probe) * 60
@@ -3102,8 +3132,8 @@ class ProactiveEngineMixin:
         sim["events"] = remaining
         current = remaining[0]
         user["next_proactive_at"] = _safe_float(current.get("_scheduled_ts"), now)
-        user["planned_proactive_reason"] = str(current.get("reason") or "check_in")
-        user["planned_proactive_action"] = str(current.get("action") or "message")
+        user["planned_proactive_reason"] = self._normalize_legacy_proactive_text(current.get("reason"), limit=40) or "check_in"
+        user["planned_proactive_action"] = self._normalize_legacy_proactive_text(current.get("action"), limit=40) or "message"
         user["planned_proactive_source"] = "simulation"
         user["planned_proactive_motive"] = _single_line(current.get("motive"), 140)
         user["planned_proactive_topic"] = _single_line(current.get("topic"), 60)
@@ -3792,6 +3822,8 @@ class ProactiveEngineMixin:
         raw = user.get("pending_followup_event")
         if not isinstance(raw, dict):
             return None
+        raw = dict(raw)
+        raw["reason"] = self._normalize_legacy_proactive_text(raw.get("reason"), limit=40) or _single_line(raw.get("reason"), 40) or "check_in"
         followup_date = str(raw.get("date") or "")
         if followup_date and followup_date != _today_key():
             return None
@@ -3825,7 +3857,7 @@ class ProactiveEngineMixin:
         return {
             "date": _today_key(),
             "window": self._window_from_delay_minutes(4, width_minutes=18),
-            "reason": _single_line(raw.get("complaint_reason"), 40) or "check_in",
+            "reason": self._normalize_legacy_proactive_text(raw.get("complaint_reason"), limit=40) or "check_in",
             "action": "message",
             "why": "之前只是叫了用户一声,隔了一阵还是想再说一句。",
             "topic": _single_line(raw.get("complaint_topic"), 80) or "刚才叫你的那一下",
@@ -3865,7 +3897,8 @@ class ProactiveEngineMixin:
             return None
         now_ts = now_ts or _now_ts()
         after_minutes = _safe_int(current.get("after_minutes"), 18, 0, 240)
-        follow_reason = _single_line(current.get("reason"), 40) or origin_reason or "check_in"
+        origin_reason = self._normalize_legacy_proactive_text(origin_reason, limit=40)
+        follow_reason = self._normalize_legacy_proactive_text(current.get("reason"), limit=40) or origin_reason or "check_in"
         if origin_reason == "morning_greeting" or follow_reason == "morning_greeting":
             after_minutes = max(after_minutes, 75)
         topic = _single_line(current.get("topic"), 80) or "刚才那一下的后续"
@@ -4010,8 +4043,9 @@ class ProactiveEngineMixin:
             user["greetings_suppressed_by_inbound"] = suppressed
         now_dt = self._environment_fromtimestamp(now or _now_ts())
         minute = now_dt.hour * 60 + now_dt.minute
+        recent_activity_at = self._latest_user_activity_ts(user)
         anchors = [
-            ("morning_greeting", "07:45-10:20", "早上刚开机时,顺手想来冒个头", "早上刚开机那一下"),
+            ("morning_greeting", "07:45-10:20", "早上刚醒那会儿,总想先把一句招呼放过去", "早上刚开机那一下"),
             ("noon_greeting", "12:05-13:35", "中午松下来那一会儿,顺手想起用户", "中午松下来那一下"),
             ("evening_greeting", "20:10-21:20", "晚上终于慢下来时,想先来你这边说一句", "晚上慢下来的这会儿"),
         ]
@@ -4023,10 +4057,16 @@ class ProactiveEngineMixin:
             start, end = self._parse_window_minutes(window)
             if start is None or end is None:
                 continue
+            if reason == "morning_greeting" and _safe_int(user.get("sent_today"), 0) > 0:
+                continue
             if self._private_user_role(user) == "friend":
                 bucket = self._proactive_daypart_bucket_for_minute(start)
                 if _safe_int(self._today_proactive_daypart_counts(user).get(bucket), 0, 0) >= 1:
                     continue
+            if recent_activity_at > 0 and self._inbound_satisfies_greeting(reason, now=recent_activity_at):
+                if reason not in suppressed:
+                    suppressed.append(reason)
+                continue
             if minute >= end:
                 continue
             start_dt = datetime.combine(today, datetime.min.time(), tzinfo=now_dt.tzinfo) + timedelta(minutes=start)
@@ -4351,7 +4391,7 @@ class ProactiveEngineMixin:
         )
         if any(token in text for token in bored_tokens):
             return True
-        reason = str(user.get("last_proactive_reason") or user.get("planned_proactive_reason") or "")
+        reason = self._normalize_legacy_proactive_text(user.get("last_proactive_reason") or user.get("planned_proactive_reason"), limit=40)
         return reason in {"check_in", "quiet_care", "background_schedule"} and _safe_int(user.get("ignored_streak"), 0) >= 1
 
     def _maybe_make_unanswered_screen_peek_event(
@@ -4491,10 +4531,10 @@ class ProactiveEngineMixin:
         return random.choice(reasons)
 
     def _is_greeting_reason(self, reason: str) -> bool:
-        return reason in {"morning_greeting", "noon_greeting", "evening_greeting"}
+        return self._normalize_legacy_proactive_text(reason, limit=40) in {"morning_greeting", "noon_greeting", "evening_greeting"}
 
     def _is_sticky_greeting_reason(self, reason: str) -> bool:
-        return reason in {"morning_greeting", "noon_greeting", "evening_greeting"}
+        return self._normalize_legacy_proactive_text(reason, limit=40) in {"morning_greeting", "noon_greeting", "evening_greeting"}
 
     def _greeting_min_interval_seconds(self, reason: str) -> int:
         if reason == "morning_greeting":
@@ -4569,6 +4609,20 @@ class ProactiveEngineMixin:
             return False
         suppressed.append(reason)
         return True
+
+    def _mark_greetings_satisfied_by_recent_activity(
+        self,
+        user: dict[str, Any],
+        *,
+        activity_ts: float,
+    ) -> bool:
+        if not isinstance(user, dict) or activity_ts <= 0:
+            return False
+        changed = False
+        for reason in ("morning_greeting", "noon_greeting", "evening_greeting"):
+            if self._inbound_satisfies_greeting(reason, now=activity_ts):
+                changed = self._mark_greeting_satisfied_by_inbound(user, reason) or changed
+        return changed
 
     def _parse_action_list(self, raw: Any) -> set[str]:
         if raw is None:
@@ -5397,6 +5451,9 @@ class ProactiveEngineMixin:
         cleaned = re.sub(r"\s+", " ", cleaned).strip(",。 ")
         return cleaned
 
+    def _normalize_legacy_proactive_text(self, value: Any, *, limit: int = 40) -> str:
+        return _single_line(normalize_legacy_tag_text(value), limit)
+
     def _is_vague_seek_user_motive(self, reason: str, action: str, motive: str, topic: str = "") -> bool:
         if str(action or "message") != "message":
             return False
@@ -5580,6 +5637,7 @@ class ProactiveEngineMixin:
         }
 
     def _reason_windows(self, reason: str) -> list[tuple[int, int]]:
+        reason = self._normalize_legacy_proactive_text(reason, limit=40)
         return {
             "insomnia_night": [(23 * 60, 24 * 60), (0, 6 * 60)],
             "group_share": [(9 * 60, 23 * 60)],
@@ -5601,6 +5659,7 @@ class ProactiveEngineMixin:
         }.get(reason, [(9 * 60, 22 * 60)])
 
     def _is_reason_allowed_now(self, reason: str) -> bool:
+        reason = self._normalize_legacy_proactive_text(reason, limit=40)
         now = self._environment_now()
         minute = now.hour * 60 + now.minute
         for start, end in self._reason_windows(reason):
@@ -5704,11 +5763,11 @@ class ProactiveEngineMixin:
     async def _render_message(self, user: dict[str, Any]) -> tuple[str, str, str, list[Any], str, str]:
         name = str(user.get("nickname") or self.default_nickname)
         user["planned_opener_mode"] = ""
-        planned_reason = str(user.get("planned_proactive_reason") or "")
+        planned_reason = self._normalize_legacy_proactive_text(user.get("planned_proactive_reason"), limit=40)
         planned_action = str(user.get("planned_proactive_action") or "message")
         planned_motive = _single_line(user.get("planned_proactive_motive"), 140)
         due_timer_active = self._has_due_llm_timer(user)
-        troubleshooting_active = str(user.get("planned_proactive_source") or "") == "troubleshooting"
+        troubleshooting_active = self._normalize_legacy_proactive_text(user.get("planned_proactive_source"), limit=40) == "troubleshooting"
         reason = planned_reason if planned_reason and (troubleshooting_active or due_timer_active or self._is_reason_allowed_now(planned_reason)) else ""
         if not reason:
             reason, _ = self._choose_proactive_message(user, name, planned_reason)

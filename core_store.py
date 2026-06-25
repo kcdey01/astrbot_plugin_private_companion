@@ -754,6 +754,16 @@ class CoreStoreMixin:
             user["style"] = self.default_style
         return user
 
+    def _latest_user_activity_ts(self, user: dict[str, Any] | None) -> float:
+        if not isinstance(user, dict):
+            return 0.0
+        return max(
+            _safe_float(user.get("last_activity_at"), 0),
+            _safe_float(user.get("last_seen"), 0),
+            _safe_float(user.get("last_user_message_at"), 0),
+            _safe_float(user.get("last_reply_at"), 0),
+        )
+
     def _is_target_private_user(self, user_id: str, user: dict[str, Any] | None = None) -> bool:
         user_id = self._canonical_private_user_id(str(user_id or "").strip())
         if self._is_bot_self_user_id(user_id):

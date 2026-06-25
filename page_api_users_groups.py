@@ -66,6 +66,7 @@ class PrivateCompanionPageApiUsersGroupsMixin:
         if not user_id:
             return self._error("缺少 user_id")
         try:
+            action_message = ""
             async with self.plugin._data_lock:
                 user = self.plugin._get_user(user_id)
                 if "enabled" in payload:
@@ -139,9 +140,17 @@ class PrivateCompanionPageApiUsersGroupsMixin:
                     user["episode_message_count"] = 0
                     user["last_episode_refresh_at"] = 0
                     user["last_memory_refresh_at"] = 0
+                if payload.get("clear_open_loops"):
+                    action_message = self.plugin._remove_open_loop_entry(user, "全部")
+                remove_open_loop_text = self._single_line(payload.get("remove_open_loop_text"), 120)
+                if remove_open_loop_text:
+                    action_message = self.plugin._remove_open_loop_entry(user, remove_open_loop_text)
                 self.plugin._save_data_sync()
                 snapshot = deepcopy(user)
-            return self._ok(self._user_summary(user_id, snapshot))
+            result = self._user_summary(user_id, snapshot)
+            if action_message:
+                result["message"] = action_message
+            return self._ok(result)
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 更新用户失败: {exc}", exc_info=True)
             return self._error(str(exc))

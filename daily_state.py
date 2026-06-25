@@ -105,7 +105,7 @@ from .dreaming import (
     recent_diary_tags,
     weighted_unique_fragment_sample,
 )
-from .helpers import _date_key, _now_ts, _safe_float, _safe_int, _single_line, _strip_internal_message_blocks, _today_key
+from .helpers import _date_key, _now_ts, _safe_float, _safe_int, _single_line, _strip_internal_message_blocks, _today_key, normalize_legacy_tag_text
 from .planning import (
     build_daily_plan_prompt,
     build_detail_enhancement_prompt,
@@ -923,16 +923,16 @@ class DailyStateMixin:
                     "window": "08:20-09:50",
                     "reason": "morning_greeting",
                     "action": "message",
-                    "why": "早上起步有点乱,容易一边整理自己一边顺手来找用户。",
+                    "why": "早上刚醒那会儿,总想先把一句招呼放过去。",
                     "topic": "赖床后的早安",
-                    "motive": "刚把自己从床上拽起来,脑子还迷糊着就先想到你了",
+                    "motive": "刚把自己从床上拽起来,脑子还慢半拍,但先想到要跟你说早",
                     "scene": "刚从床上爬起来的时候",
                     "tone": "迷糊",
-                    "impulse": "还没完全开机,但已经先想往你这边晃一下",
+                    "impulse": "先把早上的第一句递过去",
                     "chain": [
                         {"kind": "name_only_opener"},
-                        {"kind": "if_no_reply", "after_minutes": 80, "reason": "check_in", "topic": "早晨那句后面", "motive": "刚刚只喊了名字,用户没回消息,所以想再接一句", "tone": "有点小别扭,但忍着"},
-                        {"kind": "if_still_no_reply", "after_minutes": 140, "reason": "morning_greeting", "topic": "早晨第二句", "motive": "早晨那两句之间还差个实质点,所以想把重点补完整", "tone": "克制一点,把重点补上"},
+                        {"kind": "if_no_reply", "after_minutes": 80, "reason": "check_in", "topic": "早晨那句后面", "motive": "刚刚只喊了名字,那边没回,就想再补一句", "tone": "有点小别扭,但忍着"},
+                        {"kind": "if_still_no_reply", "after_minutes": 140, "reason": "morning_greeting", "topic": "早晨第二句", "motive": "早上那句还差一点内容,所以想补完整", "tone": "克制一点,把重点补上"},
                     ],
                     "mood": "迷糊",
                 }
@@ -943,15 +943,15 @@ class DailyStateMixin:
                     "window": "08:30-09:45",
                     "reason": "morning_greeting",
                     "action": "message",
-                    "why": "早上还带着一点睡意时,更容易发一条轻轻的早安。",
+                    "why": "早上还带着一点睡意时,更容易先发一声早安。",
                     "topic": "没完全醒的早安",
-                    "motive": "人还没完全清醒,但就是想先在你这边冒个头",
+                    "motive": "人还没完全清醒,但还是先想跟你打个招呼",
                     "scene": "人还带着睡意的时候",
                     "tone": "迟钝",
-                    "impulse": "想在彻底清醒前先把一句话放你这",
+                    "impulse": "想在彻底清醒前先说一声早",
                     "chain": [
                         {"kind": "name_only_opener"},
-                        {"kind": "if_no_reply", "after_minutes": 90, "reason": "check_in", "topic": "早晨那句后面", "motive": "刚刚只冒了个头,用户没回消息,所以想再接一句", "tone": "有点小别扭,但收着"},
+                        {"kind": "if_no_reply", "after_minutes": 90, "reason": "check_in", "topic": "早晨那句后面", "motive": "刚刚只喊了名字,那边没回,就想再补一句", "tone": "有点小别扭,但收着"},
                     ],
                     "mood": "迟钝",
                 }
@@ -963,12 +963,12 @@ class DailyStateMixin:
                     "window": "08:10-09:20",
                     "reason": "morning_greeting",
                     "action": "message",
-                    "why": "早上状态不差时,更像会顺手发个早安。",
+                    "why": "早上状态不差时,更像会顺手发一句早安。",
                     "topic": "顺手打个早安",
-                    "motive": "刚开机那一下状态还行,就想先来晃你一下",
+                    "motive": "刚开机那一下状态还行,就想先跟你打个招呼",
                     "scene": "刚开机的那一下",
                     "tone": "清醒",
-                    "impulse": "想把第一小段清醒顺手分给你一点",
+                    "impulse": "把第一点清醒先递过去",
                     "chain": [
                         {"kind": "name_only_opener"},
                         {"kind": "if_no_reply", "after_minutes": 85, "reason": "check_in", "topic": "早安后续", "motive": "刚才那句信息不够完整,所以想补充一句", "tone": "有点认真,顺手补上"},
@@ -1139,7 +1139,7 @@ class DailyStateMixin:
             "important_date_share": "有个重要时间点值得提前提醒",
             "background_schedule": "当前日程有一点可以自然提到",
             "check_in": "刚好停下来,想确认用户在不在",
-            "morning_greeting": "早上这会儿顺手来冒个头",
+            "morning_greeting": "早上这会儿想先把一句招呼放过去",
             "noon_greeting": "中午松下来时顺手来打个照面",
             "evening_greeting": "晚上慢下来时想先来你这边说一句",
         }.get(reason, "刚好停下来,想到可以和用户说一句")
@@ -6393,7 +6393,7 @@ class DailyStateMixin:
     def _clear_llm_timer_internal_plan_fields(self, user: dict[str, Any]) -> None:
         if not isinstance(user, dict):
             return
-        if str(user.get("planned_proactive_source") or "") != "timer":
+        if normalize_legacy_tag_text(user.get("planned_proactive_source")) != "timer":
             return
         self._clear_pending_proactive_plan(user)
 
@@ -7647,11 +7647,11 @@ class DailyStateMixin:
         """Block ordinary proactive messages when the private chat has just moved."""
         if not isinstance(user, dict):
             return ""
-        source = str(planned_source or user.get("planned_proactive_source") or "")
+        source = normalize_legacy_tag_text(planned_source or user.get("planned_proactive_source"))
         if is_troubleshooting or due_timer_active or source == "timer":
             return ""
         check_now = _now_ts() if now is None else now
-        reason = str(planned_reason or user.get("planned_proactive_reason") or "")
+        reason = normalize_legacy_tag_text(planned_reason or user.get("planned_proactive_reason"))
         idle_minutes = (
             self._effective_user_greeting_idle_minutes(user)
             if self._is_greeting_reason(reason)
@@ -7660,10 +7660,7 @@ class DailyStateMixin:
         idle_seconds = max(0, idle_minutes) * 60
         if idle_seconds <= 0:
             return ""
-        recent_at = max(
-            _safe_float(user.get("last_seen"), 0),
-            _safe_float(user.get("last_user_message_at"), 0),
-        )
+        recent_at = self._latest_user_activity_ts(user)
         if recent_at <= 0:
             return ""
         remaining = recent_at + idle_seconds - check_now
@@ -7682,16 +7679,13 @@ class DailyStateMixin:
         if not isinstance(user, dict):
             return
         check_now = _now_ts() if now is None else now
-        reason = str(user.get("planned_proactive_reason") or "")
+        reason = normalize_legacy_tag_text(user.get("planned_proactive_reason"))
         idle_minutes = (
             self._effective_user_greeting_idle_minutes(user)
             if self._is_greeting_reason(reason)
             else self._effective_user_idle_minutes(user)
         )
-        recent_at = max(
-            _safe_float(user.get("last_seen"), 0),
-            _safe_float(user.get("last_user_message_at"), 0),
-        )
+        recent_at = self._latest_user_activity_ts(user)
         quiet_until = recent_at + max(0, idle_minutes) * 60 if recent_at > 0 else check_now + 10 * 60
         if self._is_sticky_greeting_reason(reason) and self._reschedule_greeting_within_window(user, reason, now=check_now):
             pass
@@ -7720,11 +7714,11 @@ class DailyStateMixin:
                     replaced = False
                     handled_by_replacer = False
             if not replaced:
-                if handled_by_replacer and not _single_line(user.get("planned_proactive_reason"), 40):
+                if handled_by_replacer and not _single_line(normalize_legacy_tag_text(user.get("planned_proactive_reason")), 40):
                     self._schedule_next_proactive(user, now=check_now, delay_hours=(max(0.2, delay_minutes[0] / 60), max(0.35, delay_minutes[1] / 60)))
                 else:
                     user["next_proactive_at"] = max(check_now + 5 * 60, quiet_until + random.uniform(2 * 60, 8 * 60))
-            if str(user.get("planned_proactive_source") or "") == "simulation":
+            if normalize_legacy_tag_text(user.get("planned_proactive_source")) == "simulation":
                 sim = user.get("simulation_mode")
                 events = sim.get("events") if isinstance(sim, dict) else None
                 if isinstance(events, list) and events and isinstance(events[0], dict):
@@ -7734,7 +7728,7 @@ class DailyStateMixin:
         self._mark_planned_candidate_status(user, "deferred", note or "刚聊完，普通主动延后")
 
     def _is_troubleshooting_proactive_plan(self, user: dict[str, Any]) -> bool:
-        return isinstance(user, dict) and str(user.get("planned_proactive_source") or "") == "troubleshooting"
+        return isinstance(user, dict) and normalize_legacy_tag_text(user.get("planned_proactive_source")) == "troubleshooting"
 
     def _append_troubleshooting_proactive_step(
         self,
@@ -7834,7 +7828,7 @@ class DailyStateMixin:
                 detail="上次排障临时主动任务未完成，插件启动时已恢复原主动计划",
                 error="插件重启或任务中断",
                 action=str(user.get("planned_proactive_action") or "message"),
-                reason=str(user.get("planned_proactive_reason") or "check_in"),
+                reason=normalize_legacy_tag_text(user.get("planned_proactive_reason")) or "check_in",
             )
             user["proactive_sending"] = False
             user["proactive_sending_started_at"] = 0
@@ -8041,16 +8035,20 @@ class DailyStateMixin:
                         self._save_data_sync()
                     self._debug_tick_skip(user_id, "主动发送仍在进行中")
                     continue
-                current_reason = str(current_for_mark.get("planned_proactive_reason") or "")
+                current_reason = normalize_legacy_tag_text(current_for_mark.get("planned_proactive_reason"))
                 if (
                     not is_troubleshooting_for_send
                     and not due_timer_id
                     and self._is_greeting_reason(current_reason)
                 ):
-                    recent_user_at = max(
-                        _safe_float(current_for_mark.get("last_user_message_at"), 0),
-                        _safe_float(current_for_mark.get("last_seen"), 0),
-                    )
+                    suppressed_greetings = current_for_mark.get("greetings_suppressed_by_inbound", [])
+                    if isinstance(suppressed_greetings, list) and current_reason in suppressed_greetings:
+                        self._mark_planned_candidate_status(current_for_mark, "blocked", "用户在该问候窗口内已经活跃过")
+                        self._clear_pending_proactive_plan(current_for_mark)
+                        self._save_data_sync()
+                        self._debug_tick_skip(user_id, "问候窗口已被用户互动占掉", prefix="取消")
+                        continue
+                    recent_user_at = self._latest_user_activity_ts(current_for_mark)
                     idle_limit = self._effective_user_greeting_idle_minutes(current_for_mark) * 60
                     if recent_user_at > 0 and _now_ts() - recent_user_at < idle_limit:
                         if self._inbound_satisfies_greeting(current_reason, now=recent_user_at):
@@ -8065,7 +8063,7 @@ class DailyStateMixin:
                     current_for_mark,
                     now=_now_ts(),
                     planned_reason=current_reason,
-                    planned_source=str(current_for_mark.get("planned_proactive_source") or ""),
+                    planned_source=normalize_legacy_tag_text(current_for_mark.get("planned_proactive_source")),
                     due_timer_active=bool(due_timer_id),
                     is_troubleshooting=is_troubleshooting_for_send,
                 )
@@ -8101,7 +8099,7 @@ class DailyStateMixin:
                         ok=True,
                         detail="主动循环已接手，正在生成主动消息",
                         action=str(current_for_mark.get("planned_proactive_action") or "message"),
-                        reason=str(current_for_mark.get("planned_proactive_reason") or "check_in"),
+                        reason=normalize_legacy_tag_text(current_for_mark.get("planned_proactive_reason")) or "check_in",
                     )
                 self._save_data_sync()
 
@@ -8119,7 +8117,7 @@ class DailyStateMixin:
             proactive_quote_message_id = self._planned_proactive_quote_message_id(user, str(user.get("umo") or ""))
             planned_opener_mode_for_send = str(user.get("planned_opener_mode") or "")
             planned_followup_kind_for_send = str(user.get("planned_followup_kind") or "")
-            if not is_troubleshooting_for_send and str(user.get("planned_proactive_reason") or "") == "activity_share":
+            if not is_troubleshooting_for_send and normalize_legacy_tag_text(user.get("planned_proactive_reason")) == "activity_share":
                 duplicate_block_remaining = self._activity_share_duplicate_block_remaining(user)
                 if duplicate_block_remaining > 0:
                     note = _single_line(user.get("activity_share_duplicate_block_note"), 100) or "同一日常碎片刚刚已分享给其他私聊对象"
@@ -8161,7 +8159,7 @@ class DailyStateMixin:
                         self._save_data_sync()
             if (
                 planned_action_for_send == "message"
-                and str(user.get("planned_proactive_reason") or "") in {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}
+                and normalize_legacy_tag_text(user.get("planned_proactive_reason")) in {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}
                 and self._photo_text_available(user)
                 and self._strong_photo_share_intent(
                     planned_motive_for_send,
@@ -8187,7 +8185,7 @@ class DailyStateMixin:
                 self._debug_tick_skip(user_id, load_defer_note, prefix="延后")
                 continue
             group_share_block_reason = ""
-            if str(user.get("planned_proactive_reason") or "") == "group_share":
+            if normalize_legacy_tag_text(user.get("planned_proactive_reason")) == "group_share":
                 async with self._data_lock:
                     current_for_group_check = self._get_user(user_id)
                     checker = getattr(self, "_group_share_send_block_reason", None)
@@ -8210,10 +8208,11 @@ class DailyStateMixin:
                     self._debug_tick_skip(user_id, group_share_block_reason, prefix="取消")
                     continue
             task_start_last_seen = _safe_float(user.get("last_seen"), 0)
+            task_start_last_activity_at = self._latest_user_activity_ts(user)
             task_start_inbound_count = _safe_int(user.get("inbound_count"), 0)
             pending_send_retry = None if is_troubleshooting_for_send else self._pending_proactive_send_retry(user)
             if pending_send_retry:
-                reason = _single_line(pending_send_retry.get("reason"), 40) or str(user.get("planned_proactive_reason") or "check_in")
+                reason = _single_line(pending_send_retry.get("reason"), 40) or normalize_legacy_tag_text(user.get("planned_proactive_reason")) or "check_in"
                 text = _single_line(pending_send_retry.get("text"), 1200)
                 image_path = _single_line(pending_send_retry.get("image_path"), 260)
                 extra_components = []
@@ -8276,7 +8275,7 @@ class DailyStateMixin:
                     review_decision = await self._review_proactive_message_send_decision(
                         user,
                         text,
-                        reason=reason or str(user.get("planned_proactive_reason") or ""),
+                        reason=reason or normalize_legacy_tag_text(user.get("planned_proactive_reason")),
                         action=effective_action_for_send or planned_action_for_send or "message",
                         motive=planned_motive_for_send,
                         topic=planned_topic_for_send,
@@ -8441,6 +8440,7 @@ class DailyStateMixin:
                 current_after_render = self._get_user(user_id)
                 has_new_user_message = (
                     _safe_float(current_after_render.get("last_seen"), 0) > task_start_last_seen
+                    or self._latest_user_activity_ts(current_after_render) > task_start_last_activity_at
                     or _safe_int(current_after_render.get("inbound_count"), 0) > task_start_inbound_count
                 )
             if has_new_user_message:
@@ -8474,8 +8474,8 @@ class DailyStateMixin:
                 recent_chat_guard_reason = self._recent_chat_proactive_guard_reason(
                     current_for_recent_chat,
                     now=_now_ts(),
-                    planned_reason=reason or str(user.get("planned_proactive_reason") or ""),
-                    planned_source=str(current_for_recent_chat.get("planned_proactive_source") or ""),
+                    planned_reason=reason or normalize_legacy_tag_text(user.get("planned_proactive_reason")),
+                    planned_source=normalize_legacy_tag_text(current_for_recent_chat.get("planned_proactive_source")),
                     due_timer_active=bool(due_timer_id),
                     is_troubleshooting=is_troubleshooting_for_send,
                 )
@@ -8687,7 +8687,7 @@ class DailyStateMixin:
                     for value in (
                         planned_motive_for_send,
                         current.get("planned_proactive_topic"),
-                        current.get("planned_proactive_reason"),
+                        normalize_legacy_tag_text(current.get("planned_proactive_reason")),
                     )
                 )
                 if any(token in food_prompt_hint for token in ("吃什么", "吃点", "饭", "饭点", "嘴馋", "饿", "吃的")):
@@ -8847,8 +8847,8 @@ class DailyStateMixin:
                         and _safe_float(next_timer.get("scheduled_ts"), 0) > _now_ts()
                     ):
                         current["next_proactive_at"] = _safe_float(next_timer.get("scheduled_ts"), 0)
-                        current["planned_proactive_reason"] = str(next_timer.get("reason") or "check_in")
-                        current["planned_proactive_action"] = str(next_timer.get("action") or "message")
+                        current["planned_proactive_reason"] = normalize_legacy_tag_text(next_timer.get("reason")) or "check_in"
+                        current["planned_proactive_action"] = normalize_legacy_tag_text(next_timer.get("action")) or "message"
                         current["planned_proactive_source"] = "timer"
                         current["planned_proactive_motive"] = _single_line(next_timer.get("motive"), 140)
                         current["planned_proactive_topic"] = _single_line(next_timer.get("topic"), 60)

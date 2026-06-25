@@ -2434,7 +2434,7 @@ async function readConfigImportFile(file) {
   const text = await file.text();
   let data = null;
   try {
-    data = JSON.parse(text);
+    data = JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch (error) {
     throw new Error("备份文件不是有效 JSON");
   }
@@ -4472,7 +4472,7 @@ async function renderUserDetail(forceFetch = false) {
       ${scoreGauge("关系分", detail.relationship_score || 0, -20, 40)}
       ${scoreGauge("今日主动", detail.sent_today || 0, 0, Math.max(1, detail.effective_daily_limit || state.overview?.private?.max_daily_messages || 8))}
       ${miniStat("片段", detail.dialogue_episode_count || (detail.dialogue_episodes || []).length)}
-      ${miniStat("未完话头", detail.open_loop_count || (detail.open_loops || []).length)}
+      ${miniStat("未完话头", Array.isArray(detail.open_loops) ? activeOpenLoopItems(detail.open_loops).length : (detail.open_loop_count || 0))}
       ${miniStat("习惯", detail.habit_count || detail.behavior_habits?.items?.length || 0)}
     </div>
     <div class="detail-grid">
@@ -4482,7 +4482,7 @@ async function renderUserDetail(forceFetch = false) {
       ${detailBlock("行为习惯", detail.behavior_habits?.updated_at ? `更新于 ${detail.behavior_habits.updated_at}` : "", userHabitPairs(detail.behavior_habits))}
       ${detailBlock("最近对话", "", [["用户消息", detail.last_user_message || ""], ["陪伴回复", detail.last_companion_message || ""]])}
       ${detailBlock("对话片段", "", (detail.dialogue_episodes || []).map((item, index) => [`#${index + 1}`, item.summary || item.title || JSON.stringify(item)]))}
-      ${detailBlock("未完话头", "", (detail.open_loops || []).map((item, index) => [`#${index + 1}`, item.text || item.topic || JSON.stringify(item)]))}
+      ${renderOpenLoopBlock(detail)}
     </div>
   `;
   bindUserActions(detail);
@@ -4575,7 +4575,91 @@ function userHabitPairs(habits) {
     : [["-", habits?.enabled ? "暂无达到阈值的习惯样本" : "习惯学习未开启"]];
 }
 
+function normalizeOpenLoopItem(item) {
+  const raw = item && typeof item === "object" ? item : {};
+  return {
+    text: String(raw.text || raw.topic || raw.summary || "").trim(),
+    status: String(raw.status || "待自然延续").trim() || "待自然延续",
+    source: String(raw.source || "").trim(),
+  };
+}
+
+function activeOpenLoopItems(items) {
+  return (Array.isArray(items) ? items : [])
+    .map(normalizeOpenLoopItem)
+    .filter((item) => item.text && !["已完成", "已取消"].includes(item.status));
+}
+
+function resolvedOpenLoopItems(items) {
+  return (Array.isArray(items) ? items : [])
+    .map(normalizeOpenLoopItem)
+    .filter((item) => item.text && ["已完成", "已取消"].includes(item.status));
+}
+
+function openLoopStatusClass(status) {
+  if (status === "已完成") return "ok";
+  if (status === "已取消") return "off";
+  return "";
+}
+
+function openLoopStatusText(item) {
+  const parts = [item.status || "待自然延续"];
+  if (item.source === "dialogue_episode") parts.push("片段整理");
+  if (item.source === "user_message") parts.push("即时记录");
+  return parts.join("｜");
+}
+
+function renderOpenLoopBlock(detail) {
+  const activeItems = activeOpenLoopItems(detail?.open_loops);
+  const resolvedItems = resolvedOpenLoopItems(detail?.open_loops);
+  return `
+    <section class="detail-block open-loop-block">
+      <div class="detail-block-head">
+        <h2>未完话头</h2>
+        ${activeItems.length ? `
+          <div class="open-loop-actions">
+            <button type="button" class="danger-outline" data-open-loop-clear="${escapeHtml(detail.user_id || "")}">清空未完话头</button>
+          </div>
+        ` : ""}
+      </div>
+      ${activeItems.length ? `
+        <div class="open-loop-list">
+          ${activeItems.map((item, index) => `
+            <article class="open-loop-item">
+              <div class="open-loop-main">
+                <b class="open-loop-text">${escapeHtml(item.text)}</b>
+                <span class="badge ${openLoopStatusClass(item.status)}">${escapeHtml(openLoopStatusText(item))}</span>
+              </div>
+              <button type="button" class="danger-outline" data-open-loop-remove="${escapeHtml(item.text)}" data-open-loop-index="${index}">删除</button>
+            </article>
+          `).join("")}
+        </div>
+      ` : `<div class="empty small">暂无未完话头</div>`}
+      ${resolvedItems.length ? `
+        <details class="open-loop-archive">
+          <summary>已结束话头 ${escapeHtml(resolvedItems.length)}</summary>
+          <div class="open-loop-list archived">
+            ${resolvedItems.map((item) => `
+              <article class="open-loop-item archived">
+                <div class="open-loop-main">
+                  <b class="open-loop-text">${escapeHtml(item.text)}</b>
+                  <span class="badge ${openLoopStatusClass(item.status)}">${escapeHtml(openLoopStatusText(item))}</span>
+                </div>
+              </article>
+            `).join("")}
+          </div>
+        </details>
+      ` : ""}
+    </section>
+  `;
+}
+
 function bindUserActions(detail) {
+  const refreshSelectedUserDetail = async () => {
+    if (state.selectedUserId === detail.user_id) {
+      await renderUserDetail(true);
+    }
+  };
   $("#userEditForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -4587,6 +4671,7 @@ function bindUserActions(detail) {
       relationship_role: selectedRole,
       proactive_daily_limit: Number(form.get("proactive_daily_limit") || -1),
     }), "已保存私聊对象", event.submitter);
+    await refreshSelectedUserDetail();
   });
   document.querySelectorAll("[data-user-action]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -4604,6 +4689,31 @@ function bindUserActions(detail) {
         body.clear_learning = true;
       }
       await runAction(() => postJson("/user/update", body), "已更新私聊对象", button);
+      await refreshSelectedUserDetail();
+    });
+  });
+  document.querySelectorAll("[data-open-loop-remove]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const text = String(button.dataset.openLoopRemove || "").trim();
+      if (!text) return;
+      if (!requireSecondClick(button, `open-loop:${detail.user_id}:${text}`, "再次点击删除这条未完话头", "再次点击删除")) return;
+      await runAction(
+        () => postJson("/user/update", { user_id: detail.user_id, remove_open_loop_text: text }),
+        "",
+        button,
+      );
+      await refreshSelectedUserDetail();
+    });
+  });
+  document.querySelectorAll("[data-open-loop-clear]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!requireSecondClick(button, `open-loop-clear:${detail.user_id}`, "再次点击清空该用户的未完话头", "再次点击清空")) return;
+      await runAction(
+        () => postJson("/user/update", { user_id: detail.user_id, clear_open_loops: true }),
+        "",
+        button,
+      );
+      await refreshSelectedUserDetail();
     });
   });
 }
@@ -4723,7 +4833,7 @@ async function renderGroupDetail(forceFetch = false) {
     </div>
     <div class="detail-grid group-detail-grid">
       ${groupDetailPanel("群状态", groupStateOverview(detail), { wide: true, className: "group-state-panel" })}
-      ${groupDetailPanel("黑话检视", groupSlangManagerView(detail.slang_items || []), { wide: true, className: "group-slang-panel" })}
+      ${groupDetailPanel("黑话检视", groupSlangManagerView(detail.slang_items || []), { wide: true, className: "group-slang-panel", collapsed: true, meta: `${(detail.slang_items || []).length || 0} 条` })}
       ${groupDetailPanel("活跃群友", groupActiveMembersView(detail.members || {}), { className: "group-compact-panel" })}
       ${groupDetailPanel("插话反馈", groupInterjectionFeedbackView(detail), { className: "group-compact-panel" })}
       ${groupDetailPanel("消息活跃", groupMessageActivityView(detail.recent_messages || []), { wide: true, className: "group-message-panel" })}
@@ -8738,8 +8848,7 @@ function syncRoleplayCoreFieldsFromPersona() {
 
 function hydrateRoleplayUserFields() {
   const primaryText = document.querySelector('#roleplayProfileForm [name="roleplay_user_profile_prompt"]')?.value || "";
-  const legacyText = document.querySelector('#roleplayProfileForm [name="private_image_self_recognition_hint"]')?.value || "";
-  const text = String(primaryText || "").trim() ? primaryText : legacyText;
+  const text = primaryText;
   const legacyPersonaText = document.querySelector('#roleplayProfileForm [name="schedule_persona_prompt"]')?.value || "";
   const labels = roleplayVisionParts.map(([, label]) => label);
   roleplayVisionParts.forEach(([key, label]) => {

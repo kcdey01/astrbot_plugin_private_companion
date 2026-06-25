@@ -1299,12 +1299,12 @@ class ProactiveMessageMixin:
         if reason not in {"morning_greeting", "noon_greeting", "evening_greeting"}:
             return ""
         opening = {
-            "morning_greeting": "这轮是早上顺手冒个头，不是完成一条标准早安。",
+            "morning_greeting": "这轮是今天早上的第一句主动开口，不是任何时候都能补的一条早安。",
             "noon_greeting": "这轮是中午松下来时顺手来一句，不是完成一条标准午安。",
             "evening_greeting": "这轮是晚上慢下来后冒个头，不是完成一条标准晚安。",
         }.get(reason, "这轮是按时段顺手来一句。")
         scene = {
-            "morning_greeting": "优先落在刚醒、洗漱、赖床、出门前、刚坐下这一类早晨小片段上。",
+            "morning_greeting": "优先落在刚醒、洗漱、赖床、出门前、刚坐下这一类早晨小片段上；如果今天已经先发过别的主动，宁可改成普通 check_in，也不要再写 morning_greeting。",
             "noon_greeting": "优先落在刚吃完、准备午休、发懒、犯困、坐下一会儿这一类午间小片段上。",
             "evening_greeting": "优先落在收尾、回到家、刷两下手机、灯光暗下来、终于松一口气这一类晚间小片段上。",
         }.get(reason, "优先落在当前时段的小片段上。")
@@ -1313,6 +1313,7 @@ class ProactiveMessageMixin:
                 "【时段招呼写法】",
                 opening,
                 scene,
+                "问候最好只出现在当天这个时段的第一句主动消息里；如果前面已经有别的主动或来回互动，就别再硬补一声早安/午安/晚安。",
                 "问候词可以有，但不能只有“早安/午安/晚安”。如果写了问候词，后面必须马上接一个具体片段或具体意思。",
                 "不要默认去问“吃了吗”“忙吗”“睡了吗”“在干嘛”。没有具体由头时，宁可短一点，也不要写成整点打卡式问候。",
                 "整条消息更像正常私聊里顺手递过来的一句，不像礼貌签到，也不像群发模板。",

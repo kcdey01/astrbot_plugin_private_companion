@@ -413,7 +413,7 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "5.0.1",
+    "5.0.2",
 )
 class PrivateCompanionPlugin(
     CoreStoreMixin,
@@ -3748,6 +3748,8 @@ class PrivateCompanionPlugin(
             user["umo"] = event.unified_msg_origin
             self._note_private_display_name_observation(user, user_id, sender_display_name, now=received_ts)
             user["last_seen"] = received_ts
+            user["last_activity_at"] = received_ts
+            self._mark_greetings_satisfied_by_recent_activity(user, activity_ts=received_ts)
             if text:
                 safe_text = self._sanitize_orphan_tts_placeholders(text)
                 user["last_user_message"] = safe_text or text
@@ -4610,7 +4612,13 @@ class PrivateCompanionPlugin(
                         )
 
             inbound_text = _single_line(current_user.get("last_user_message"), 260)
-            reviewed_text = await self._review_and_rewrite_response(current_user, inbound_text, working_text)
+            music_album_context = getattr(event, "private_companion_reply_music_album_context", None)
+            reviewed_text = await self._review_and_rewrite_response(
+                current_user,
+                inbound_text,
+                working_text,
+                music_album_context=music_album_context if isinstance(music_album_context, dict) else None,
+            )
             if reviewed_text != working_text:
                 resp.completion_text = reviewed_text
                 working_text = reviewed_text
@@ -4748,6 +4756,7 @@ class PrivateCompanionPlugin(
             "撤回消息", "防撤回", "转述撤回", "撤回转述",
             "日期添加", "添加日期", "重要日期添加",
             "日期删除", "删除日期", "重要日期删除",
+            "话头删除", "删除话头", "未完话头删除", "删除未完话头",
             "清空记忆", "忘记我",
         }
         if action in management_actions and not self._can_manage_private_companion(event):
@@ -4762,7 +4771,7 @@ class PrivateCompanionPlugin(
 
             if action in {"状态", "status"}:
                 self._reset_daily_counter_if_needed(user)
-                last_seen = self._format_timestamp_elapsed(user.get("last_seen"))
+                last_seen = self._format_timestamp_elapsed(self._latest_user_activity_ts(user))
                 last_sent = self._format_timestamp_elapsed(user.get("last_sent"))
                 plan = self.data.get("daily_plan", {})
                 plan_text = self._format_plan_status_summary(plan if isinstance(plan, dict) else {})
@@ -4843,6 +4852,9 @@ class PrivateCompanionPlugin(
                 episode_text = self._format_dialogue_episodes_for_prompt(user) or "暂无对话片段记忆。"
                 loop_text = self._format_open_loops_for_prompt(user) or "暂无未完成约定。"
                 response = f"当前对话片段：\n{episode_text}\n\n未完话头：\n{loop_text}"
+            elif action in {"话头删除", "删除话头", "未完话头删除", "删除未完话头"}:
+                response = self._remove_open_loop_entry(user, value)
+                self._save_data_sync()
             elif action in {"长期记忆", "livingmemory", "lmem", "向量记忆"}:
                 response = self._format_livingmemory_status()
             elif action in {"日记", "bot日记", "小记"}:
@@ -5166,6 +5178,8 @@ class PrivateCompanionPlugin(
             fast_user["umo"] = event.unified_msg_origin
             self._note_private_display_name_observation(fast_user, user_id, sender_display_name, now=received_ts)
             fast_user["last_seen"] = received_ts
+            fast_user["last_activity_at"] = received_ts
+            self._mark_greetings_satisfied_by_recent_activity(fast_user, activity_ts=received_ts)
             safe_text = self._sanitize_orphan_tts_placeholders(text)
             fast_user["last_user_message"] = safe_text or text
             fast_user["last_user_message_at"] = received_ts
@@ -5404,6 +5418,8 @@ class PrivateCompanionPlugin(
                 user["enabled"] = False
                 self._clear_pending_proactive_plan(user)
             user["last_seen"] = _now_ts()
+            user["last_activity_at"] = received_ts or _now_ts()
+            self._mark_greetings_satisfied_by_recent_activity(user, activity_ts=received_ts or _now_ts())
             if text:
                 user["inbound_count"] = _safe_int(user.get("inbound_count"), 0) + 1
             user["relationship_score"] = _safe_int(user.get("relationship_score"), 0) + 1
@@ -5554,6 +5570,15 @@ class PrivateCompanionPlugin(
                 event.stop_event()
                 return
             group = self._get_group(group_id)
+            if sender_id:
+                users = self.data.get("users", {})
+                current_sender = users.get(sender_id) if isinstance(users, dict) else None
+                if sender_id in set(self._configured_target_ids()) or (
+                    isinstance(current_sender, dict) and bool(current_sender.get("manual_enabled"))
+                ):
+                    target_user = self._get_user(sender_id)
+                    target_user["last_activity_at"] = received_ts
+                    self._mark_greetings_satisfied_by_recent_activity(target_user, activity_ts=received_ts)
             group["umo"] = _single_line(getattr(event, "unified_msg_origin", ""), 160)
             _, resting_mention_notice = self._group_resting_mention_notice(
                 event,

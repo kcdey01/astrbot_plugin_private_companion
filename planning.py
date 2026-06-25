@@ -711,6 +711,7 @@ def build_detail_enhancement_prompt(
 · 主动能力要先检索再使用：从“主动能力检索”里挑当前可用且贴合场景的 action；不要凭空造新 action,也不要为了触发而触发。这个检索过程只供内部规划,不得写进 today_events、why、topic、motive 或最终聊天内容。
 · 主动图片能力状态：{photo_action_hint}
 · 主动能力要融入当前情境。{photo_menu_hint}只有在独处、半独处、课间、路上、睡前、发呆、刚拿到手机等合适时机才触发。
+· 早安只适合作为当天早上的第一句主动消息；如果今天已经有别的主动、或者已经和对方有来回互动，就别再产出 morning_greeting，改成 check_in、activity_share 或 quiet_care。
 · {photo_instruction_hint}
 · {photo_detail_hint}
 · 如果 action 是 voice,topic 或 motive 要像语音本身或语音前后的自然文字,例如“我跟你说啊……”；不要写成“发了一段语音给你”这种旁白式命令。
@@ -724,7 +725,7 @@ def build_detail_enhancement_prompt(
 · {photo_mix_hint}
 · motive 是心里一闪而过的念头,10–40 字。
 · scene / tone / impulse 是可选的抽象引导：scene 是当时场景,tone 是语气底色,impulse 是想靠近的那股劲。
-· 如果是起床/早安/试探,可以带 chain 做分支逻辑：先只叫名字,没回->隔久一点再轻轻放一句；早晨未回复不需要马上追,也不要把没回理解成故意不理。
+· 如果是当天早上的第一句主动开口,可以带 chain 做分支逻辑：先只叫名字,没回->隔久一点再轻轻放一句；早晨未回复不需要马上追,也不要把没回理解成故意不理。若当天已经有别的主动或已有互动,就不要再走 morning_greeting。
 · 输出中的 summary 要相当于“更新后的角色状态摘要”：一句话写出当前段结束后的情绪、体力走向和最多两个残留状态,方便下一时间段承接。例如“情绪平淡但有点等回复,体力约 58/100,还惦记刚才那张没发出去的图。”
 · 同时输出 state_variables,作为这个时间段的状态机变量。它们既要描述无用户干预时自然发展到当前段结束的大致状态,也要吸收“今日互动造成的日程偏移”里已经发生的用户介入。例如作业完成度、情绪、体力、等待回复、是否想发消息、特殊能力冷却、是否预留空档等。变量要短,方便后续用户事件做局部更新。
 · 同时输出 presence_status,由细化模型决定这个时间段适合的 QQ 全局状态表现。它只用于平台侧同步,不是角色正文。mode 只能使用 online / custom / sleep / unchanged；禁止输出 away / invisible / dnd / do_not_disturb / 请勿打扰 / 勿扰。普通可聊天时 online；想表现“写作业/发呆/吃饭/路上/看剧/专注”等生活状态时优先用 custom,并必须填写 custom_text（2-8 个中文字符,像“写题中”“路上”“犯困中”“看剧中”）；睡眠段倾向 sleep；不确定或不想影响账号时 unchanged。不要频繁改变,一段最多一个状态。
