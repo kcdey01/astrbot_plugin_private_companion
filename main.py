@@ -5019,6 +5019,24 @@ class PrivateCompanionPlugin(
         args = raw_text.replace("\u3000", " ").split(maxsplit=2)
         action = args[1].strip() if len(args) >= 2 else "帮助"
         value = args[2].strip() if len(args) >= 3 else ""
+        bookshelf_password_reset_actions = {
+            "重置夹层密码", "重设夹层密码", "重新生成夹层密码", "刷新夹层密码", "生成夹层密码",
+            "重置书柜密码", "重设书柜密码", "重新生成书柜密码", "刷新书柜密码", "生成书柜密码",
+        }
+        bookshelf_password_output_actions = {
+            "输出夹层密码", "强制输出夹层密码", "查看夹层密码", "显示夹层密码",
+            "输出书柜密码", "强制输出书柜密码", "查看书柜密码", "显示书柜密码",
+            "输出抽屉密码", "查看抽屉密码", "显示抽屉密码",
+        }
+        bookshelf_password_value_actions = {"强制输出", "输出", "查看密码", "查看", "显示"}
+        bookshelf_password_value_targets = {"夹层密码", "书柜密码", "抽屉密码", "书柜暗格", "夹层", "书柜"}
+        bookshelf_password_output_requested = (
+            action in bookshelf_password_output_actions
+            or (
+                action in bookshelf_password_value_actions
+                and _single_line(value, 24) in bookshelf_password_value_targets
+            )
+        )
         response_image_path = ""
         response_extra_components: list[Any] = []
         deferred_actions = {
@@ -5031,7 +5049,7 @@ class PrivateCompanionPlugin(
             "增添状态", "添加状态",
             "生成日记", "刷新日记",
             "梦境", "做了什么梦", "今日梦境",
-            "重置夹层密码", "重设夹层密码", "重新生成夹层密码", "重置书柜密码", "重设书柜密码", "重新生成书柜密码",
+            *bookshelf_password_reset_actions,
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
             "测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布",
             "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
@@ -5052,7 +5070,8 @@ class PrivateCompanionPlugin(
             "生成状态", "刷新状态", "重生状态",
             "增添状态", "添加状态",
             "生成日记", "刷新日记",
-            "重置夹层密码", "重设夹层密码", "重新生成夹层密码", "重置书柜密码", "重设书柜密码", "重新生成书柜密码",
+            *bookshelf_password_reset_actions,
+            *bookshelf_password_output_actions,
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
             "测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布",
             "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
@@ -5064,7 +5083,7 @@ class PrivateCompanionPlugin(
             "清空记忆", "忘记我",
             "参考图", "人设参考图", "自拍参考图",
         }
-        if action in management_actions and not self._can_manage_private_companion(event):
+        if (action in management_actions or bookshelf_password_output_requested) and not self._can_manage_private_companion(event):
             await self._reply(event, self._management_denied_text())
             event.stop_event()
             return
@@ -5170,7 +5189,15 @@ class PrivateCompanionPlugin(
                 response = self._format_diaries()
             elif action in {"书柜密码", "夹层密码", "抽屉密码", "书柜暗格"}:
                 response = "这个要直接问我本人。她会不会说、怎么说,要看当时的人格和心情。"
-            elif action in {"重置夹层密码", "重设夹层密码", "重新生成夹层密码", "重置书柜密码", "重设书柜密码", "重新生成书柜密码"}:
+            elif bookshelf_password_output_requested:
+                password = await self._ensure_bookshelf_password_async()
+                secret = self.data.get("bookshelf_secret", {}) if isinstance(self.data.get("bookshelf_secret"), dict) else {}
+                response = (
+                    "当前书柜夹层密码：\n"
+                    f"{password}\n"
+                    f"生成方式：{_single_line(secret.get('basis'), 40) or '未知'}"
+                )
+            elif action in bookshelf_password_reset_actions:
                 secret = self.data.setdefault("bookshelf_secret", {})
                 if not isinstance(secret, dict):
                     secret = {}
@@ -5179,7 +5206,7 @@ class PrivateCompanionPlugin(
                 secret["reset_at"] = _now_ts()
                 await self._ensure_bookshelf_password_async()
                 self._save_data_sync()
-                response = "已重新设置书柜夹层密码。"
+                response = "已重新设置书柜夹层密码。需要查看真实密码可用：陪伴 输出夹层密码"
             elif action in {"发说说", "发QQ空间", "发布说说", "空间发布", "发布空间"}:
                 response = "正在发布 QQ 空间说说。"
             elif action in {"测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布"}:
@@ -5272,7 +5299,7 @@ class PrivateCompanionPlugin(
             await self._reply(event, self._format_news_digest_for_command())
             event.stop_event()
             return
-        if action in {"重置夹层密码", "重设夹层密码", "重新生成夹层密码", "重置书柜密码", "重设书柜密码", "重新生成书柜密码"}:
+        if action in bookshelf_password_reset_actions:
             await self._reply(event, response)
         if action in {"重置插件", "重置", "全部重置"}:
             await self._reset_plugin_store()

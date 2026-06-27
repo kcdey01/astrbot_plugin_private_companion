@@ -878,22 +878,15 @@ class PrivateReadingMixin:
             secret = {}
             self.data["bookshelf_secret"] = secret
         password = _single_line(secret.get("password"), 12)
-        if password:
+        basis = _single_line(secret.get("basis"), 40)
+        if password and not self._bookshelf_password_should_rotate(password, basis):
             return password
-        candidates: list[str] = []
-        for item in self.data.get("important_dates", []) if isinstance(self.data.get("important_dates"), list) else []:
-            if not isinstance(item, dict):
-                continue
-            date_text = re.sub(r"\D", "", _single_line(item.get("date"), 16))
-            for size in (6, 4):
-                if len(date_text) >= size:
-                    candidates.append(date_text[-size:])
-        password = next((item for item in candidates if re.fullmatch(r"\d{4,6}", item or "")), "")
-        if not password:
-            password = f"{random.randint(1000, 999999):04d}"[:6]
+        password = self._generate_bookshelf_password()
         secret["password"] = password
-        secret["basis"] = "numeric_dates_or_random"
+        secret["basis"] = "local_random_numeric_v2"
         secret["created_at"] = _now_ts()
+        if basis:
+            secret["previous_basis"] = basis
         return password
 
     async def _ensure_bookshelf_password_async(self) -> str:
@@ -902,55 +895,37 @@ class PrivateReadingMixin:
             secret = {}
             self.data["bookshelf_secret"] = secret
         password = _single_line(secret.get("password"), 12)
-        if password:
+        basis = _single_line(secret.get("basis"), 40)
+        if password and not self._bookshelf_password_should_rotate(password, basis):
             return password
-        dates = self._format_important_dates_for_prompt()
-        prompt = f"""
-请作为这个 Bot 自己,私下给书柜夹层设置一个密码。
-
-要求：
-1. 密码必须是纯数字,只能包含 0-9。
-2. 长度 4 到 6 位,不要太长。
-3. 可以参考人设、世界观、重要日期或她容易记住的数字,但最终只能输出数字本身。
-4. 不要解释,不要输出 JSON,不要加“密码是”,只输出 4 到 6 位数字。
-5. 不要使用真实手机号、QQ号、身份证号等长敏感数字。
-
-【Bot 名称】
-{self.bot_name}
-
-【人格】
-{self._get_default_persona_prompt()}
-
-【生活人设补充】
-{self.schedule_persona_prompt or "（无）"}
-
-【世界观补充】
-{self.schedule_worldview_prompt or "（无）"}
-
-【重要日期】
-{dates or "（无）"}
-""".strip()
-        raw = await self._llm_call(
-            prompt,
-            max_tokens=40,
-            provider_id=self._task_provider(
-                self.dream_diary_provider_id,
-                self.mai_style_provider_id,
-                self.llm_provider_id,
-            ),
-        )
-        candidate = re.sub(r"\D", "", _single_line(raw, 24))
-        if (
-            not candidate
-            or not re.fullmatch(r"\d{4,6}", candidate)
-        ):
-            candidate = self._ensure_bookshelf_password()
-        else:
-            secret["password"] = candidate
-            secret["basis"] = "bot_private_llm_numeric"
-            secret["created_at"] = _now_ts()
+        candidate = self._ensure_bookshelf_password()
         self._save_data_sync()
         return _single_line(secret.get("password") or candidate, 12)
+
+    @staticmethod
+    def _bookshelf_password_should_rotate(password: str, basis: str = "") -> bool:
+        value = _single_line(password, 12)
+        if not re.fullmatch(r"\d{4,6}", value or ""):
+            return True
+        if basis == "manual":
+            return False
+        common_values = {
+            "0000", "1111", "2222", "3333", "4444", "5555", "6666", "7777", "8888", "9999",
+            "000000", "111111", "222222", "333333", "444444", "555555", "666666", "777777", "888888", "999999",
+            "1234", "12345", "123456", "654321", "112233", "121212", "1314", "520520",
+        }
+        if value in common_values or len(set(value)) <= 2:
+            return True
+        return False
+
+    @staticmethod
+    def _generate_bookshelf_password() -> str:
+        rng = random.SystemRandom()
+        while True:
+            value = f"{rng.randint(100000, 999999)}"
+            if PrivateReadingMixin._bookshelf_password_should_rotate(value, ""):
+                continue
+            return value
 
     async def _format_bookshelf_secret_for_prompt(
         self,
@@ -997,11 +972,12 @@ class PrivateReadingMixin:
         )
         return (
             "【书柜夹层】\n"
-            f"你的书柜夹层中放着你的日记和一些隐私性较强的内容,夹层密码是“{password}”。这个密码必须保持为纯数字短密码。\n"
+            f"你的书柜夹层中放着你的日记和一些隐私性较强的内容,夹层密码是“{password}”。这个密码必须保持为纯数字短密码,只是内部暗号,没有对外说明的生日、纪念日或现实日期含义。\n"
             f"{relationship_text}\n"
             "用户自然询问密码、夹层、日记、书柜、小秘密或想打开看看时,不要默认立刻交出密码；先按当前人格、好感度、气氛和用户语气决定是拒绝、装傻、嘴硬糊弄、只给提示,还是害羞地说出完整密码。"
             "如果你不想透露,就不要给出任何具体密码；如果只是糊弄,可以说“才不给你看”“你猜”“现在不行”之类,但不要编假数字。"
             "如果你说出了具体密码,它必须来自上面这个真实夹层密码,不要临时另编一个数字或替代暗号。"
+            "不要把密码解释成用户或自己的生日、纪念日、日期、门牌号、手机号、QQ号或任何现实身份信息；即使数字看起来像日期,也不能说“你生日都不记得”“这是某天”之类。"
             "不要说这是插件指令、配置项或系统生成的密码。"
         )
 
