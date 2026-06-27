@@ -558,6 +558,7 @@ class PrivateCompanionPlugin(
         self.message_debounce_max_merge_messages = self._cfg_int(c, "message_debounce_max_merge_messages", 8, 0, 30)
         self.semantic_message_debounce_seconds = self.text_message_debounce_seconds
         self.private_image_vision_wait_seconds = self._cfg_float(c, "private_image_vision_wait_seconds", 30.0, 0.0)
+        self.private_image_provider_timeout_seconds = self._cfg_float(c, "private_image_provider_timeout_seconds", 12.0, 3.0)
         self.enable_private_image_self_recognition = self._cfg_bool(c, "enable_private_image_self_recognition", True)
         self.enable_private_image_vision_cache = self._cfg_bool(c, "enable_private_image_vision_cache", True)
         self.private_image_vision_cache_max_items = self._cfg_int(c, "private_image_vision_cache_max_items", 300, 0, 3000)
@@ -3051,11 +3052,18 @@ class PrivateCompanionPlugin(
         except Exception:
             user_id = ""
         user_id = _single_line(user_id, 40)
+        canonical_user_id = self._canonical_private_user_id(user_id) if user_id else ""
+        if canonical_user_id:
+            user_id = canonical_user_id
         if not user_id or self._is_bot_self_user_id(user_id):
             return
         raw_users = self.data.get("users", {})
         current_user = raw_users.get(user_id) if isinstance(raw_users, dict) else None
-        if self._is_target_private_user(user_id, current_user if isinstance(current_user, dict) else None):
+        if (
+            isinstance(current_user, dict)
+            and self._is_target_private_user(user_id, current_user)
+            and bool(current_user.get("enabled", True))
+        ):
             return
         display_name = ""
         try:
@@ -3065,7 +3073,7 @@ class PrivateCompanionPlugin(
         lines = [
             "【私聊身份防串】",
             f"当前私聊对象稳定 ID：{user_id}",
-            "这个用户不是插件配置的目标陪伴用户/主用户。",
+            "这个用户不是插件当前启用的目标陪伴用户/主用户。",
             "如果基础人格里包含“主人”“恋人”“专属称呼”或只属于主用户的关系设定,不要套用到当前私聊对象身上。",
             "可以保留人格的通用说话风格,但关系身份、亲密度、记忆和承诺必须按当前用户重新判断。",
             "除非当前用户明确提出角色扮演或临时设定,否则不要把对方当成主人、恋人或目标陪伴对象。",
@@ -4070,6 +4078,29 @@ class PrivateCompanionPlugin(
             log_bookshelf_secret_skip("proactive_only_limited_light_path")
             return
         is_private_chat = bool(getattr(event, "is_private_chat", lambda: False)())
+        if is_private_chat:
+            try:
+                private_user_id = self._canonical_private_user_id(str(event.get_sender_id()))
+            except Exception:
+                private_user_id = ""
+            raw_users = self.data.get("users", {})
+            private_user = raw_users.get(private_user_id) if private_user_id and isinstance(raw_users, dict) else None
+            private_user_active = (
+                isinstance(private_user, dict)
+                and self._is_target_private_user(private_user_id, private_user)
+                and bool(private_user.get("enabled", True))
+            )
+            if not private_user_active:
+                await self._append_non_target_private_identity_guard_to_request(event, req)
+                reason = "private_user_missing" if not isinstance(private_user, dict) else "private_user_disabled"
+                log_bookshelf_secret_skip(reason, private_user if isinstance(private_user, dict) else None)
+                self._release_framework_session_lock_for_event(event, label=reason)
+                logger.info(
+                    "[PrivateCompanion] 非目标/未启用私聊跳过陪伴注入: user=%s reason=%s",
+                    _single_line(private_user_id, 40) or "unknown",
+                    reason,
+                )
+                return
         rest_allowed, rest_reason = await self._should_reply_during_rest(event, is_private_chat=is_private_chat)
         if not rest_allowed:
             log_bookshelf_secret_skip(f"rest_reply_gate:{_single_line(rest_reason, 60)}")
@@ -5527,10 +5558,17 @@ class PrivateCompanionPlugin(
             except Exception:
                 component_types = []
             logger.info(
-                "[PrivateCompanion] 忽略空私聊事件,避免占用主链会话锁: user=%s components=%s",
+                "[PrivateCompanion] 忽略空私聊事件,避免占用主链会话锁并阻止默认 LLM 空跑: user=%s components=%s",
                 user_id,
                 ",".join([item for item in component_types if item]) or "-",
             )
+            empty_result = self._build_result_from_chain([])
+            try:
+                empty_result.stop_event()
+            except Exception:
+                pass
+            event.set_result(empty_result)
+            event.stop_event()
             return
         reference_media_with_text = False
         if text and not forward_only_prompt:

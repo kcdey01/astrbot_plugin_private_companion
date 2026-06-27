@@ -9065,68 +9065,69 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 }
             )
         data_root = Path(str(getattr(self.plugin, "data_dir", ""))).resolve()
-        pages_root = data_root / "bookshelf_pages"
         covers_root = data_root / "jm_cosmos_covers"
-        known_jm_ids = {
-            self._single_line(item.get("album_id") or item.get("id"), 80)
-            for item in jm_items
-            if isinstance(item, dict) and self._single_line(item.get("album_id") or item.get("id"), 80)
-        }
-        preference_history = []
-        profile = jm_state.get("preference_profile") if isinstance(jm_state.get("preference_profile"), dict) else {}
-        if isinstance(profile.get("history"), list):
-            preference_history = [item for item in profile.get("history", []) if isinstance(item, dict)]
-        history_by_album: dict[str, dict[str, Any]] = {}
-        for item in preference_history:
-            album_id = self._single_line(item.get("album_id") or item.get("id"), 80)
-            if album_id:
-                history_by_album[album_id] = {**history_by_album.get(album_id, {}), **item}
-        try:
-            orphan_dirs = [
-                path
-                for path in pages_root.iterdir()
-                if path.is_dir() and self._single_line(path.name, 80) and self._single_line(path.name, 80) not in known_jm_ids
-            ] if pages_root.exists() else []
-        except Exception:
-            orphan_dirs = []
-        for path in orphan_dirs:
-            album_id = self._single_line(path.name, 80)
-            page_files = sorted(
-                file
-                for file in path.iterdir()
-                if file.is_file() and file.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-            )
-            if not album_id or not page_files:
-                continue
-            meta = history_by_album.get(album_id, {})
-            created_ts = self._float(meta.get("created_ts")) or max((file.stat().st_mtime for file in page_files), default=0.0)
-            cover_path = covers_root / f"{album_id}.jpg"
-            jm_items.append(
-                {
-                    "type": "jm_album",
-                    "album_id": album_id,
-                    "title": meta.get("title") or f"私密阅读 {album_id}",
-                    "description": meta.get("reason") or "",
-                    "tags": meta.get("terms") if isinstance(meta.get("terms"), list) else [],
-                    "rating": meta.get("bot_rating") or meta.get("rating"),
-                    "user_rating": meta.get("user_rating"),
-                    "rating_reason": meta.get("reason") or "",
-                    "user_rating_reason": meta.get("reason") or "",
-                    "cover_path": str(cover_path) if cover_path.exists() else "",
-                    "pages": [
-                        {
-                            "index": index + 1,
-                            "path": str(file),
-                            "name": file.name,
-                        }
-                        for index, file in enumerate(page_files)
-                    ],
-                    "image_count": len(page_files),
-                    "created_ts": created_ts,
-                    "source": "bookshelf_orphan_recovered",
-                    "locked": True,
-                }
-            )
+        if unlocked:
+            pages_root = data_root / "bookshelf_pages"
+            known_jm_ids = {
+                self._single_line(item.get("album_id") or item.get("id"), 80)
+                for item in jm_items
+                if isinstance(item, dict) and self._single_line(item.get("album_id") or item.get("id"), 80)
+            }
+            preference_history = []
+            profile = jm_state.get("preference_profile") if isinstance(jm_state.get("preference_profile"), dict) else {}
+            if isinstance(profile.get("history"), list):
+                preference_history = [item for item in profile.get("history", []) if isinstance(item, dict)]
+            history_by_album: dict[str, dict[str, Any]] = {}
+            for item in preference_history:
+                album_id = self._single_line(item.get("album_id") or item.get("id"), 80)
+                if album_id:
+                    history_by_album[album_id] = {**history_by_album.get(album_id, {}), **item}
+            try:
+                orphan_dirs = [
+                    path
+                    for path in pages_root.iterdir()
+                    if path.is_dir() and self._single_line(path.name, 80) and self._single_line(path.name, 80) not in known_jm_ids
+                ] if pages_root.exists() else []
+            except Exception:
+                orphan_dirs = []
+            for path in orphan_dirs:
+                album_id = self._single_line(path.name, 80)
+                page_files = sorted(
+                    file
+                    for file in path.iterdir()
+                    if file.is_file() and file.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+                )
+                if not album_id or not page_files:
+                    continue
+                meta = history_by_album.get(album_id, {})
+                created_ts = self._float(meta.get("created_ts")) or max((file.stat().st_mtime for file in page_files), default=0.0)
+                cover_path = covers_root / f"{album_id}.jpg"
+                jm_items.append(
+                    {
+                        "type": "jm_album",
+                        "album_id": album_id,
+                        "title": meta.get("title") or f"私密阅读 {album_id}",
+                        "description": meta.get("reason") or "",
+                        "tags": meta.get("terms") if isinstance(meta.get("terms"), list) else [],
+                        "rating": meta.get("bot_rating") or meta.get("rating"),
+                        "user_rating": meta.get("user_rating"),
+                        "rating_reason": meta.get("reason") or "",
+                        "user_rating_reason": meta.get("reason") or "",
+                        "cover_path": str(cover_path) if cover_path.exists() else "",
+                        "pages": [
+                            {
+                                "index": index + 1,
+                                "path": str(file),
+                                "name": file.name,
+                            }
+                            for index, file in enumerate(page_files)
+                        ],
+                        "image_count": len(page_files),
+                        "created_ts": created_ts,
+                        "source": "bookshelf_orphan_recovered",
+                        "locked": True,
+                    }
+                )
         public_books = []
         browsing_entries = self._browsing_history_entries(data)
         for item in [project for project in projects if isinstance(project, dict)][-12:]:

@@ -16,10 +16,11 @@ class PrivateCompanionPageApiUsersGroupsMixin:
         try:
             limit = self._query_int("limit", 80, 1, 300)
             async with self.plugin._data_lock:
-                users = deepcopy(self.plugin.data.get("users", {}))
-            if not isinstance(users, dict):
-                users = {}
-            items = [self._user_summary(user_id, user) for user_id, user in users.items() if isinstance(user, dict)]
+                users = self.plugin.data.get("users", {})
+                if not isinstance(users, dict):
+                    users = {}
+                user_items = [(user_id, dict(user)) for user_id, user in users.items() if isinstance(user, dict)]
+            items = [self._user_summary(user_id, user) for user_id, user in user_items]
             items.sort(key=lambda item: item.get("last_seen_ts") or 0, reverse=True)
             return self._ok({"items": items[:limit], "total": len(items)})
         except Exception as exc:
@@ -166,15 +167,15 @@ class PrivateCompanionPageApiUsersGroupsMixin:
         try:
             limit = self._query_int("limit", 80, 1, 300)
             async with self.plugin._data_lock:
-                groups = deepcopy(self.plugin.data.get("groups", {}))
-            if not isinstance(groups, dict):
-                groups = {}
-            visible_groups = [
-                (group_id, group)
-                for group_id, group in groups.items()
-                if isinstance(group, dict) and not self._looks_like_member_shadow_group(str(group_id), group)
-            ]
-            shadow_count = len(groups) - len(visible_groups)
+                groups = self.plugin.data.get("groups", {})
+                if not isinstance(groups, dict):
+                    groups = {}
+                visible_groups = [
+                    (group_id, dict(group))
+                    for group_id, group in groups.items()
+                    if isinstance(group, dict) and not self._looks_like_member_shadow_group(str(group_id), group)
+                ]
+                shadow_count = len(groups) - len(visible_groups)
             items = [self._group_summary(group_id, group) for group_id, group in visible_groups]
             items.sort(key=lambda item: item.get("last_seen_ts") or 0, reverse=True)
             return self._ok({"items": items[:limit], "total": len(items), "shadow_total": shadow_count})

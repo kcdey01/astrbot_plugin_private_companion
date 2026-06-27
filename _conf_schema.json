@@ -644,6 +644,12 @@
     "default": 30,
     "invisible": true
   },
+  "private_image_provider_timeout_seconds": {
+    "description": "Legacy flat config: 单个识图模型超时秒数",
+    "type": "float",
+    "default": 12,
+    "invisible": true
+  },
   "enable_private_image_self_recognition": {
     "description": "Legacy flat config: 启用图片转述增强",
     "type": "bool",
@@ -3444,6 +3450,18 @@
           "step": 1
         },
         "default": 30,
+        "condition": "enable_private_image_self_recognition"
+      },
+      "private_image_provider_timeout_seconds": {
+        "description": "单个识图模型超时秒数",
+        "type": "float",
+        "hint": "每个视觉 provider 单次最多等待多久；超时会临时降权并切换下一个可用视觉模型，避免某个上游 503 或重试过久拖慢整条私聊单图回复。默认 12 秒。",
+        "slider": {
+          "min": 3,
+          "max": 60,
+          "step": 1
+        },
+        "default": 12,
         "condition": "enable_private_image_self_recognition"
       },
       "enable_private_image_self_recognition": {

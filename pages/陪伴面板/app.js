@@ -42,6 +42,13 @@ const state = {
   configImportPreview: null,
   configBackups: [],
   configLastChecks: [],
+  activeTab: "dashboard",
+  lazyLoaded: {
+    diagnostics: false,
+    providers: false,
+    tokenStats: false,
+    configBackups: false,
+  },
 };
 
 const hiddenCompatibilityConfigKeys = new Set([
@@ -938,6 +945,7 @@ const configLabels = {
   quote_skip_short_reply_chars: "短回复不引用阈值",
   quote_target_strategy: "引用目标策略",
   private_image_vision_wait_seconds: "单图等待识图秒数",
+  private_image_provider_timeout_seconds: "单个识图模型超时秒数",
   enable_private_image_gif_enhancement: "GIF 动图强化",
   private_image_gif_max_frames: "GIF 抽帧数",
   enable_private_image_self_recognition: "图片转述增强",
@@ -1287,6 +1295,7 @@ const configDescriptions = {
   quote_skip_short_reply_chars: "回复正文不超过该字数时不附带引用。0 表示不按长度跳过。",
   quote_target_strategy: "current 引用用户当前这条触发消息；quoted/auto 在用户引用 Bot 旧消息追问时优先引用那条旧消息。",
   private_image_vision_wait_seconds: "私聊单图确认没有继续补充后，最多等待视觉转述多久。不是图片收口时间；视觉提前完成会立刻进入主链。",
+  private_image_provider_timeout_seconds: "每个视觉 provider 单次最多等待多久；超时后会临时降权并切下一个视觉模型，避免某个上游 503 或重试过久拖慢整条单图回复。",
   enable_private_image_gif_enhancement: "图片转述增强的可选子功能。开启后动态 GIF 会抽取代表帧，让视觉模型理解动作、表情变化和文字变化；关闭后按普通 GIF/图片路径处理。",
   private_image_gif_max_frames: "动态 GIF 进入视觉转述时最多抽取多少个代表帧。帧数越多越能理解动作变化，但会增加识图耗时和视觉输入量。",
   private_image_self_recognition_hint: "只补充当前角色自己的外观、头像、名字、表情包特征或聊天截图昵称，让视觉转述更容易判断图里是不是当前角色。不要写用户资料。",
@@ -1536,7 +1545,7 @@ const featureSettingGroups = {
   enable_recall_message_cache: ["enable_recall_transcribe_command", "recall_message_cache_ttl_seconds", "recall_message_cache_max_items"],
   enable_forbidden_word_recall: ["recall_forbidden_words", "recall_forbidden_scope", "recall_forbidden_word_case_sensitive"],
   enable_proactive_quote_trigger_message: ["enable_quote_group_reply", "enable_quote_group_interjection", "enable_quote_private_proactive", "quote_skip_short_reply_chars", "quote_target_strategy"],
-  enable_private_image_self_recognition: ["private_image_vision_wait_seconds", "enable_private_image_gif_enhancement", "private_image_gif_max_frames", "enable_private_image_vision_cache", "private_image_vision_cache_max_items", "private_image_self_recognition_hint"],
+  enable_private_image_self_recognition: ["private_image_vision_wait_seconds", "private_image_provider_timeout_seconds", "enable_private_image_gif_enhancement", "private_image_gif_max_frames", "enable_private_image_vision_cache", "private_image_vision_cache_max_items", "private_image_self_recognition_hint"],
   enable_private_image_gif_enhancement: ["private_image_gif_max_frames"],
   enable_environment_perception: ["environment_perception_timezone", "holiday_country", "enable_holiday_perception", "enable_platform_perception", "enable_model_perception", "enable_worldview_perception", "enable_lunar_perception", "enable_solar_term_perception", "enable_almanac_perception"],
   enable_holiday_perception: ["holiday_country"],
@@ -1734,7 +1743,7 @@ const featureSettingSections = {
     {
       title: "视觉等待",
       note: "收口结束后等待图片转述结果；视觉提前完成会直接进入主链。",
-      keys: ["private_image_vision_wait_seconds"],
+      keys: ["private_image_vision_wait_seconds", "private_image_provider_timeout_seconds"],
     },
     {
       title: "GIF 动图强化",
@@ -2684,26 +2693,19 @@ async function loadTroubleshooting() {
 async function loadAll() {
   $("#subtitle").textContent = "读取运行态中...";
   try {
-    const [overview, users, groups, diagnostics, availableProviders, tokenStats, configBackups] = await Promise.all([
+    const [overview, users, groups] = await Promise.all([
       fetchJson("/overview"),
       fetchJson("/users?limit=300"),
       fetchJson("/groups?limit=300"),
-      fetchJson("/diagnostics"),
-      fetchJson("/providers/available"),
-      fetchJson("/token/stats"),
-      fetchJson("/config/backups").catch(() => ({ items: [] })),
     ]);
     state.overview = overview;
     state.users = users.items || [];
     state.groups = groups.items || [];
-    state.diagnostics = diagnostics.items || [];
-    state.availableProviders = availableProviders.items || [];
-    state.tokenStats = tokenStats || null;
-    state.configBackups = configBackups.items || [];
     state.featureDraft = featureDraftFromOverview(overview);
     if (!state.selectedUserId && state.users[0]) state.selectedUserId = state.users[0].user_id;
     if (!state.selectedGroupId && state.groups[0]) state.selectedGroupId = state.groups[0].group_id;
     renderAll();
+    void ensureTabData(state.activeTab, true);
     $("#subtitle").textContent = `${overview.plugin.bot_name || "Private Companion"} · ${new Date().toLocaleString()}`;
   } catch (error) {
     $("#subtitle").textContent = `加载失败：${error.message}`;
@@ -2714,18 +2716,100 @@ function renderAll() {
   hydrateDailyOutfitLogo();
   renderStats();
   renderDashboard();
-  renderUsers();
-  renderGroups();
-  renderWorldbook();
-  renderMemory();
-  renderProactiveCandidates();
-  renderBookshelf();
-  renderImageCache();
-  renderTroubleshooting();
-  renderTokens();
-  renderModuleSettings();
-  renderConfig();
-  renderProviders();
+  renderActiveTab(state.activeTab);
+}
+
+function renderActiveTab(tabName = state.activeTab || "dashboard") {
+  if (tabName === "private") {
+    renderUsers();
+  } else if (tabName === "group") {
+    renderGroups();
+  } else if (tabName === "worldbook") {
+    renderWorldbook();
+  } else if (tabName === "memory") {
+    renderMemory();
+  } else if (tabName === "proactive") {
+    renderProactiveCandidates();
+  } else if (tabName === "bookshelf") {
+    renderBookshelf();
+  } else if (tabName === "image-cache") {
+    renderImageCache();
+  } else if (tabName === "troubleshooting") {
+    renderTroubleshooting();
+  } else if (tabName === "tokens") {
+    renderTokens();
+  } else if (tabName === "roleplay" || tabName === "modules") {
+    renderModuleSettings();
+    renderRoleplayPersonaDraftPanel();
+  } else if (tabName === "config") {
+    renderConfig();
+  } else if (tabName === "models") {
+    renderProviders();
+  }
+}
+
+async function loadDashboardDiagnostics(force = false) {
+  if (state.lazyLoaded.diagnostics && !force) return state.diagnostics;
+  const diagnostics = await fetchJson("/diagnostics");
+  state.diagnostics = diagnostics.items || [];
+  state.lazyLoaded.diagnostics = true;
+  if (state.activeTab === "dashboard") {
+    renderDiagnostics();
+    renderDashboardPulse();
+  }
+  return state.diagnostics;
+}
+
+async function loadTokenStats(force = false) {
+  if (state.lazyLoaded.tokenStats && !force) return state.tokenStats;
+  const tokenStats = await fetchJson("/token/stats");
+  state.tokenStats = tokenStats || null;
+  state.lazyLoaded.tokenStats = true;
+  renderStats();
+  if (state.activeTab === "tokens") renderTokens();
+  if (state.activeTab === "dashboard") renderDashboardPulse();
+  return state.tokenStats;
+}
+
+async function loadAvailableProviders(force = false) {
+  if (state.lazyLoaded.providers && !force) return state.availableProviders;
+  const availableProviders = await fetchJson("/providers/available");
+  state.availableProviders = availableProviders.items || [];
+  state.lazyLoaded.providers = true;
+  if (state.activeTab === "models") renderProviders();
+  if (state.activeTab === "modules" || state.activeTab === "roleplay") renderModuleSettings();
+  return state.availableProviders;
+}
+
+async function loadConfigBackups(force = false) {
+  if (state.lazyLoaded.configBackups && !force) return state.configBackups;
+  const configBackups = await fetchJson("/config/backups").catch(() => ({ items: [] }));
+  state.configBackups = configBackups.items || [];
+  state.lazyLoaded.configBackups = true;
+  if (state.activeTab === "config") renderConfigBackups();
+  return state.configBackups;
+}
+
+async function ensureTabData(tabName, force = false) {
+  if (tabName === "dashboard") {
+    loadDashboardDiagnostics(force).catch(() => {});
+    return;
+  }
+  if (tabName === "tokens") {
+    await loadTokenStats(force);
+  } else if (tabName === "models") {
+    await loadAvailableProviders(force);
+  } else if (tabName === "modules" || tabName === "roleplay") {
+    loadAvailableProviders(force).catch(() => {});
+  } else if (tabName === "config") {
+    await loadConfigBackups(force);
+  } else if (tabName === "image-cache") {
+    renderImageCache();
+    await loadImageCache();
+  } else if (tabName === "troubleshooting") {
+    renderTroubleshooting();
+    await loadTroubleshooting();
+  }
 }
 
 function renderStats() {
@@ -2845,8 +2929,20 @@ function renderDashboardPulse() {
   const shortcuts = [
     ["group", "群聊观测", `${overview.group?.enabled_group_count || 0}/${overview.group?.group_count || 0} 个群`],
     ["worldbook", "关系网", `${overview.worldbook?.enabled_member_count || 0}/${overview.worldbook?.member_count || 0} 个节点`],
-    ["tokens", "Token", `${formatCompactNumber(state.tokenStats?.totals?.total_tokens || 0)} · ${formatCompactNumber(state.tokenStats?.totals?.calls || 0)} 次`],
-    ["troubleshooting", "排障中心", `${(state.diagnostics || []).filter((item) => ["warn", "error"].includes(item.level)).length} 个诊断项`],
+    [
+      "tokens",
+      "Token",
+      state.lazyLoaded.tokenStats
+        ? `${formatCompactNumber(state.tokenStats?.totals?.total_tokens || 0)} · ${formatCompactNumber(state.tokenStats?.totals?.calls || 0)} 次`
+        : "点开后加载",
+    ],
+    [
+      "troubleshooting",
+      "排障中心",
+      state.lazyLoaded.diagnostics
+        ? `${(state.diagnostics || []).filter((item) => ["warn", "error"].includes(item.level)).length} 个诊断项`
+        : "后台轻量检查中",
+    ],
     ["image-cache", "图片缓存", `${overview.cache?.private_image_vision?.items || 0}/${overview.cache?.private_image_vision?.max_items || "不限"} 条`],
     ["modules", "模块工作台", moduleShortcutNote(overview)],
     ["models", "模型分流", providerShortcutNote(overview.providers || {})],
@@ -12291,16 +12387,11 @@ async function runAction(action, successMessage = "", control = null) {
 }
 
 function switchTab(tabName) {
+  state.activeTab = tabName || "dashboard";
   document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("is-active", item.dataset.tab === tabName));
   document.querySelectorAll(".panel").forEach((item) => item.classList.toggle("is-active", item.id === `panel-${tabName}`));
-  if (tabName === "image-cache") {
-    renderImageCache();
-    loadImageCache().catch((error) => showToast(`图片缓存加载失败：${error.message}`, "error"));
-  }
-  if (tabName === "troubleshooting") {
-    renderTroubleshooting();
-    loadTroubleshooting().catch((error) => showToast(`排障信息加载失败：${error.message}`, "error"));
-  }
+  renderActiveTab(state.activeTab);
+  ensureTabData(state.activeTab).catch((error) => showToast(`页面数据加载失败：${error.message}`, "error"));
 }
 
 document.querySelectorAll(".tab").forEach((button) => {
