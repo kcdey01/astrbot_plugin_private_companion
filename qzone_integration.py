@@ -1057,6 +1057,12 @@ class QzoneMixin(QzoneMediaMixin):
             return
         now = _now_ts()
         state = self._qzone_state_dict()
+        seen_ids: list[str] = []
+        replied_ids: list[str] = []
+        seen_keys: list[str] = []
+        replied_keys: list[str] = []
+        replied_set: set[str] = set()
+        replied_key_set: set[str] = set()
         interval_seconds = max(5, _safe_int(getattr(self, "qzone_comment_inbox_interval_minutes", 60), 60, 5, 1440)) * 60
         if now - _safe_float(state.get("last_comment_inbox_checked_at"), 0) < interval_seconds:
             return
@@ -1142,7 +1148,7 @@ class QzoneMixin(QzoneMediaMixin):
                 return
 
             candidates = [
-                (post, comment, comment_id, comment_key)
+                (post, comment, comment_id, comment_key, id_candidates)
                 for post, comment, comment_id, comment_key, id_candidates, is_self_comment, author_recently_replied in observed
                 if not any(candidate_id in seen_set or candidate_id in replied_set for candidate_id in id_candidates)
                 and comment_key not in seen_key_set
@@ -1161,7 +1167,7 @@ class QzoneMixin(QzoneMediaMixin):
             skipped = 0
             last_reason = ""
             sent_text = ""
-            for post, comment, comment_id, comment_key in candidates:
+            for post, comment, comment_id, comment_key, id_candidates in candidates:
                 if replies >= max_replies:
                     break
                 decision = await self._qzone_decide_comment_reply(post, comment, own_uin=own_uin)
@@ -1169,9 +1175,22 @@ class QzoneMixin(QzoneMediaMixin):
                     skipped += 1
                     last_reason = _single_line(decision.get("reason"), 60)
                     continue
+                for candidate_id in id_candidates:
+                    if candidate_id:
+                        replied_set.add(candidate_id)
+                if comment_id:
+                    replied_set.add(comment_id)
+                if comment_key:
+                    replied_key_set.add(comment_key)
+                state["comment_inbox_replied_ids"] = self._qzone_trim_id_list(list(replied_set), limit=300)
+                state["comment_inbox_replied_keys"] = self._qzone_trim_id_list(list(replied_key_set), limit=300)
+                state["last_comment_inbox_checked_at"] = now
+                state["last_comment_inbox_status"] = f"replying:guarded:{_single_line(comment_id or comment_key, 80)}"
+                state["last_comment_inbox_reply_comment_id"] = comment_id
+                state["last_comment_inbox_reply_comment_key"] = comment_key
+                state["last_comment_inbox_reply_author"] = _single_line(getattr(comment, "name", ""), 40) or _single_line(getattr(comment, "uin", ""), 40)
+                self._save_data_sync()
                 sent_text = await self._qzone_reply_to_comment(None, post, comment, str(decision.get("reply") or ""))
-                replied_set.add(comment_id)
-                replied_key_set.add(comment_key)
                 self._qzone_note_comment_inbox_sent(state, post, comment, sent_text, now=now)
                 replies += 1
                 last_reason = _single_line(decision.get("reason"), 60) or "已回复"
@@ -1221,6 +1240,24 @@ class QzoneMixin(QzoneMediaMixin):
             reason = _single_line(exc, 160)
             if self._qzone_auth_failure_message(reason):
                 self._qzone_mark_auth_failure(reason, source="comment_inbox", state=state, save=False)
+            if replied_set or replied_key_set:
+                state["comment_inbox_replied_ids"] = self._qzone_trim_id_list(
+                    replied_ids + list(replied_set),
+                    limit=300,
+                )
+                state["comment_inbox_replied_keys"] = self._qzone_trim_id_list(
+                    replied_keys + list(replied_key_set),
+                    limit=300,
+                )
+            if seen_ids or seen_keys:
+                state["comment_inbox_seen_ids"] = self._qzone_trim_id_list(
+                    self._qzone_trim_id_list(state.get("comment_inbox_seen_ids"), limit=500) + seen_ids,
+                    limit=500,
+                )
+                state["comment_inbox_seen_keys"] = self._qzone_trim_id_list(
+                    self._qzone_trim_id_list(state.get("comment_inbox_seen_keys"), limit=500) + seen_keys,
+                    limit=500,
+                )
             state["last_comment_inbox_failed_at"] = now
             state["last_comment_inbox_checked_at"] = now
             state["last_comment_inbox_status"] = f"failed:{_single_line(reason, 80)}"
