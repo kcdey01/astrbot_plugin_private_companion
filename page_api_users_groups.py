@@ -39,7 +39,7 @@ class PrivateCompanionPageApiUsersGroupsMixin:
             detail.update(
                 {
                     "memory": user.get("companion_memory") if isinstance(user.get("companion_memory"), dict) else {},
-                    "expression_profile": user.get("expression_profile") if isinstance(user.get("expression_profile"), dict) else {},
+                    "expression_profile": self._expression_profile_summary(user),
                     "intent_profile": user.get("intent_profile") if isinstance(user.get("intent_profile"), dict) else {},
                     "relationship_state": user.get("relationship_state") if isinstance(user.get("relationship_state"), dict) else {},
                     "behavior_habits": self._behavior_habit_summary(user),
@@ -145,9 +145,17 @@ class PrivateCompanionPageApiUsersGroupsMixin:
                 remove_open_loop_text = self._single_line(payload.get("remove_open_loop_text"), 120)
                 if remove_open_loop_text:
                     action_message = self.plugin._remove_open_loop_entry(user, remove_open_loop_text)
+                expression_action = self._single_line(payload.get("expression_action"), 40)
+                if expression_action:
+                    action_message = self._apply_expression_profile_action(user, payload)
                 self.plugin._save_data_sync()
                 snapshot = deepcopy(user)
             result = self._user_summary(user_id, snapshot)
+            result.update(
+                {
+                    "expression_profile": self._expression_profile_summary(snapshot),
+                }
+            )
             if action_message:
                 result["message"] = action_message
             return self._ok(result)

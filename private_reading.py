@@ -1164,7 +1164,7 @@ class PrivateReadingMixin:
         if isinstance(user, dict) and self._private_user_role(user) == "friend":
             return ""
         text = str(inbound_text or "")
-        if not any(token in text for token in ("书柜", "看过", "读过", "最近在做什么", "最近干嘛", "阅读", "素材", "私密", "夹层")):
+        if not self._user_asks_bookshelf_reading_memory(text):
             return ""
         items = self.data.get("bookshelf_items")
         if not isinstance(items, list):
@@ -1195,6 +1195,23 @@ class PrivateReadingMixin:
             ]
             lines.append("- " + "；".join(part for part in parts if part))
         return "\n".join(lines)
+
+    @staticmethod
+    def _user_asks_bookshelf_reading_memory(text: str) -> bool:
+        cleaned = _single_line(text, 120)
+        if not cleaned:
+            return False
+        compact = re.sub(r"\s+", "", cleaned)
+        direct_tokens = (
+            "书柜", "夹层", "抽屉", "藏本", "私密阅读", "阅读记录",
+            "本子", "漫画", "小本本",
+        )
+        if any(token in compact for token in direct_tokens):
+            return True
+        return bool(
+            re.search(r"(最近|刚刚|之前|上次|这两天|今天).{0,8}(看|读|翻).{0,8}(什么|啥|哪本|哪篇|哪部)", compact)
+            or re.search(r"(看过|读过|翻过).{0,8}(什么|啥|哪本|哪篇|哪部)", compact)
+        )
 
     async def _run_jm_cosmos_read_action(self, user: dict[str, Any] | None = None) -> dict[str, Any] | None:
         if not self._jm_cosmos_read_available(user):

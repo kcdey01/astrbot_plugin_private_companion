@@ -12,6 +12,7 @@ import mimetypes
 import secrets
 import sqlite3
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -4037,6 +4038,110 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "items": normalized,
         }
 
+    def _expression_profile_summary(self, user: dict[str, Any]) -> dict[str, Any]:
+        profile = user.get("expression_profile") if isinstance(user.get("expression_profile"), dict) else {}
+
+        def sample_row(item: Any, index: int) -> dict[str, Any]:
+            raw = item if isinstance(item, dict) else {}
+            text = self._single_line(raw.get("text") or raw.get("phrase") or raw.get("ending"), 120)
+            punctuation = raw.get("punctuation") if isinstance(raw.get("punctuation"), dict) else {}
+            marks = "".join(f"{key}{value}" for key, value in punctuation.items() if self._int(value) > 0)
+            return {
+                "id": self._single_line(raw.get("id"), 40) or str(index),
+                "index": index,
+                "text": text,
+                "phrase": self._single_line(raw.get("phrase"), 80),
+                "ending": self._single_line(raw.get("ending"), 20),
+                "length": self._int(raw.get("length")),
+                "punctuation": marks,
+                "created_at": self._single_line(raw.get("created_at"), 30),
+                "time": self.plugin._format_timestamp_elapsed(raw.get("ts", 0)),
+            }
+
+        samples = profile.get("samples") if isinstance(profile.get("samples"), list) else []
+        pending = profile.get("pending_samples") if isinstance(profile.get("pending_samples"), list) else []
+        formatter = getattr(self.plugin, "_format_expression_profile_for_prompt", None)
+        try:
+            prompt_preview = formatter(user) if callable(formatter) else ""
+        except Exception:
+            prompt_preview = ""
+        return {
+            "enabled": bool(getattr(self.plugin, "enable_expression_learning", False)),
+            "mode": self._single_line(getattr(self.plugin, "expression_learning_mode", "balanced"), 20),
+            "manual_review": bool(getattr(self.plugin, "enable_expression_manual_review", False)),
+            "style_review": bool(getattr(self.plugin, "enable_expression_style_review", True)),
+            "updated_at": self._single_line(profile.get("updated_at"), 30),
+            "sample_count": len(samples),
+            "pending_count": len(pending),
+            "short_count": self._int(profile.get("short_count")),
+            "endings": [self._single_line(item, 20) for item in (profile.get("endings") if isinstance(profile.get("endings"), list) else [])[:8]],
+            "recent_phrases": [self._single_line(item, 80) for item in (profile.get("recent_phrases") if isinstance(profile.get("recent_phrases"), list) else [])[:8]],
+            "samples": [sample_row(item, idx) for idx, item in enumerate(samples[:12])],
+            "pending_samples": [sample_row(item, idx) for idx, item in enumerate(pending[:24])],
+            "prompt_preview": self._multi_line(prompt_preview, 500),
+        }
+
+    def _apply_expression_profile_action(self, user: dict[str, Any], payload: dict[str, Any]) -> str:
+        profile = user.setdefault("expression_profile", {})
+        if not isinstance(profile, dict):
+            profile = {}
+            user["expression_profile"] = profile
+        action = self._single_line(payload.get("expression_action"), 40)
+        pending = profile.get("pending_samples") if isinstance(profile.get("pending_samples"), list) else []
+        samples = profile.get("samples") if isinstance(profile.get("samples"), list) else []
+        sample_id = self._single_line(payload.get("sample_id"), 40)
+        sample_index = self._int(payload.get("sample_index"))
+
+        def find_index(items: list[Any]) -> int:
+            if sample_id:
+                for idx, item in enumerate(items):
+                    if isinstance(item, dict) and self._single_line(item.get("id"), 40) == sample_id:
+                        return idx
+            if 0 <= sample_index < len(items):
+                return sample_index
+            return -1
+
+        if action == "clear_pending":
+            profile["pending_samples"] = []
+            profile["pending_count"] = 0
+            profile["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            return "已清空待审核表达样本"
+        if action in {"approve", "reject"}:
+            idx = find_index(pending)
+            if idx < 0:
+                return "没有找到待审核样本"
+            item = pending.pop(idx)
+            profile["pending_samples"] = pending
+            profile["pending_count"] = len(pending)
+            if action == "reject":
+                profile["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                return "已删除待审核样本"
+            if isinstance(item, dict):
+                approved = dict(item)
+                approved.pop("review_status", None)
+                approved["approved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                samples.insert(0, approved)
+                limit = max(4, int(getattr(self.plugin, "max_learned_expression_items", 18) or 18))
+                profile["samples"] = samples[:limit]
+                refresher = getattr(self.plugin, "_refresh_expression_profile_legacy_summary", None)
+                if callable(refresher):
+                    refresher(profile)
+                profile["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                return "已通过表达样本"
+            return "待审核样本格式异常"
+        if action == "delete_sample":
+            idx = find_index(samples)
+            if idx < 0:
+                return "没有找到已入库样本"
+            samples.pop(idx)
+            profile["samples"] = samples
+            refresher = getattr(self.plugin, "_refresh_expression_profile_legacy_summary", None)
+            if callable(refresher):
+                refresher(profile)
+            profile["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            return "已删除表达样本"
+        return "未知表达样本操作"
+
     @classmethod
     def _display_message_text(cls, value: Any, limit: int = 500) -> str:
         source = str(value or "").strip()
@@ -5746,6 +5851,9 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "episode_memory_refresh_minutes",
             "max_companion_memory_items",
             "max_learned_expression_items",
+            "expression_learning_mode",
+            "enable_expression_manual_review",
+            "enable_expression_style_review",
             "max_dialogue_episodes",
             "user_habit_min_count",
             "user_habit_max_items",
@@ -6885,6 +6993,9 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "episode_memory_refresh_minutes",
             "max_companion_memory_items",
             "max_learned_expression_items",
+            "expression_learning_mode",
+            "enable_expression_manual_review",
+            "enable_expression_style_review",
             "max_dialogue_episodes",
             "user_habit_min_count",
             "user_habit_max_items",

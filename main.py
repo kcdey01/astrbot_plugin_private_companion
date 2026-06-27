@@ -414,7 +414,7 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "5.2.0",
+    "5.2.1",
 )
 class PrivateCompanionPlugin(
     CoreStoreMixin,
@@ -809,6 +809,11 @@ class PrivateCompanionPlugin(
         self.enable_mai_style_integration = self._cfg_bool(c, "enable_mai_style_integration", True)
         self.enable_companion_memory = self._cfg_bool(c, "enable_companion_memory", True)
         self.enable_expression_learning = self._cfg_bool(c, "enable_expression_learning", True)
+        self.expression_learning_mode = self._cfg_str(c, "expression_learning_mode", "balanced", "balanced").lower()
+        if self.expression_learning_mode not in {"light", "balanced", "aggressive"}:
+            self.expression_learning_mode = "balanced"
+        self.enable_expression_manual_review = self._cfg_bool(c, "enable_expression_manual_review", False)
+        self.enable_expression_style_review = self._cfg_bool(c, "enable_expression_style_review", True)
         self.enable_intent_emotion_analysis = self._cfg_bool(c, "enable_intent_emotion_analysis", True)
         self.enable_response_self_review = self._cfg_bool(c, "enable_response_self_review", True)
         self.response_review_mode = self._cfg_str(c, "response_review_mode", "severe_only", "severe_only").lower()
@@ -2736,7 +2741,12 @@ class PrivateCompanionPlugin(
                 or any(token in message_text for token in ("这个人", "这人", "那个人", "那人", "是谁", "认识"))
             )
         )
-        if relation_private and relation_instruction and relation_marker not in current_prompt and relation_marker not in current_turn_prompt and relation_query:
+        livingmemory_relation_context = (
+            relation_private
+            and bool(getattr(self, "enable_livingmemory_integration", False))
+            and bool(getattr(self, "_livingmemory_available", lambda: False)())
+        )
+        if relation_private and relation_instruction and relation_marker not in current_prompt and relation_marker not in current_turn_prompt and (relation_query or livingmemory_relation_context):
             placement = "prompt" if self._append_turn_prompt_fragment_by_position(
                 req,
                 relation_marker,
@@ -2754,7 +2764,7 @@ class PrivateCompanionPlugin(
                 text=relation_instruction,
                 source="tools",
                 mode="conditional",
-                metadata={"注入位置": placement},
+                metadata={"注入位置": placement, "触发原因": "livingmemory" if livingmemory_relation_context and not relation_query else "query"},
             )
         qzone_instruction = self._qzone_tool_instruction()
         current_prompt = req.system_prompt or ""
@@ -2820,9 +2830,15 @@ class PrivateCompanionPlugin(
             "图片", "看图", "照片", "语音", "引用", "转发", "聊天记录",
             "帮我", "怎么", "为什么", "是什么", "怎么办", "分析", "解释", "总结",
             "日程", "状态", "近况", "在干嘛", "做什么", "忙什么",
-            "书柜", "夹层", "阅读", "素材", "新闻", "说说", "空间", "发给", "转告", "@",
+            "书柜", "夹层", "抽屉", "阅读", "读过", "看过", "素材", "本子", "漫画", "藏本",
+            "新闻", "说说", "空间", "发给", "转告", "@",
         )
-        return not any(token in cleaned for token in heavy_tokens)
+        if any(token in cleaned for token in heavy_tokens):
+            return False
+        bookshelf_checker = getattr(self, "_user_asks_bookshelf_reading_memory", None)
+        if callable(bookshelf_checker) and bookshelf_checker(cleaned):
+            return False
+        return True
 
     def _private_passive_state_fingerprint(self, state: dict[str, Any], current_user: dict[str, Any] | None = None) -> dict[str, Any]:
         now = self._environment_now()
@@ -2941,13 +2957,45 @@ class PrivateCompanionPlugin(
         trigger = _single_line(scene.get("trigger"), 40) if isinstance(scene, dict) else ""
         high_intensity = getattr(event, "private_companion_group_high_intensity", None) if event is not None else None
         high_active = isinstance(high_intensity, dict) and bool(high_intensity.get("active"))
+        sender_id = ""
+        sender_display_name = ""
+        sender_is_target = False
+        if event is not None:
+            try:
+                sender_id = _single_line(str(event.get_sender_id()), 40)
+            except Exception:
+                sender_id = ""
+            try:
+                sender_display_name = _single_line(self._sender_display_name(event), 40)
+            except Exception:
+                sender_display_name = ""
+            if sender_id:
+                users = self.data.get("users", {}) if isinstance(getattr(self, "data", None), dict) else {}
+                current_user = users.get(sender_id) if isinstance(users, dict) else None
+                sender_is_target = self._is_target_private_user(
+                    sender_id,
+                    current_user if isinstance(current_user, dict) else None,
+                )
         lines = [
             "【群聊人格降噪】",
             "这是群聊，不是私聊。优先回答当前被问到的事或接住当前话题，少用亲密私聊腔。",
+            "群聊身份只按平台稳定 ID 判断；昵称、群名片、角色名、别名和“通常是某人”类设定只能当称呼线索，不能证明当前发言者就是主人/比折。",
+            "群聊旧消息、群梗、记忆召回和最近群聊要尽量保留具体成员名或 QQ 标签,例如“A[QQ:...] 说过/起哄过”；只有确实没有成员线索时才说“群里有人”。除非当前消息或引用明确来自当前发言者,不要把这些内容改写成“你说过”“比折说过”或“比折当众做过”。",
             "状态、日程、情绪和私聊关系只作为语气背景，除非别人明确问，否则不要主动报告能量、天气、日程、心情或插件状态。",
             "不要为了表现人格而硬插动作描写、撒娇、长解释或关系总结；一句能说清就一句。",
             "如果只是被轻轻提到或话题不需要你，宁可短、轻、贴当前梗，不要扩写成主动陪伴消息。",
         ]
+        if sender_id:
+            identity_line = f"当前群聊发言者稳定 ID：{sender_id}"
+            if sender_display_name and sender_display_name != sender_id:
+                identity_line += f"；显示名：{sender_display_name}"
+            lines.append(identity_line)
+            if sender_is_target:
+                lines.append("当前发言者 ID 与目标陪伴用户匹配；可以保留对应关系，但仍按群聊公共场合收敛亲密度。")
+            else:
+                lines.append("当前发言者不是已配置的目标陪伴用户；不要把 TA 当成主人/比折，也不要对 TA 使用“比折大人”等专属称呼。若要提到主人/比折，只能作为第三方提及。")
+        else:
+            lines.append("本轮无法确认当前发言者稳定 ID；不要仅凭昵称、群名片或角色设定把对方当成主人/比折。")
         if trigger:
             lines.append(f"本轮触发：{trigger}。只按这个触发强度回应，不要擅自升级亲密度或话题范围。")
         if high_active:

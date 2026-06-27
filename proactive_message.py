@@ -1780,6 +1780,11 @@ class ProactiveMessageMixin:
                 if rewritten and len(rewritten) >= 4:
                     return {"decision": "rewrite", "reason": "去掉回复式开头", "text": rewritten}
             return {"decision": "drop", "reason": "像是在回复刚发来的消息"}
+        motive_leak_repaired = self._strip_proactive_motive_leak_text(cleaned)
+        if motive_leak_repaired != cleaned:
+            if motive_leak_repaired and len(motive_leak_repaired) >= 2:
+                return {"decision": "rewrite", "reason": "去掉主动动机自述", "text": motive_leak_repaired}
+            return {"decision": "defer", "reason": "主动消息只剩动机自述", "delay_minutes": 75}
         vague = ("想你了", "来看看你", "你在忙什么", "最近怎么样", "吃了吗", "辛苦了", "在吗", "忙不忙")
         if strength != "lenient" and reason in {"check_in", "quiet_care", "state_share"} and any(token in cleaned for token in vague):
             return {"decision": "defer", "reason": "普通主动过于泛泛", "delay_minutes": 60}
@@ -1801,6 +1806,52 @@ class ProactiveMessageMixin:
         if _safe_int(user.get("ignored_streak"), 0, 0) >= 2 and len(cleaned) > 36:
             return {"decision": "rewrite", "reason": "连续未回应时主动偏长", "text": cleaned[:36].rstrip("，,。") + "。"}
         return {"decision": "send", "reason": "本地检查通过"}
+
+    def _strip_proactive_motive_leak_text(self, text: str) -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return ""
+        units: list[str] = []
+        for line in cleaned.splitlines() or [cleaned]:
+            units.extend(self._split_proactive_sentence_units(line))
+        if not units:
+            units = [cleaned]
+
+        leak_unit_patterns = (
+            r"(?:怕|担心)[^。！？\n]{0,16}(?:太早|太晚|打扰|吵到|烦到)",
+            r"(?:先|又|就)?(?:收住|忍住|憋住|忍了一下|放了一会)[^。！？\n]{0,20}",
+            r"(?:结果|后来)?[^。！？\n]{0,12}(?:绕了一圈|转了一圈|想了半天)[^。！？\n]{0,24}(?:来找你|找你|说出口)",
+            r"(?:还是|又|最后|结果)[^。！？\n]{0,12}(?:来找你|找你|跑来找你|过来找你)[啦了啊呀]*",
+            r"(?:没什么事|没有别的事|也没什么)[^。！？\n]{0,18}(?:就是|只是)?想(?:来)?(?:找你|跟你说话|和你说话|说一句)",
+        )
+        leak_clause_patterns = (
+            r"[，,、\s]*(?:刚[^，。！？\n]{0,24})?(?:就|还是)?想(?:先)?(?:跟|和)?你(?:说早安|说早|说一句|说点什么|打个招呼|聊两句|说话)[^，。！？\n]*",
+            r"[，,、\s]*(?:中午|晚上|早上|这会儿|刚才|刚刚)?[^，。！？\n]{0,18}(?:就|又|还是)?想(?:顺手)?(?:来)?(?:找你|跟你打个照面|和你打个照面|往你这边冒个头)[^，。！？\n]*",
+            r"[，,、\s]*(?:怕|担心)[^，。！？\n]{0,16}(?:太早|太晚|打扰|吵到|烦到)[^，。！？\n]*",
+            r"[，,、\s]*(?:就)?先(?:收住|忍住|憋住)[^，。！？\n]*",
+            r"[，,、\s]*(?:结果|后来)?[^，。！？\n]{0,12}(?:绕了一圈|转了一圈|想了半天)[^，。！？\n]*",
+        )
+        kept: list[str] = []
+        changed = False
+        for raw_unit in units:
+            unit = str(raw_unit or "").strip()
+            if not unit:
+                continue
+            if any(re.search(pattern, unit) for pattern in leak_unit_patterns):
+                changed = True
+                continue
+            repaired = unit
+            for pattern in leak_clause_patterns:
+                repaired, count = re.subn(pattern, "", repaired)
+                changed = changed or count > 0
+            repaired = repaired.strip(" ，,、。！？!?；;")
+            if repaired:
+                kept.append(self._ensure_chat_sentence_punctuation(repaired))
+            elif repaired != unit:
+                changed = True
+        if not changed:
+            return cleaned
+        return "\n".join(kept)[:260].strip()
 
     def _proactive_review_strength(self) -> str:
         strength = str(getattr(self, "proactive_review_strength", "lenient") or "lenient").strip().lower()
@@ -1866,6 +1917,7 @@ class ProactiveMessageMixin:
 - 先读最近私聊记录。候选消息放进去必须像自然聊天，不像突然插入的系统主动。
 - 主动消息不是回复用户刚发来的话；如果它写成“好呀/刚看到/你问/我帮你查”等回复口吻，应 drop 或 rewrite。
 - 如果只是“想你了/来看看你/忙不忙/吃了吗/辛苦了”且没有具体由头，通常 defer 或 drop。
+- 不要把内部动机、犹豫过程或发送理由写进正文，例如“本来想跟你说”“怕说太早”“绕了一圈还是来找你”；这类内容应 rewrite 成具体片段，或 drop。
 - 如果最近用户刚刚在聊正事或刚聊完，倾向 defer；如果候选本身没价值，drop。
 - 候选消息必须贴合“本轮主动来源”和“内在约束”：分享型要有分享落点，关心型要低压，续接型要有真实来源，虚由头要短。
 - rewrite 只能轻改写，不能新增事实，不能添加工具、转述、查询、发图等承诺。

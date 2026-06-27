@@ -4577,6 +4577,70 @@ class ProactiveEngineMixin:
                 return True
         return False
 
+    def _proactive_text_greeting_reason(self, text: str, *, now: float | None = None) -> str:
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return ""
+        compact = re.sub(r"\s+", "", cleaned)
+        now_dt = self._environment_fromtimestamp(now or _now_ts())
+        minute = now_dt.hour * 60 + now_dt.minute
+        if re.match(r"^(?:早呀|早啊|早安|早上好|早哇|早哦|早欸|早诶|早[，,。.!！~～])", compact):
+            return "morning_greeting"
+        if re.match(r"^(?:午安|中午好|午好|中午[，,。.!！~～])", compact):
+            return "noon_greeting"
+        if re.match(r"^(?:晚上好|晚好|晚上[，,。.!！~～])", compact):
+            return "evening_greeting"
+        if re.search(r"(?:早晨|早上).{0,12}(?:安静|洗漱|刚醒|醒来|开机|早安|问候)", compact) and minute < 11 * 60:
+            return "morning_greeting"
+        return ""
+
+    def _textual_greeting_duplicate_reason(
+        self,
+        user: dict[str, Any],
+        text: str,
+        *,
+        now: float | None = None,
+    ) -> str:
+        reason = self._proactive_text_greeting_reason(text, now=now)
+        if not reason:
+            return ""
+        self._reset_daily_counter_if_needed(user)
+        sent = user.get("greetings_sent", [])
+        if not isinstance(sent, list):
+            sent = []
+            user["greetings_sent"] = sent
+        suppressed = user.get("greetings_suppressed_by_inbound", [])
+        if not isinstance(suppressed, list):
+            suppressed = []
+            user["greetings_suppressed_by_inbound"] = suppressed
+        if reason in sent:
+            return "该问候时段今天已经主动问候过"
+        if reason in suppressed:
+            return "该问候时段已被用户自然互动占掉"
+        if reason == "morning_greeting" and _safe_int(user.get("sent_today"), 0, 0) > 0:
+            return "早安只适合作为当天第一句主动消息"
+        return ""
+
+    def _mark_textual_greeting_sent(
+        self,
+        user: dict[str, Any],
+        text: str,
+        *,
+        sent_at: float | None = None,
+    ) -> bool:
+        reason = self._proactive_text_greeting_reason(text, now=sent_at)
+        if not reason:
+            return False
+        self._reset_daily_counter_if_needed(user)
+        sent = user.setdefault("greetings_sent", [])
+        if not isinstance(sent, list):
+            sent = []
+            user["greetings_sent"] = sent
+        if reason in sent:
+            return False
+        sent.append(reason)
+        return True
+
     def _mark_greeting_satisfied_by_inbound(self, user: dict[str, Any], reason: str) -> bool:
         if not self._is_greeting_reason(reason):
             return False

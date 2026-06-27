@@ -773,7 +773,7 @@ class GroupObservationMixin:
             "kind": "bot_harassment",
             "speaker_id": speaker_id,
             "speaker": speaker,
-            "topic": "群里有人一直闹 Bot",
+            "topic": f"{speaker or '某个成员'} 一直闹 Bot",
             "text": text,
             "summary": " / ".join(summary_items[-4:]),
             "score": score,
@@ -1602,7 +1602,7 @@ class GroupObservationMixin:
             lines.append("近期群聊片段记忆：\n" + episodes_text)
         relationship_text = self._format_group_relationship_graph_for_prompt(group, sender_id, text)
         if relationship_text:
-            lines.append("群友互动图：\n" + relationship_text)
+            lines.append("成员互动图：\n" + relationship_text)
         slang = group.get("slang_terms")
         if isinstance(slang, list) and slang:
             terms = []
@@ -1630,6 +1630,7 @@ class GroupObservationMixin:
     def _format_group_passive_reply_context_for_prompt(self, group: dict[str, Any], sender_id: str = "", text: str = "") -> str:
         """普通群聊回复只补触发与边界；群聊历史上下文交给 AstrBot 主链。"""
         atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
+        cleaned = _single_line(text, 260)
         lines = ["【群聊回复补充】"]
         details = []
         pace = _single_line(atmosphere.get("pace"), 20)

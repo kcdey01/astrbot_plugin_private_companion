@@ -2141,6 +2141,25 @@ input[type="search"] {
   margin-top: 10px;
 }
 
+.compact-pre {
+  margin: 10px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--ink);
+  font-family: inherit;
+  line-height: 1.55;
+}
+
+.subhead {
+  margin: 12px 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .group-state-overview {
   display: grid;
   gap: 12px;

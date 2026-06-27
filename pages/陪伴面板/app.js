@@ -481,6 +481,8 @@ const featureMeta = {
   enable_mai_style_integration: ["私聊互动策略", "把相处分寸、偏好和本轮接话方式注入回复。"],
   enable_companion_memory: ["长期画像", "沉淀用户偏好、边界、关系线索和可复用事实。"],
   enable_expression_learning: ["表达节奏学习", "统计用户句长、标点、句尾和短句节奏，只影响回复口感。"],
+  enable_expression_manual_review: ["表达样本审核", "新样本先进入私聊对象的待审核列表，通过后才会参与表达画像。"],
+  enable_expression_style_review: ["表达发送前审核", "发送前检查表达学习过头、异常断句、照抄样本等问题。"],
   enable_intent_emotion_analysis: ["本地意图/情绪快判", "用带置信度的本地规则识别求助、低落、玩笑、亲近和边界。"],
   enable_response_self_review: ["回复/主动复核", "被动回复做轻量自检；主动消息发送前判断是否值得现在发送、是否需要改写或延后。"],
   enable_llm_timer_scheduling: ["对话临时预约", "把聊天里自然形成的稍后提醒、叫醒、回头说等约定转写成 AstrBot 官方定时计划；插件本身不再单独调度。"],
@@ -1079,6 +1081,7 @@ const configLabels = {
   atrelay_multi_target_limit: "多目标单次上限",
   memory_refresh_interval_minutes: "长期画像整理间隔",
   max_companion_memory_items: "长期画像条目上限",
+  expression_learning_mode: "表达学习模式",
   max_learned_expression_items: "表达节奏样本上限",
   episode_memory_refresh_messages: "片段整理消息阈值",
   episode_memory_refresh_minutes: "片段整理时间阈值",
@@ -1353,6 +1356,9 @@ const configDescriptions = {
   group_slang_web_search_results: "黑话释义联网参考开启时，每个候选词最多保留多少条网页摘要给模型判断匹配程度。",
   memory_refresh_interval_minutes: "长期画像整理的最小间隔，越短越容易产生模型调用。",
   max_companion_memory_items: "每个私聊对象最多保留多少条长期画像条目。",
+  expression_learning_mode: "light 更克制；balanced 保持当前自然学习；aggressive 会参考更多通过审核的短句和句尾样本，建议搭配手动审核。",
+  enable_expression_manual_review: "开启后，新表达样本先进入用户详情的待审核列表，通过后才会参与表达注入。",
+  enable_expression_style_review: "开启后，回复复核会额外处理表达学习过头、异常逗号/断句、照抄样本等问题。",
   max_learned_expression_items: "每个私聊对象最多保留多少条短句、句尾和标点节奏样本；不作为长期记忆事实。",
   episode_memory_refresh_messages: "累计多少条私聊消息后尝试整理一次对话片段。",
   episode_memory_refresh_minutes: "距离上次整理多久后允许再次整理私聊片段。",
@@ -1471,6 +1477,9 @@ const featureSettingGroups = {
     "memory_refresh_interval_minutes",
     "max_companion_memory_items",
     "enable_expression_learning",
+    "expression_learning_mode",
+    "enable_expression_manual_review",
+    "enable_expression_style_review",
     "max_learned_expression_items",
     "enable_intent_emotion_analysis",
     "enable_response_self_review",
@@ -1488,7 +1497,7 @@ const featureSettingGroups = {
     "enable_food_menu_recommendation",
   ],
   enable_companion_memory: ["memory_refresh_interval_minutes", "max_companion_memory_items"],
-  enable_expression_learning: ["max_learned_expression_items"],
+  enable_expression_learning: ["expression_learning_mode", "enable_expression_manual_review", "enable_expression_style_review", "max_learned_expression_items"],
   enable_intent_emotion_analysis: [],
   enable_response_self_review: ["response_review_mode", "proactive_review_strength", "proactive_review_hard_risk_threshold", "proactive_review_low_score_threshold", "proactive_review_pressure_threshold", "response_review_max_chars"],
   enable_passive_topic_suppression: ["passive_topic_memory_hours"],
@@ -1641,7 +1650,7 @@ const featureSettingSections = {
     {
       title: "记忆与表达",
       note: "沉淀长期画像、表达习惯和共同经历。",
-      keys: ["enable_companion_memory", "memory_refresh_interval_minutes", "max_companion_memory_items", "enable_expression_learning", "max_learned_expression_items", "enable_dialogue_episode_memory", "episode_memory_refresh_messages", "episode_memory_refresh_minutes", "max_dialogue_episodes"],
+      keys: ["enable_companion_memory", "memory_refresh_interval_minutes", "max_companion_memory_items", "enable_expression_learning", "expression_learning_mode", "enable_expression_manual_review", "enable_expression_style_review", "max_learned_expression_items", "enable_dialogue_episode_memory", "episode_memory_refresh_messages", "episode_memory_refresh_minutes", "max_dialogue_episodes"],
     },
     {
       title: "回复策略",
@@ -1964,6 +1973,7 @@ const featureSettingTypes = {
   rest_reply_awake_grace_minutes: { type: "number", min: 0, max: 240, step: 5 },
   passive_injection_position: { type: "select", options: [["prompt", "当前请求末尾"], ["system_prompt", "系统提示词"], ["auto", "自动（缓存优先）"]] },
   framework_session_lock_mode: { type: "select", options: [["auto", "自动（仅旧版兼容）"], ["off", "关闭（新版本推荐）"], ["always", "始终启用（旧版排障）"]] },
+  expression_learning_mode: { type: "select", options: [["light", "轻量：只学节奏"], ["balanced", "标准：当前行为"], ["aggressive", "激进：参考审核样本"]] },
   response_review_mode: { type: "select", options: [["severe_only", "主动统一复核"], ["local_only", "仅本地识别并丢弃"], ["full", "含被动积极自检（延迟更高）"]] },
   proactive_review_strength: { type: "select", options: [["lenient", "宽松：减少取消"], ["balanced", "标准：保留延后"], ["strict", "严格：按模型拦截"]] },
   emotion_judgement_mode: { type: "select", options: [["suspicious", "仅复核可疑项"], ["always", "总是复核普通文本"], ["off", "关闭复核"]] },
@@ -4549,6 +4559,7 @@ async function renderUserDetail(forceFetch = false) {
       ${detailBlock("行为习惯", detail.behavior_habits?.updated_at ? `更新于 ${detail.behavior_habits.updated_at}` : "", userHabitPairs(detail.behavior_habits))}
       ${detailBlock("最近对话", "", [["用户消息", detail.last_user_message || ""], ["陪伴回复", detail.last_companion_message || ""]])}
       ${detailBlock("对话片段", "", (detail.dialogue_episodes || []).map((item, index) => [`#${index + 1}`, item.summary || item.title || JSON.stringify(item)]))}
+      ${renderExpressionProfileBlock(detail)}
       ${renderOpenLoopBlock(detail)}
     </div>
   `;
@@ -4721,6 +4732,70 @@ function renderOpenLoopBlock(detail) {
   `;
 }
 
+function renderExpressionProfileBlock(detail) {
+  const profile = detail?.expression_profile && typeof detail.expression_profile === "object" ? detail.expression_profile : {};
+  const pending = Array.isArray(profile.pending_samples) ? profile.pending_samples : [];
+  const samples = Array.isArray(profile.samples) ? profile.samples : [];
+  const endings = Array.isArray(profile.endings) ? profile.endings.filter(Boolean) : [];
+  const phrases = Array.isArray(profile.recent_phrases) ? profile.recent_phrases.filter(Boolean) : [];
+  return `
+    <section class="detail-block expression-profile-block">
+      <div class="detail-block-head">
+        <h2>表达画像</h2>
+        <div class="open-loop-actions">
+          <span class="badge">${escapeHtml(profile.mode || "balanced")}</span>
+          ${profile.manual_review ? `<span class="badge ok">手动审核</span>` : ""}
+          ${pending.length ? `<button type="button" class="danger-outline" data-expression-action="clear_pending">清空待审</button>` : ""}
+        </div>
+      </div>
+      <p class="muted small">已入库 ${escapeHtml(profile.sample_count || samples.length || 0)} 条 · 待审核 ${escapeHtml(profile.pending_count || pending.length || 0)} 条 · ${profile.style_review ? "发送前审核开启" : "发送前审核关闭"}</p>
+      ${profile.prompt_preview ? `<pre class="compact-pre">${escapeHtml(profile.prompt_preview)}</pre>` : `<div class="empty small">暂无足够表达样本</div>`}
+      ${endings.length || phrases.length ? `
+        <div class="worldbook-chip-row">
+          ${endings.slice(0, 8).map((item) => `<span>句尾：${escapeHtml(item)}</span>`).join("")}
+          ${phrases.slice(0, 8).map((item) => `<span>短句：${escapeHtml(item)}</span>`).join("")}
+        </div>
+      ` : ""}
+      ${pending.length ? `
+        <h3 class="subhead">待审核样本</h3>
+        <div class="open-loop-list">
+          ${pending.map((item, index) => expressionSampleItem(item, index, true)).join("")}
+        </div>
+      ` : `<div class="empty small">暂无待审核表达样本</div>`}
+      ${samples.length ? `
+        <details class="open-loop-archive">
+          <summary>已入库样本 ${escapeHtml(samples.length)}</summary>
+          <div class="open-loop-list archived">
+            ${samples.map((item, index) => expressionSampleItem(item, index, false)).join("")}
+          </div>
+        </details>
+      ` : ""}
+    </section>
+  `;
+}
+
+function expressionSampleItem(item, index, pending) {
+  const text = item?.text || item?.phrase || item?.ending || "";
+  const meta = [
+    item?.time || "",
+    item?.length ? `${item.length} 字` : "",
+    item?.punctuation ? `标点 ${item.punctuation}` : "",
+    item?.ending ? `句尾 ${item.ending}` : "",
+  ].filter(Boolean).join("｜");
+  return `
+    <article class="open-loop-item ${pending ? "" : "archived"}">
+      <div class="open-loop-main">
+        <b class="open-loop-text">${escapeHtml(text || "空样本")}</b>
+        <span class="badge">${escapeHtml(meta || `#${index + 1}`)}</span>
+      </div>
+      <div class="open-loop-actions">
+        ${pending ? `<button type="button" data-expression-action="approve" data-expression-sample-id="${escapeHtml(item?.id || "")}" data-expression-sample-index="${escapeHtml(index)}">通过</button>` : ""}
+        <button type="button" class="danger-outline" data-expression-action="${pending ? "reject" : "delete_sample"}" data-expression-sample-id="${escapeHtml(item?.id || "")}" data-expression-sample-index="${escapeHtml(index)}">删除</button>
+      </div>
+    </article>
+  `;
+}
+
 function bindUserActions(detail) {
   const refreshSelectedUserDetail = async () => {
     if (state.selectedUserId === detail.user_id) {
@@ -4778,6 +4853,24 @@ function bindUserActions(detail) {
       await runAction(
         () => postJson("/user/update", { user_id: detail.user_id, clear_open_loops: true }),
         "",
+        button,
+      );
+      await refreshSelectedUserDetail();
+    });
+  });
+  document.querySelectorAll("[data-expression-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const action = button.dataset.expressionAction || "";
+      if (action === "clear_pending" && !requireSecondClick(button, `expression-clear:${detail.user_id}`, "再次点击清空待审核表达样本", "再次点击清空")) return;
+      if (action === "delete_sample" && !requireSecondClick(button, `expression-delete:${detail.user_id}:${button.dataset.expressionSampleId || button.dataset.expressionSampleIndex || ""}`, "再次点击删除这条表达样本", "再次点击删除")) return;
+      await runAction(
+        () => postJson("/user/update", {
+          user_id: detail.user_id,
+          expression_action: action,
+          sample_id: button.dataset.expressionSampleId || "",
+          sample_index: Number(button.dataset.expressionSampleIndex || -1),
+        }),
+        action === "approve" ? "已通过表达样本" : "",
         button,
       );
       await refreshSelectedUserDetail();
@@ -8618,7 +8711,7 @@ const roleplayExamples = {
     "tone": "轻柔、细腻、日常，像真实存在的人在过日子，不像任务规划列表。",
     "rules": "诺星缘拥有一点特殊感知，但只作为对天气、光线、梦境、心情和关系更敏感的背景，不高调介入日常。",
     "scenes": "卧室、洗漱台、家里餐桌、教室、走廊、楼梯口、操场边、午休座位、放学后的校门口、回家路上等。",
-    "network": "珝环（同样是小说角色，先于星缘创造，是能控制时间的姐姐，但群里的珝环通常是比折）、林枫（同上，是哥哥）、黎欣（同上，是聪明的妹妹）、石明烛雨（黎欣的师傅，也是比折的一重身份）。",
+    "network": "珝环（同样是小说角色，先于星缘创造，是能控制时间的姐姐；若群聊里有人使用珝环名片，仍需以 QQ 号确认身份，不能只凭昵称判断为比折）、林枫（同上，是哥哥）、黎欣（同上，是聪明的妹妹）、石明烛雨（黎欣的师傅，也是比折的一重身份）。",
     "extra": "星缘知道自己是出身于小说中的人物，但也不会主动提及。",
     translations: {
       "群聊": "",
@@ -10403,8 +10496,20 @@ const featureDetailGuides = {
   enable_expression_learning: {
     summary: "统计用户常用句长、标点、句尾味道和短句节奏，让回复更像同一段聊天里的自然接话。",
     trigger: "每次私聊文本到达时本地更新统计，不调用模型。",
-    enabled: "Bot 只会参考节奏和语气轻重，不会把样本当成称呼规则、身份事实或长期偏好。",
+    enabled: "Bot 只会参考节奏和语气轻重，不会把样本当成称呼规则、身份事实或长期偏好；激进模式可搭配手动审核。",
     disabled: "不会继续更新表达节奏统计，回复更接近 AstrBot 默认人格的原始表达。",
+  },
+  enable_expression_manual_review: {
+    summary: "把新表达样本先放进待审核池，避免激进学习把噪音、群友口癖或复制内容直接写入画像。",
+    trigger: "私聊文本到达并通过本地过滤后。",
+    enabled: "用户详情里会出现待审核表达样本，通过后才会用于表达注入。",
+    disabled: "通过本地过滤的样本会直接进入表达画像。",
+  },
+  enable_expression_style_review: {
+    summary: "回复发送前检查表达学习是否过头，重点处理异常逗号、奇怪断句、照抄用户样本和提示词泄露。",
+    trigger: "被动回复自检阶段；主动消息仍走主动发送前复核。",
+    enabled: "命中表达风险时最多调用一次复核模型改写，不会反复循环。",
+    disabled: "只保留普通回复复核，不额外检查表达学习污染。",
   },
   enable_tts_enhancement: {
     summary: "支持聊天文本保留中文、<tts> 内生成外语语音，并把 TTS 生成路径、标签规范化、语种控制、语音后中文释义和发送前朗读文本清洗统一收口处理。",

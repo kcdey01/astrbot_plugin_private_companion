@@ -383,7 +383,7 @@ class UserMemoryMixin:
     def _update_expression_profile_from_message(self, user: dict[str, Any], text: str) -> None:
         if not self.enable_expression_learning:
             return
-        cleaned = _single_line(text, 220)
+        cleaned = _single_line(text, self._expression_sample_max_chars())
         if not cleaned:
             return
         if self._should_skip_expression_sample(cleaned):
@@ -426,6 +426,18 @@ class UserMemoryMixin:
         cutoff = now - 30 * 86400
         samples = [item for item in samples if _safe_float(item.get("ts"), now) >= cutoff]
         profile["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        sample = self._expression_sample_from_text(cleaned, now)
+        if self._expression_manual_review_enabled():
+            profile["samples"] = samples[: self.max_learned_expression_items]
+            self._queue_expression_pending_sample(profile, sample, cleaned)
+            self._refresh_expression_profile_legacy_summary(profile)
+            return
+        samples.insert(0, sample)
+        profile["samples"] = samples[: self.max_learned_expression_items]
+        self._refresh_expression_profile_legacy_summary(profile)
+
+    def _expression_sample_from_text(self, cleaned: str, now: float | None = None) -> dict[str, Any]:
+        now = now or _now_ts()
         punctuation = {}
         for mark in ("！", "!", "？", "?", "~", "～", "…", "。"):
             count = cleaned.count(mark)
@@ -436,23 +448,63 @@ class UserMemoryMixin:
         if 2 <= len(stripped) <= 80:
             ending = stripped[-min(6, max(2, len(stripped))):]
         phrase = ""
-        if 2 <= len(cleaned) <= 40 and not re.search(r"https?://|<[^>]+>", cleaned):
+        phrase_limit = 56 if self._expression_learning_mode() == "aggressive" else 40
+        if 2 <= len(cleaned) <= phrase_limit and not re.search(r"https?://|<[^>]+>", cleaned):
             phrase = cleaned
-        samples.insert(
-            0,
-            {
-                "ts": now,
-                "length": len(cleaned),
-                "punctuation": punctuation,
-                "ending": ending,
-                "phrase": phrase,
-            },
+        return {
+            "id": hashlib.sha1(f"{now}:{cleaned}".encode("utf-8")).hexdigest()[:12],
+            "ts": now,
+            "text": cleaned,
+            "length": len(cleaned),
+            "punctuation": punctuation,
+            "ending": ending,
+            "phrase": phrase,
+        }
+
+    def _expression_learning_mode(self) -> str:
+        mode = str(getattr(self, "expression_learning_mode", "balanced") or "balanced").strip().lower()
+        if mode not in {"light", "balanced", "aggressive"}:
+            return "balanced"
+        return mode
+
+    def _expression_sample_max_chars(self) -> int:
+        return 180 if self._expression_learning_mode() == "aggressive" else 120
+
+    def _expression_style_review_enabled(self) -> bool:
+        return bool(
+            getattr(self, "enable_expression_learning", True)
+            and getattr(self, "enable_expression_style_review", True)
         )
-        profile["samples"] = samples[: self.max_learned_expression_items]
-        self._refresh_expression_profile_legacy_summary(profile)
+
+    def _expression_manual_review_enabled(self) -> bool:
+        return bool(
+            getattr(self, "enable_expression_learning", True)
+            and getattr(self, "enable_expression_manual_review", False)
+        )
+
+    def _queue_expression_pending_sample(self, profile: dict[str, Any], sample: dict[str, Any], cleaned: str) -> None:
+        pending = profile.get("pending_samples")
+        if not isinstance(pending, list):
+            pending = []
+        compact = self._compact_repeat_text(cleaned)
+        kept: list[dict[str, Any]] = []
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            old_text = _single_line(item.get("text") or item.get("phrase"), 180)
+            if old_text and self._compact_repeat_text(old_text) == compact:
+                continue
+            kept.append(item)
+        item = dict(sample)
+        item["review_status"] = "pending"
+        item["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        kept.insert(0, item)
+        profile["pending_samples"] = kept[: min(80, max(12, self.max_learned_expression_items * 2))]
+        profile["pending_count"] = len(profile["pending_samples"])
+        profile["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     def _should_skip_expression_sample(self, cleaned: str) -> bool:
-        if len(cleaned) > 120:
+        if len(cleaned) > self._expression_sample_max_chars():
             return True
         if re.search(r"https?://|www\.|```|Traceback|Error code:|Exception|\[INFO\]|\[WARN\]|\[ERRO\]|\[Core\]", cleaned, re.IGNORECASE):
             return True
@@ -467,6 +519,44 @@ class UserMemoryMixin:
         if re.search(r"(复制|日志|报错|堆栈|代码|配置|schema|版本号|commit|diff|traceback)", cleaned, re.IGNORECASE):
             return True
         return False
+
+    def _safe_expression_phrase(self, phrase: Any, limit: int = 56) -> str:
+        text = _single_line(phrase, limit)
+        if not text or len(text) < 2:
+            return ""
+        if self._should_skip_expression_sample(text):
+            return ""
+        if re.search(r"<[^>]{1,120}>|@[A-Za-z0-9_\-\u4e00-\u9fff]{1,32}|QQ|群聊|群友|私聊", text, re.IGNORECASE):
+            return ""
+        if re.search(r"(你是|我是|他是|她是|叫我|叫你|名字|主人|朋友|同学|老师|室友|父母|妈妈|爸爸|哥哥|姐姐|弟弟|妹妹|比折|珝环)", text):
+            return ""
+        return text
+
+    def _expression_profile_phrases(self, profile: dict[str, Any], *, limit: int = 4) -> list[str]:
+        raw = profile.get("recent_phrases") if isinstance(profile, dict) else []
+        if not isinstance(raw, list):
+            return []
+        phrases: list[str] = []
+        for item in raw:
+            phrase = self._safe_expression_phrase(item, 56)
+            if phrase and phrase not in phrases:
+                phrases.append(phrase)
+            if len(phrases) >= limit:
+                break
+        return phrases
+
+    def _expression_profile_endings(self, profile: dict[str, Any], *, limit: int = 4) -> list[str]:
+        raw = profile.get("endings") if isinstance(profile, dict) else []
+        if not isinstance(raw, list):
+            return []
+        endings: list[str] = []
+        for item in raw:
+            ending = self._safe_expression_phrase(item, 12)
+            if ending and ending not in endings:
+                endings.append(ending)
+            if len(endings) >= limit:
+                break
+        return endings
 
     def _refresh_expression_profile_legacy_summary(self, profile: dict[str, Any]) -> None:
         samples = profile.get("samples")
@@ -615,6 +705,17 @@ class UserMemoryMixin:
             lines.append("对方常用短问句推进聊天,回复要直接接住问题,别绕开。")
         if exclaim_count >= max(2, samples // 4):
             lines.append("语气可以稍微轻快一点,但不要夸张。")
+        mode = self._expression_learning_mode()
+        if mode == "aggressive":
+            endings = self._expression_profile_endings(profile, limit=3)
+            phrases = self._expression_profile_phrases(profile, limit=3)
+            if endings:
+                lines.append("句尾可轻参考：" + "、".join(endings) + "；只学节奏,别照抄。")
+            if phrases:
+                lines.append("短句样本：" + " / ".join(phrases) + "；只取口语松紧,不要复读原句。")
+            lines.append("表达学习只用于节奏,不能学习身份、关系、群友口癖、脏话、日志格式或事实判断。")
+        elif mode == "light":
+            lines = lines[:2]
         return "\n".join(lines)
 
     def _format_companion_memory_for_prompt(self, user: dict[str, Any], *, style_only: bool = False) -> str:
@@ -2424,6 +2525,7 @@ target 只能是 bot/self/other/ambiguous/none。
 - 如果回复已经在说晚安、睡觉、做梦、告别,不要再突然追加天气、日程、生活观察或另一个新话题
 - 如果问题是重复上一条 Bot 消息,必须直接承接用户这句话,不要再说上一条里的“吃饱犯困/下午还有事/有什么安排”等同义内容
 - 如果原回复为了表现困、迷糊、半梦半醒或低能量而变得含混,优先改成清楚承接用户；状态只能留在语气里,不能牺牲回答质量
+- 如果问题是表达学习过头、异常断句或照抄用户样本,保留意思,改成自然中文私聊；不要为了模仿口癖而加奇怪逗号、空格、断句或复读用户原话
 """.strip()
         started = time.perf_counter()
         rewritten = await self._llm_call(
@@ -2450,9 +2552,10 @@ target 只能是 bot/self/other/ambiguous/none。
             return fallback or response_text
         return cleaned
 
-    @staticmethod
-    def _response_review_severe_flags(flags: list[str]) -> list[str]:
+    def _response_review_severe_flags(self, flags: list[str]) -> list[str]:
         severe = {"meta_or_assistant", "leaks_internal", "repeats_last_bot_message"}
+        if self._expression_style_review_enabled():
+            severe.update({"unnatural_punctuation", "expression_overfit", "copied_user_expression_sample"})
         return [flag for flag in flags if flag in severe]
 
     def _simulation_active(self, user: dict[str, Any]) -> bool:
@@ -2779,14 +2882,19 @@ open_loops 只写之后仍需要回头处理、确认、兑现的事；普通“
                 line = _single_line(raw_line[2:] if raw_line.startswith("- ") else raw_line, 90)
                 if line and self._private_context_line_is_safe(line):
                     lines.append(line)
-        if self.enable_expression_learning and len(hint) <= 24:
+        expression_mode = self._expression_learning_mode()
+        expression_hint_limit = 80 if expression_mode == "aggressive" else (36 if expression_mode == "balanced" else 24)
+        if self.enable_expression_learning and len(hint) <= expression_hint_limit:
             expression_text = self._format_expression_profile_for_prompt(user)
             if expression_text and not expression_text.startswith("暂无足够样本"):
+                expression_limit = 3 if expression_mode == "aggressive" else 1
                 for raw_line in expression_text.splitlines():
                     line = _single_line(raw_line, 90)
                     if line and self._private_context_line_is_safe(line):
                         lines.append(line)
-                        break
+                        expression_limit -= 1
+                        if expression_limit <= 0:
+                            break
         deduped = list(dict.fromkeys(line for line in lines if line))
         if not deduped:
             return ""
@@ -3107,6 +3215,8 @@ open_loops 只写之后仍需要回头处理、确认、兑现的事；普通“
             flags.append("over_structured")
         if re.search(r"(能量\s*\d+|关系站位|状态机|内部规划|用户意图|表达学习|陪伴记忆)", cleaned):
             flags.append("leaks_internal")
+        if self._expression_style_review_enabled():
+            flags.extend(self._expression_review_flags(cleaned, user))
         signature = self._proactive_topic_signature(cleaned)
         if self._has_abrupt_closing_topic_shift(cleaned, inbound_text=""):
             flags.append("abrupt_topic_shift")
@@ -3121,6 +3231,30 @@ open_loops 只写之后仍需要回头处理、确认、兑现的事；普通“
             if not last_sent or _now_ts() - last_sent <= self.proactive_reply_context_hours * 3600:
                 flags.append("repeats_last_bot_message")
         return list(dict.fromkeys(flags))
+
+    def _expression_review_flags(self, cleaned: str, user: dict[str, Any]) -> list[str]:
+        flags: list[str] = []
+        if re.search(r"[，,]\s*[。！？!?…~～]|[。！？!?]\s*[，,]|[，,]{2,}|[。！？!?]{3,}", cleaned):
+            flags.append("unnatural_punctuation")
+        if re.search(r"\b[A-Za-z]{2,}\b\s*[。！？!?]\s*\b[A-Za-z]{1,4}\b\s*[。！？!?]", cleaned):
+            flags.append("unnatural_punctuation")
+        if len(cleaned) <= 260:
+            punct_count = len(re.findall(r"[，,。！？!?…~～]", cleaned))
+            if punct_count >= max(7, len(cleaned) // 10):
+                flags.append("expression_overfit")
+        profile = user.get("expression_profile") if isinstance(user.get("expression_profile"), dict) else {}
+        phrases = self._expression_profile_phrases(profile, limit=8)
+        compact_reply = self._compact_repeat_text(cleaned)
+        copied = 0
+        for phrase in phrases:
+            compact_phrase = self._compact_repeat_text(phrase)
+            if len(compact_phrase) >= 8 and compact_phrase in compact_reply:
+                copied += 1
+        if copied >= 2 or (copied >= 1 and self._expression_learning_mode() == "aggressive"):
+            flags.append("copied_user_expression_sample")
+        if re.search(r"(学你|像你说话|模仿你|你的口癖|你的语气)", cleaned):
+            flags.append("leaks_internal")
+        return flags
 
     @staticmethod
     def _compact_repeat_text(text: str) -> str:

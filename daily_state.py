@@ -9010,6 +9010,31 @@ class DailyStateMixin:
                     self._save_data_sync()
                 self._debug_tick_skip(user_id, "主动消息时间不一致", prefix="取消")
                 continue
+            if not is_troubleshooting_for_send and (effective_action_for_send or planned_action_for_send or "message") == "message":
+                async with self._data_lock:
+                    current_for_greeting_text = self._get_user(user_id)
+                    textual_greeting_note = self._textual_greeting_duplicate_reason(
+                        current_for_greeting_text,
+                        text,
+                        now=_now_ts(),
+                    )
+                    if textual_greeting_note:
+                        current_for_greeting_text["proactive_sending"] = False
+                        current_for_greeting_text["proactive_sending_started_at"] = 0
+                        self._mark_planned_candidate_status(current_for_greeting_text, "blocked", textual_greeting_note)
+                        self._clear_pending_proactive_plan(current_for_greeting_text)
+                        self._schedule_next_proactive(current_for_greeting_text, now=_now_ts(), delay_hours=(2.0, 5.0))
+                        self._update_proactive_audit(audit_id, status="cancelled", note=textual_greeting_note, text=text)
+                        self._save_data_sync()
+                if textual_greeting_note:
+                    logger.info(
+                        "[PrivateCompanion] 主动消息正文命中重复问候,已取消: user=%s reason=%s text=%s",
+                        user_id,
+                        _single_line(textual_greeting_note, 120),
+                        _single_line(text, 120),
+                    )
+                    self._debug_tick_skip(user_id, textual_greeting_note, prefix="取消")
+                    continue
             if is_troubleshooting_for_send:
                 async with self._data_lock:
                     current_after_time_guard = self._get_user(user_id)
@@ -9432,6 +9457,7 @@ class DailyStateMixin:
                             current["greetings_sent"] = sent_greetings
                         if reason not in sent_greetings:
                             sent_greetings.append(reason)
+                    self._mark_textual_greeting_sent(current, visible_text or text, sent_at=current["last_sent"])
                     self._clear_llm_timer_event(current, event_id=due_timer_id)
                     next_timer = self._get_active_llm_timer(current)
                     if (

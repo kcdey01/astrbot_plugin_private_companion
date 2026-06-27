@@ -974,6 +974,24 @@
     "default": true,
     "invisible": true
   },
+  "expression_learning_mode": {
+    "description": "Legacy flat config: 表达学习模式",
+    "type": "string",
+    "default": "balanced",
+    "invisible": true
+  },
+  "enable_expression_manual_review": {
+    "description": "Legacy flat config: 表达样本手动审核",
+    "type": "bool",
+    "default": false,
+    "invisible": true
+  },
+  "enable_expression_style_review": {
+    "description": "Legacy flat config: 表达学习发送前审核",
+    "type": "bool",
+    "default": true,
+    "invisible": true
+  },
   "max_learned_expression_items": {
     "description": "Legacy flat config: 表达节奏样本上限",
     "type": "int",
@@ -3989,6 +4007,38 @@
         "default": true,
         "condition": {
           "enable_mai_style_integration": true
+        }
+      },
+      "expression_learning_mode": {
+        "description": "表达学习模式",
+        "type": "string",
+        "hint": "light 只学句长和少量标点；balanced 保持当前自然节奏学习；aggressive 会参考更多通过审核的短句和句尾样本，建议搭配手动审核。",
+        "default": "balanced",
+        "options": [
+          "light",
+          "balanced",
+          "aggressive"
+        ],
+        "condition": {
+          "enable_expression_learning": true
+        }
+      },
+      "enable_expression_manual_review": {
+        "description": "表达样本手动审核",
+        "type": "bool",
+        "hint": "开启后，新表达样本先进入对应私聊对象的待审核列表，页面通过后才会进入表达画像；适合 aggressive 模式。",
+        "default": false,
+        "condition": {
+          "enable_expression_learning": true
+        }
+      },
+      "enable_expression_style_review": {
+        "description": "表达发送前审核",
+        "type": "bool",
+        "hint": "开启后，回复复核会额外检查表达学习过头、异常逗号/断句、照抄用户短句样本等问题；不会反复调用，只参与本轮一次改写。",
+        "default": true,
+        "condition": {
+          "enable_expression_learning": true
         }
       },
       "max_learned_expression_items": {

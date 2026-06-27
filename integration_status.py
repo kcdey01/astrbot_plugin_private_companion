@@ -438,7 +438,8 @@ class IntegrationStatusMixin:
             boundary = "私聊可查当前用户相关的旧约定、偏好和共同经历。"
         return (
             "【长期记忆检索】\n"
-            f"上下文不够时可用 `{tool_name}` 查记忆。{boundary}结果只作接话背景。"
+            f"上下文不够时可用 `{tool_name}` 查记忆。{boundary}结果只作接话背景。\n"
+            "召回结果里出现人名、昵称、QQ 或群成员别名时,不要直接当作稳定身份；能查关系网时先用关系网确认,不能确认就按召回文本里的具体说话人原样转述。"
         )
 
     def _format_livingmemory_status(self) -> str:
