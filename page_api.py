@@ -926,6 +926,13 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "画面干净清晰，真实摄影风格，不包含人物、不包含文字水印"
                 )
         started = time.time()
+        logger.info(
+            "[PrivateCompanionPage] 图片生成排障测试开始: workflow_kind=%s prompt_chars=%s reference=%s prompt=%s",
+            self._single_line(workflow_kind, 40),
+            len(str(prompt_text or "")),
+            bool(reference_image_path),
+            self._single_line(prompt_text, 180),
+        )
         timeout = max(
             45,
             self._int(getattr(self.plugin, "comfyui_photo_wait_seconds", 90)) + 30,
@@ -949,6 +956,16 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 file_size = image_file.stat().st_size if exists else 0
             except Exception:
                 exists = False
+        logger.info(
+            "[PrivateCompanionPage] 图片生成排障测试结束: ok=%s backend=%s elapsed=%sms path=%s exists=%s size=%s note=%s",
+            bool(image_path and exists),
+            self._single_line(backend_name, 80),
+            elapsed_ms,
+            self._single_line(image_path, 180),
+            exists,
+            file_size,
+            self._single_line(note, 180),
+        )
         return {
             "ok": bool(image_path and exists),
             "title": "图片生成链路测试",

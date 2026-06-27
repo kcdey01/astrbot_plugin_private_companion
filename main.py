@@ -4629,6 +4629,10 @@ class PrivateCompanionPlugin(
                     ).strip()
             except Exception as exc:
                 logger.debug("[PrivateCompanion] 私聊引用图片 prompt 锚点写入失败: %s", exc)
+        if lightweight_passive:
+            bookshelf_skip_logger = getattr(self, "_log_bookshelf_secret_skip", None)
+            if callable(bookshelf_skip_logger):
+                bookshelf_skip_logger("lightweight_passive", inbound_text, current_user)
         if not lightweight_passive:
             hidden_creative_context = self._format_hidden_creative_context_for_reply(inbound_text)
             if hidden_creative_context:

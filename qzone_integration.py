@@ -1608,6 +1608,13 @@ class QzoneMixin(QzoneMediaMixin):
                 workflow_kind = "text2img"
             if not image_prompt:
                 image_prompt = f"QQ 空间公开动态配图，{_single_line(post_text, 160)}，{style_instruction}"
+            logger.info(
+                "[PrivateCompanion] QQ 空间配图生图开始: reason=%s kind=%s post=%s prompt=%s",
+                _single_line(reason, 40),
+                _single_line(workflow_kind, 30),
+                _single_line(post_text, 120),
+                _single_line(image_prompt, 180),
+            )
             backend_name, image_path, workflow_note = await generator(
                 workflow_kind=workflow_kind,
                 prompt_text=image_prompt,

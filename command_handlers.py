@@ -302,22 +302,33 @@ class CommandHandlersMixin:
         if not raw:
             return {}
         compact = re.sub(r"\s+", "", raw)
-        edit_markers = (
-            "改成", "改为", "改一下", "改图", "修图", "重绘", "p成", "P成",
-            "换成", "变成", "加上", "加个", "去掉", "去除", "把这张", "这张图",
-        )
+        draw_visual_targets = ("图片", "照片", "插画", "头像", "壁纸", "表情包", "图")
+        edit_visual_targets = draw_visual_targets + ("这张", "这个图", "引用图")
+        edit_strong_markers = ("改图", "修图", "重绘", "p图", "P图", "p一下", "P一下")
+        edit_operation_markers = ("改成", "改为", "改一下", "p成", "P成", "换成", "变成", "加上", "加个", "去掉", "去除")
         draw_patterns = (
-            r"(?:帮我|给我|替我)?(?:画|画一张|画个|生成|生成一张|生一张|做一张|做个|出一张)(?:图|图片|插画|照片|头像|壁纸|表情包)?",
-            r"(?:来|整)(?:一张|个)?(?:图|图片|插画|照片|头像|壁纸|表情包)",
+            r"(?:帮我|给我|替我|请你|麻烦你)(?:画一张|画个|生成一张|生一张|做一张|做个|出一张)(?:图片|照片|插画|头像|壁纸|表情包|图)",
+            r"(?:帮我|给我|替我|请你|麻烦你)(?:画|生成|做|出).{0,80}?(?:图片|照片|插画|头像|壁纸|表情包|图)",
+            r"(?:画一张|画个|生成|生成一张|生一张|做一张|做个|出一张)(?:图片|照片|插画|头像|壁纸|表情包|图)",
+            r"(?:画一张|画个|生成一张|生一张|做一张|做个|出一张).{0,80}?(?:图片|照片|插画|头像|壁纸|表情包|图)",
+            r"(?:来|整)(?:一张|张|个).{0,40}?(?:图片|照片|插画|头像|壁纸|表情包|图)",
         )
         draw_hit = any(re.search(pattern, raw, flags=re.I) for pattern in draw_patterns)
-        edit_hit = bool(has_reference and any(marker in compact for marker in edit_markers))
+        if draw_hit and not any(token in compact for token in draw_visual_targets):
+            draw_hit = False
+        edit_hit = False
+        if has_reference:
+            explicit_visual_target = any(token in compact for token in edit_visual_targets)
+            strong_edit = any(marker in compact for marker in edit_strong_markers)
+            operation_edit = any(marker in compact for marker in edit_operation_markers)
+            leading_operation = any(compact.startswith(marker) for marker in edit_operation_markers)
+            edit_hit = bool(strong_edit or (operation_edit and (explicit_visual_target or leading_operation)))
         if not draw_hit and not edit_hit:
             return {}
         prompt = raw
         cleanup_patterns = [
             r"^(?:麻烦|可以|能不能|能|帮我|给我|替我|请你|请)?",
-            r"^(?:画|画一张|画个|生成|生成一张|生一张|做一张|做个|出一张|来一张|整一张)(?:图|图片|插画|照片|头像|壁纸|表情包)?",
+            r"^(?:画一张|画个|生成一张|生成|生一张|做一张|做个|出一张|来一张|来张|整一张|整张|画)(?:图片|照片|插画|头像|壁纸|表情包|图)?",
             r"^(?:把)?(?:这张图|这个图|这张|引用图|图片)?(?:帮我)?(?:改成|改为|改一下|改图|修图|重绘|p成|P成|换成|变成)",
         ]
         for pattern in cleanup_patterns:
@@ -395,6 +406,14 @@ class CommandHandlersMixin:
         intent = self._natural_language_photo_intent(text, has_reference=has_reference)
         if not intent:
             return False
+        logger.info(
+            "[PrivateCompanion] 自然语言生图命中: user=%s kind=%s has_reference=%s prompt=%s raw=%s",
+            _single_line(user_id, 40),
+            _single_line(intent.get("kind"), 30),
+            has_reference,
+            _single_line(intent.get("prompt"), 180),
+            _single_line(text, 180),
+        )
         if intent.get("needs_prompt"):
             await self._reply(event, "要画成什么样？给我一句具体点的描述就行。")
             event.stop_event()
@@ -419,6 +438,14 @@ class CommandHandlersMixin:
         reference_label = ""
         if intent.get("kind") == "edit":
             reference_path, reference_label, saw_image = await self._photo_reference_image_from_command_context(event, user_id)
+            logger.info(
+                "[PrivateCompanion] 自然语言改图参考图解析: user=%s saw_image=%s label=%s path=%s exists=%s",
+                _single_line(user_id, 40),
+                saw_image,
+                _single_line(reference_label, 40),
+                _single_line(reference_path, 180),
+                bool(reference_path and Path(reference_path).exists()),
+            )
             if not reference_path:
                 await self._reply(
                     event,
@@ -439,6 +466,14 @@ class CommandHandlersMixin:
             prompt_text=prompt_text,
             session_key=f"natural_photo_{user_id}",
             reference_image_path=reference_path,
+        )
+        logger.info(
+            "[PrivateCompanion] 自然语言生图结果: user=%s backend=%s ok=%s note=%s image=%s",
+            _single_line(user_id, 40),
+            _single_line(backend_name, 80),
+            bool(image_path),
+            _single_line(note, 180),
+            _single_line(image_path, 180),
         )
         counted = bool(image_path)
         if not image_path and callable(getattr(self, "_photo_generation_failure_counts_as_attempt", None)):

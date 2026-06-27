@@ -1419,7 +1419,7 @@ const configDescriptions = {
   photo_persona_reference_image_path: "本地 png/jpg/jpeg/webp 文件路径，仅在自拍/人像类主动生图时使用。ComfyUI 会把它作为图片输入传给支持 images=1 的自拍工作流；在线图片 API 会优先尝试 OpenAI 兼容 /images/edits 参考图接口，不支持时回退纯文生图；SDGen 仍按提示词生成。",
   enable_daily_outfit_photo: "开启后，每天日程生成并保存后额外调用一次自拍/人像生图能力，根据当天日程、天气和状态生成角色当天穿搭照片，并替换拓展页左上角 Logo。失败会记录当天结果，不会因为刷新页面反复请求。",
   daily_outfit_photo_prompt: "可选。给每日穿搭补充偏好，例如校服、便服、季节感、配色或固定饰品；留空则优先根据当天日程里的上课、出门、居家、雨天、换衣和饰品线索自动组织。",
-  enable_natural_language_photo_generation: "默认关闭，避免和独立生图插件抢触发。开启后，私聊里明确说“帮我画/生成图片”会直接调用生图；随消息带图或引用图片并说“改成/加上/去掉”等会尝试改图。该入口只对主人私聊开放。",
+  enable_natural_language_photo_generation: "默认关闭，避免和独立生图插件抢触发。开启后，只有私聊里明确说“帮我画一张/生成图片/来张图”等图片请求才会调用生图；普通“生成/画/改成”不会触发。随消息带图或引用图片并明确要求改图、修图、重绘，或说“改成/加上/去掉……”时才会尝试改图。该入口只对主人私聊开放。",
   natural_language_photo_generation_max_daily: "独立于主动生图额度和每日穿搭。成功生成或已实际请求后端但失败的情况会计入，避免接口异常时被反复请求。0 表示关闭自然语言生图/改图。",
   comfyui_photo_wait_seconds: "本地 ComfyUI 工作流最多等待多久。超时后不会假装已经拍照。",
   enable_local_photo_load_guard: "开启后，本地 ComfyUI/SDGen 生图前读取 CPU/内存负载；负载偏高时延后本次主动计划，或在 auto 模式下改走在线图片 API。",

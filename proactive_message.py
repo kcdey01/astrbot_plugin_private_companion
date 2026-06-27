@@ -4060,6 +4060,39 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return self.comfyui_selfie_workflow_name or self.comfyui_text2img_workflow_name
         return self.comfyui_text2img_workflow_name or self.comfyui_selfie_workflow_name
 
+    def _photo_generation_trace_id(self, session_key: str, workflow_kind: str) -> str:
+        seed = f"{session_key}|{workflow_kind}|{_now_ts()}|{uuid.uuid4().hex[:8]}"
+        return hashlib.sha1(seed.encode("utf-8", "ignore")).hexdigest()[:10]
+
+    def _photo_generation_file_detail(self, image_path: str) -> str:
+        path_text = _single_line(image_path, 260)
+        if not path_text:
+            return "path=- exists=false size=0"
+        if re.match(r"^(?:https?://|data:|base64://)", path_text, flags=re.I):
+            return f"path={_single_line(path_text, 120)} exists=remote size=-"
+        local_text = path_text[len("file://"):] if path_text.startswith("file://") else path_text
+        try:
+            path = Path(local_text)
+            exists = path.exists() and path.is_file()
+            size = path.stat().st_size if exists else 0
+            return f"path={_single_line(str(path), 160)} exists={str(exists).lower()} size={size}"
+        except Exception:
+            return f"path={_single_line(path_text, 120)} exists=unknown size=-"
+
+    def _photo_generation_backend_config_summary(self) -> str:
+        external_base = _single_line(getattr(self, "external_image_api_base_url", ""), 120)
+        if external_base:
+            external_base = re.sub(r"([?&](?:key|token|access_token|api_key)=)[^&]+", r"\1***", external_base, flags=re.I)
+        return (
+            f"preferred={_single_line(getattr(self, 'photo_generation_backend', ''), 30) or 'auto'} "
+            f"comfyui={self._comfyui_photo_available()} "
+            f"sdgen={self._sdgen_photo_available()} "
+            f"external={self._external_photo_available()} "
+            f"external_model={_single_line(getattr(self, 'external_image_api_model', ''), 80) or '-'} "
+            f"external_size={_single_line(getattr(self, 'external_image_api_size', ''), 40) or '-'} "
+            f"external_base={external_base or '-'}"
+        )
+
     async def _generate_photo_image(
         self,
         *,
@@ -4069,45 +4102,78 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         reference_image_path: str = "",
         image_size: str = "",
     ) -> tuple[str, str, str]:
+        started = time.time()
+        trace_id = self._photo_generation_trace_id(session_key, workflow_kind)
         reference_image_path = _single_line(reference_image_path, 260) or self._photo_persona_reference_image_for_kind(workflow_kind)
         preferred = self.photo_generation_backend
+        try:
+            reference_exists = bool(reference_image_path and Path(reference_image_path).exists())
+        except (OSError, ValueError):
+            reference_exists = False
+        logger.info(
+            "[PrivateCompanion] 生图开始: trace=%s session=%s kind=%s prompt_chars=%s prompt=%s reference=%s reference_exists=%s image_size=%s %s",
+            trace_id,
+            _single_line(session_key, 80),
+            _single_line(workflow_kind, 30),
+            len(str(prompt_text or "")),
+            _single_line(prompt_text, 180),
+            bool(reference_image_path),
+            reference_exists,
+            _single_line(image_size, 40) or "-",
+            self._photo_generation_backend_config_summary(),
+        )
+
+        def finish(backend: str, image_path: str, note: str) -> tuple[str, str, str]:
+            elapsed_ms = int((time.time() - started) * 1000)
+            ok = bool(image_path)
+            logger.info(
+                "[PrivateCompanion] 生图结束: trace=%s ok=%s backend=%s elapsed=%sms note=%s %s",
+                trace_id,
+                ok,
+                _single_line(backend, 60),
+                elapsed_ms,
+                _single_line(note, 220),
+                self._photo_generation_file_detail(image_path),
+            )
+            return backend, image_path, note
+
         if preferred == "comfyui":
             if not self._comfyui_photo_available():
-                return "ComfyUI", "", "ComfyUI 后端不可用或未配置"
+                return finish("ComfyUI", "", "ComfyUI 后端不可用或未配置")
             busy_state = self._local_photo_generation_busy_state(force_refresh=True)
             if busy_state:
-                return "ComfyUI", "", f"电脑高负荷,已跳过本地生图（{busy_state.get('reason') or '负载偏高'}）"
+                return finish("ComfyUI", "", f"电脑高负荷,已跳过本地生图（{busy_state.get('reason') or '负载偏高'}）")
             workflow_name = self._choose_photo_workflow_name(workflow_kind)
             if not workflow_name:
-                return "ComfyUI", "", f"未配置 {workflow_kind} 对应的 ComfyUI 工作流"
+                return finish("ComfyUI", "", f"未配置 {workflow_kind} 对应的 ComfyUI 工作流")
             image_path, note = await self._run_comfyui_photo_workflow(
                 workflow_name,
                 prompt_text,
                 session_key=session_key,
                 reference_image_path=reference_image_path,
             )
-            return "ComfyUI", image_path, note
+            return finish("ComfyUI", image_path, note)
         if preferred == "sdgen":
             if not self._sdgen_photo_available():
-                return "SDGen", "", "SDGen 插件不可用或未配置"
+                return finish("SDGen", "", "SDGen 插件不可用或未配置")
             busy_state = self._local_photo_generation_busy_state(force_refresh=True)
             if busy_state:
-                return "SDGen", "", f"电脑高负荷,已跳过本地生图（{busy_state.get('reason') or '负载偏高'}）"
+                return finish("SDGen", "", f"电脑高负荷,已跳过本地生图（{busy_state.get('reason') or '负载偏高'}）")
             image_path, note = await self._run_sdgen_photo_generation(
                 prompt_text,
                 session_key=session_key,
             )
-            return "SDGen", image_path, note
+            return finish("SDGen", image_path, note)
         if preferred == "external":
             if not self._external_photo_available():
-                return "在线图片 API", "", "在线图片 API 后端不可用或未配置"
+                return finish("在线图片 API", "", "在线图片 API 后端不可用或未配置")
             image_path, note = await self._run_external_photo_generation(
                 prompt_text,
                 session_key=session_key,
                 reference_image_path=reference_image_path,
                 image_size=image_size,
             )
-            return "在线图片 API", image_path, note
+            return finish("在线图片 API", image_path, note)
         external_note = ""
         if self._external_photo_available():
             image_path, note = await self._run_external_photo_generation(
@@ -4117,14 +4183,17 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 image_size=image_size,
             )
             if image_path:
-                return "在线图片 API", image_path, note
+                return finish("在线图片 API", image_path, note)
             external_note = note
+            logger.info("[PrivateCompanion] 生图后端回退: trace=%s backend=external note=%s", trace_id, _single_line(note, 180))
         else:
             external_note = "在线图片 API 后端不可用或未配置"
+            logger.info("[PrivateCompanion] 生图后端跳过: trace=%s backend=external note=%s", trace_id, external_note)
         if self._comfyui_photo_available():
             busy_state = self._local_photo_generation_busy_state(force_refresh=True)
             if busy_state:
                 comfyui_note = f"电脑高负荷,已跳过本地生图（{busy_state.get('reason') or '负载偏高'}）"
+                logger.info("[PrivateCompanion] 生图后端跳过: trace=%s backend=comfyui note=%s", trace_id, _single_line(comfyui_note, 180))
             else:
                 workflow_name = self._choose_photo_workflow_name(workflow_kind)
                 if workflow_name:
@@ -4135,27 +4204,33 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                         reference_image_path=reference_image_path,
                     )
                     if image_path:
-                        return "ComfyUI", image_path, note
+                        return finish("ComfyUI", image_path, note)
                     comfyui_note = note
+                    logger.info("[PrivateCompanion] 生图后端回退: trace=%s backend=comfyui note=%s", trace_id, _single_line(note, 180))
                 else:
                     comfyui_note = f"未配置 {workflow_kind} 对应的 ComfyUI 工作流"
+                    logger.info("[PrivateCompanion] 生图后端跳过: trace=%s backend=comfyui note=%s", trace_id, _single_line(comfyui_note, 180))
         else:
             comfyui_note = "ComfyUI 后端不可用或未配置"
+            logger.info("[PrivateCompanion] 生图后端跳过: trace=%s backend=comfyui note=%s", trace_id, comfyui_note)
         if self._sdgen_photo_available():
             busy_state = self._local_photo_generation_busy_state(force_refresh=True)
             if busy_state:
                 sdgen_note = f"电脑高负荷,已跳过本地生图（{busy_state.get('reason') or '负载偏高'}）"
+                logger.info("[PrivateCompanion] 生图后端跳过: trace=%s backend=sdgen note=%s", trace_id, _single_line(sdgen_note, 180))
             else:
                 image_path, note = await self._run_sdgen_photo_generation(
                     prompt_text,
                     session_key=session_key,
                 )
                 if image_path:
-                    return "SDGen", image_path, note
+                    return finish("SDGen", image_path, note)
                 sdgen_note = note
+                logger.info("[PrivateCompanion] 生图后端回退: trace=%s backend=sdgen note=%s", trace_id, _single_line(note, 180))
         else:
             sdgen_note = "SDGen 插件不可用或未配置"
-        return "在线图片 API", "", f"在线图片 API 失败：{external_note}；ComfyUI 失败：{comfyui_note}；SDGen 失败：{sdgen_note}"
+            logger.info("[PrivateCompanion] 生图后端跳过: trace=%s backend=sdgen note=%s", trace_id, sdgen_note)
+        return finish("在线图片 API", "", f"在线图片 API 失败：{external_note}；ComfyUI 失败：{comfyui_note}；SDGen 失败：{sdgen_note}")
 
     async def _build_photo_scene_prompt(
         self, user: dict[str, Any], name: str, reason: str
@@ -4333,6 +4408,16 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             if not workflow_file:
                 need = "images=1 或 images=0" if use_reference_image else "images=0"
                 return "", f"未找到匹配工作流 {workflow_name}（需要 texts>=1、{need}、videos=0）"
+            logger.info(
+                "[PrivateCompanion] ComfyUI 生图提交准备: workflow=%s file=%s text_count=%s image_count=%s reference=%s wait=%ss prompt=%s",
+                _single_line(workflow_name, 80),
+                _single_line(workflow_file, 160),
+                text_count,
+                image_count,
+                use_reference_image,
+                self.comfyui_photo_wait_seconds,
+                _single_line(prompt_text, 180),
+            )
             debug = bool(
                 getattr(config, "debug_mode", False)
                 if not isinstance(config, dict)
@@ -4352,6 +4437,13 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 [],
                 debug=debug,
             )
+            logger.info(
+                "[PrivateCompanion] ComfyUI 生图已提交: workflow=%s prompt_id=%s input_images=%s text_count=%s",
+                _single_line(workflow_name, 80),
+                _single_line(prompt_id, 80),
+                len(input_images),
+                text_count,
+            )
             deadline = _now_ts() + self.comfyui_photo_wait_seconds
             while _now_ts() < deadline:
                 url, file_type, texts = await module._get_result_for_prompt(server_ip, prompt_id)
@@ -4363,10 +4455,29 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                         temp_path,
                         session_key or "private_companion",
                     )
+                    logger.info(
+                        "[PrivateCompanion] ComfyUI 生图完成: prompt_id=%s temp=%s persistent=%s note=%s",
+                        _single_line(prompt_id, 80),
+                        _single_line(temp_path, 160),
+                        _single_line(persistent_path, 160),
+                        reference_note or "ok",
+                    )
                     return persistent_path or temp_path, "ok" + reference_note
                 if url and file_type != "image":
+                    logger.info(
+                        "[PrivateCompanion] ComfyUI 生图输出类型不符: prompt_id=%s file_type=%s url=%s",
+                        _single_line(prompt_id, 80),
+                        _single_line(file_type, 40),
+                        _single_line(url, 160),
+                    )
                     return "", f"工作流输出不是图片：{file_type}"
                 await asyncio.sleep(2)
+            logger.info(
+                "[PrivateCompanion] ComfyUI 生图等待超时: workflow=%s prompt_id=%s wait=%ss",
+                _single_line(workflow_name, 80),
+                _single_line(prompt_id, 80),
+                self.comfyui_photo_wait_seconds,
+            )
             return "", f"等待 ComfyUI 结果超时（{self.comfyui_photo_wait_seconds}s）"
         except Exception as e:
             logger.warning(f"[PrivateCompanion] photo_text 生图失败: {e}", exc_info=True)
@@ -4416,12 +4527,20 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             build_prompt = getattr(plugin, "_build_positive_prompt", None)
             if callable(build_prompt):
                 positive_prompt = build_prompt(prompt_text, "")
+            logger.info(
+                "[PrivateCompanion] SDGen 生图提交: session=%s prompt=%s positive_chars=%s",
+                _single_line(session_key, 80),
+                _single_line(prompt_text, 180),
+                len(str(positive_prompt or "")),
+            )
             response = await plugin._call_t2i_api(positive_prompt)
             images = response.get("images") if isinstance(response, dict) else None
             if not isinstance(images, list) or not images:
+                logger.info("[PrivateCompanion] SDGen 生图未返回图片: response_type=%s", type(response).__name__)
                 return "", "SDGen 未返回图片"
             image = str(images[0] or "").strip()
             if not image:
+                logger.info("[PrivateCompanion] SDGen 生图返回空图片字段")
                 return "", "SDGen 返回空图片"
             config = getattr(plugin, "config", {}) or {}
             try:
@@ -4438,6 +4557,12 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 image_bytes,
                 session_key=session_key,
                 ext=".png",
+            )
+            logger.info(
+                "[PrivateCompanion] SDGen 生图完成: images=%s path=%s bytes=%s",
+                len(images),
+                _single_line(path, 160),
+                len(image_bytes),
             )
             return path, "ok" if path else "保存 SDGen 图片失败"
         except Exception as e:
@@ -4500,6 +4625,12 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         session_part = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(session_key or "private_companion"))[:60] or "private_companion"
         file_path = out_dir / f"{session_part}_{self._environment_now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{safe_ext}"
         await asyncio.to_thread(file_path.write_bytes, image_bytes)
+        logger.info(
+            "[PrivateCompanion] 生图文件已保存: session=%s path=%s bytes=%s",
+            _single_line(session_key, 80),
+            _single_line(str(file_path), 180),
+            len(image_bytes),
+        )
         return str(file_path)
 
     async def _download_external_image_url(self, url: str, *, session_key: str) -> tuple[str, str]:
@@ -4513,9 +4644,21 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(target) as response:
                     if response.status >= 400:
+                        logger.info(
+                            "[PrivateCompanion] 下载在线生图结果失败: status=%s url=%s",
+                            response.status,
+                            _single_line(target, 180),
+                        )
                         return "", f"下载图片失败：HTTP {response.status}"
                     content = await response.read()
                     content_type = str(response.headers.get("Content-Type", "") or "").lower()
+                    logger.info(
+                        "[PrivateCompanion] 下载在线生图结果完成: status=%s content_type=%s bytes=%s url=%s",
+                        response.status,
+                        _single_line(content_type, 80),
+                        len(content),
+                        _single_line(target, 180),
+                    )
             ext = ".png"
             if "jpeg" in content_type or "jpg" in content_type:
                 ext = ".jpg"
@@ -4547,6 +4690,14 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return "", model_note
         reference_image_path = _single_line(reference_image_path, 260)
         if reference_image_path and os.path.exists(reference_image_path):
+            logger.info(
+                "[PrivateCompanion] 在线图片 API 尝试参考图接口: endpoint=%s model=%s size=%s reference=%s prompt=%s",
+                _single_line(self._external_image_endpoint("edits"), 160),
+                _single_line(self.external_image_api_model, 80),
+                self._sanitize_external_image_size(image_size),
+                _single_line(reference_image_path, 160),
+                _single_line(prompt_text, 180),
+            )
             image_path, note = await self._run_external_photo_edit_generation(
                 prompt_text,
                 session_key=session_key,
@@ -4567,6 +4718,14 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 "prompt": prompt_text,
                 "size": self._sanitize_external_image_size(image_size),
             }
+            logger.info(
+                "[PrivateCompanion] 在线图片 API 生图提交: endpoint=%s model=%s size=%s prompt_chars=%s prompt=%s",
+                _single_line(endpoint, 160),
+                _single_line(self.external_image_api_model, 80),
+                payload["size"],
+                len(str(prompt_text or "")),
+                _single_line(prompt_text, 180),
+            )
             headers = {
                 "Authorization": f"Bearer {self.external_image_api_key}",
                 "Content-Type": "application/json",
@@ -4575,6 +4734,12 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(endpoint, headers=headers, json=payload) as response:
                     text = await response.text()
+                    logger.info(
+                        "[PrivateCompanion] 在线图片 API 生图响应: status=%s chars=%s preview=%s",
+                        response.status,
+                        len(text or ""),
+                        _single_line(text, 220),
+                    )
                     if response.status >= 400:
                         return "", self._external_image_api_error_note(response.status, text)
             data = self._extract_json_payload(text) if text else {}
@@ -4594,9 +4759,15 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                     session_key=session_key,
                     ext=".png",
                 )
+                logger.info(
+                    "[PrivateCompanion] 在线图片 API 生图返回 base64: bytes=%s path=%s",
+                    len(image_bytes),
+                    _single_line(path, 160),
+                )
                 return path, "ok" if path else "保存在线图片失败"
             image_url = str(first.get("url") or "").strip()
             if image_url:
+                logger.info("[PrivateCompanion] 在线图片 API 生图返回 URL: %s", _single_line(image_url, 180))
                 return await self._download_external_image_url(
                     image_url,
                     session_key=session_key,
@@ -4644,9 +4815,24 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             )
             headers = {"Authorization": f"Bearer {self.external_image_api_key}"}
             timeout = aiohttp.ClientTimeout(total=float(self.external_image_api_timeout_seconds))
+            logger.info(
+                "[PrivateCompanion] 在线图片 API 参考图提交: endpoint=%s model=%s size=%s reference=%s bytes=%s prompt=%s",
+                _single_line(endpoint, 160),
+                _single_line(self.external_image_api_model, 80),
+                self._sanitize_external_image_size(image_size),
+                _single_line(str(path), 160),
+                len(image_bytes),
+                _single_line(prompt_text, 180),
+            )
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(endpoint, headers=headers, data=form) as response:
                     text = await response.text()
+                    logger.info(
+                        "[PrivateCompanion] 在线图片 API 参考图响应: status=%s chars=%s preview=%s",
+                        response.status,
+                        len(text or ""),
+                        _single_line(text, 220),
+                    )
                     if response.status >= 400:
                         return "", self._external_image_api_error_note(response.status, text, reference=True)
             data = self._extract_json_payload(text) if text else {}
@@ -4666,9 +4852,15 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                     session_key=session_key,
                     ext=".png",
                 )
+                logger.info(
+                    "[PrivateCompanion] 在线图片 API 参考图返回 base64: bytes=%s path=%s",
+                    len(generated_bytes),
+                    _single_line(saved, 160),
+                )
                 return saved, "ok；已使用本地人设参考图" if saved else "保存在线参考图生图失败"
             image_url = str(first.get("url") or "").strip()
             if image_url:
+                logger.info("[PrivateCompanion] 在线图片 API 参考图返回 URL: %s", _single_line(image_url, 180))
                 saved, note = await self._download_external_image_url(
                     image_url,
                     session_key=session_key,
