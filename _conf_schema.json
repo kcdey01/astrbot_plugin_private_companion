@@ -1215,7 +1215,7 @@
     "invisible": true
   },
   "enable_bilibili_integration": {
-    "description": "Legacy flat config: 启用 B 站 Bot 协同",
+    "description": "Legacy flat config: 启用 B站 AI Bot 协同",
     "type": "bool",
     "default": true,
     "invisible": true
@@ -4553,15 +4553,15 @@
     "hint": "控制 Bot 无聊刷 B 站和视频分享。",
     "items": {
       "enable_bilibili_integration": {
-        "description": "启用 B 站 Bot 协同",
+        "description": "启用 B站 AI Bot 协同",
         "type": "bool",
-        "hint": "检测到 astrbot_plugin_bilibili_bot 时，可读取其观看日志和 memory_api 视频记忆，并把适合的视频作为主动私聊分享素材。",
+        "hint": "检测到正式插件 astrbot_plugin_bilibili_ai_bot 时，可读取其观看日志和 memory_api 视频记忆，并把适合的视频作为主动私聊分享素材。若目录名被手动改动，运行时会校验 metadata，不会把其他 B 站插件当成它。",
         "default": true
       },
       "enable_bilibili_boredom_watch": {
         "description": "无聊时触发刷 B 站",
         "type": "bool",
-        "hint": "当日程/状态显示 Bot 比较空、无聊或在休息时，低频触发 B 站 Bot 看 1 个视频。触发后是否评论、点赞等由 B 站 Bot 自己的配置决定。",
+        "hint": "当日程/状态显示 Bot 比较空、无聊或在休息时，低频触发 B站 AI Bot 看 1 个视频。触发后是否评论、点赞等由 B站 AI Bot 自己的配置决定。",
         "default": true,
         "condition": {
           "enable_bilibili_integration": true
@@ -4570,7 +4570,7 @@
       "bilibili_boredom_min_interval_hours": {
         "description": "刷 B 站最小间隔（小时）",
         "type": "int",
-        "hint": "陪伴插件主动触发 B 站 Bot 刷视频的最小间隔，避免过于频繁。",
+        "hint": "陪伴插件主动触发 B站 AI Bot 刷视频的最小间隔，避免过于频繁。",
         "slider": {
           "min": 2,
           "max": 72,
@@ -4584,7 +4584,7 @@
       "bilibili_share_probability": {
         "description": "视频私聊分享概率",
         "type": "float",
-        "hint": "读取到 B 站 Bot 最新观看记录后，安排私聊分享的基础概率。高评分视频会略微提高概率。",
+        "hint": "读取到 B站 AI Bot 最新观看记录后，安排私聊分享的基础概率。高评分视频会略微提高概率。",
         "slider": {
           "min": 0,
           "max": 1,
@@ -4598,7 +4598,7 @@
       "bilibili_share_min_score": {
         "description": "视频分享最低评分",
         "type": "int",
-        "hint": "B 站 Bot 观看日志中的评分达到该值时，更容易被拿来私聊分享。",
+        "hint": "B站 AI Bot 观看日志中的评分达到该值时，更容易被拿来私聊分享。",
         "slider": {
           "min": 0,
           "max": 10,
