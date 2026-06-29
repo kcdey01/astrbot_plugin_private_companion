@@ -2076,6 +2076,20 @@ Provider 规则：{emotion_rule}
             return self._sanitize_tts_visible_text(re.sub(TTS_TAG_PATTERN, "", normalized).strip())
         return ""
 
+
+    def _find_mimo_tts_plugin(self) -> Any:
+        """Find mimo_tts plugin instance via AstrBot star_registry."""
+        try:
+            from astrbot.core.star.star import star_registry
+            for metadata in star_registry:
+                name = str(getattr(metadata, "name", "") or "").lower()
+                if "mimo_tts" in name:
+                    star_cls = getattr(metadata, "star_cls", None)
+                    if star_cls is not None and hasattr(star_cls, "synthesize_text"):
+                        return star_cls
+        except Exception:
+            pass
+        return None
     async def _process_tts_tags(self, text: str, event_or_provider: Any, provider_settings: dict[str, Any] | None = None, config: dict[str, Any] | None = None, fallback_plain: str = "") -> list[Any]:
         if hasattr(event_or_provider, "get_result"):
             event = event_or_provider
@@ -2088,6 +2102,9 @@ Provider 规则：{emotion_rule}
                 tts_provider = self.context.get_using_tts_provider(str(getattr(event, "unified_msg_origin", "") or ""))
             except Exception:
                 tts_provider = None
+            # Fallback: use mimo_tts plugin directly
+            if tts_provider is None:
+                tts_provider = self._find_mimo_tts_plugin()
         else:
             event = None
             tts_provider = event_or_provider
@@ -2325,7 +2342,13 @@ Provider 规则：{emotion_rule}
                 _single_line(sanitized, 80),
             )
         try:
-            audio_path = await tts_provider.get_audio(sanitized)
+            if hasattr(tts_provider, "synthesize_text"):
+                # mimo_tts plugin: returns list[Path]
+                paths = await tts_provider.synthesize_text(sanitized)
+                audio_path = str(paths[0]) if paths else ""
+            else:
+                # AstrBot framework TTS provider: returns str path
+                audio_path = await tts_provider.get_audio(sanitized)
         except Exception as exc:
             logger.warning(
                 "[PrivateCompanion] TTS强化生成语音失败: provider=%s error_type=%s error=%s text=%s",

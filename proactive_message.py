@@ -4682,6 +4682,14 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return finish("SDGen", image_path, note)
         if preferred == "external":
             if not self._external_photo_available():
+                # external unavailable, try gitee_aiimg directly
+                if self._find_gitee_aiimg_plugin() is not None:
+                    image_path, note = await self._run_gitee_aiimg_photo_generation(
+                        prompt_text,
+                        session_key=session_key,
+                        image_size=image_size,
+                    )
+                    return finish("Gitee AI Image", image_path, note)
                 return finish("在线图片 API", "", "在线图片 API 后端不可用或未配置")
             image_path, note = await self._run_external_photo_generation(
                 prompt_text,
@@ -4689,7 +4697,20 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 reference_image_path=reference_image_path,
                 image_size=image_size,
             )
-            return finish("在线图片 API", image_path, note)
+            logger.info("[PrivateCompanion] external 返回: trace=%s image_path=%s note=%s", trace_id, _single_line(str(image_path), 80) or "-", _single_line(note, 120))
+            if image_path:
+                return finish("在线图片 API", image_path, note)
+            # external failed, try gitee_aiimg
+            logger.info("[PrivateCompanion] external 失败,查找 gitee_aiimg: trace=%s", trace_id)
+            if self._find_gitee_aiimg_plugin() is not None:
+                logger.info("[PrivateCompanion] external 失败,回退 Gitee AI Image: trace=%s note=%s", trace_id, _single_line(note, 180))
+                image_path, note = await self._run_gitee_aiimg_photo_generation(
+                    prompt_text,
+                    session_key=session_key,
+                    image_size=image_size,
+                )
+                return finish("Gitee AI Image", image_path, note)
+            return finish("在线图片 API", "", note)
         external_note = ""
         if self._external_photo_available():
             image_path, note = await self._run_external_photo_generation(
@@ -4705,6 +4726,21 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         else:
             external_note = "在线图片 API 后端不可用或未配置"
             logger.info("[PrivateCompanion] 生图后端跳过: trace=%s backend=external note=%s", trace_id, external_note)
+        # Gitee AI Image fallback
+        gitee_aiimg_note = ""
+        if self._find_gitee_aiimg_plugin() is not None:
+            image_path, note = await self._run_gitee_aiimg_photo_generation(
+                prompt_text,
+                session_key=session_key,
+                image_size=image_size,
+            )
+            if image_path:
+                return finish("Gitee AI Image", image_path, note)
+            gitee_aiimg_note = note
+            logger.info("[PrivateCompanion] 生图后端回退: trace=%s backend=gitee_aiimg note=%s", trace_id, _single_line(note, 180))
+        else:
+            gitee_aiimg_note = "Gitee AI Image 插件未加载"
+            logger.info("[PrivateCompanion] 生图后端跳过: trace=%s backend=gitee_aiimg note=%s", trace_id, gitee_aiimg_note)
         if self._comfyui_photo_available():
             busy_state = self._local_photo_generation_busy_state(force_refresh=True)
             if busy_state:
@@ -4746,7 +4782,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         else:
             sdgen_note = "SDGen 插件不可用或未配置"
             logger.info("[PrivateCompanion] 生图后端跳过: trace=%s backend=sdgen note=%s", trace_id, sdgen_note)
-        return finish("在线图片 API", "", f"在线图片 API 失败：{external_note}；ComfyUI 失败：{comfyui_note}；SDGen 失败：{sdgen_note}")
+        return finish("Gitee AI Image", "", f"在线图片 API 失败：{external_note}；Gitee AI Image 失败：{gitee_aiimg_note}；ComfyUI 失败：{comfyui_note}；SDGen 失败：{sdgen_note}")
 
     async def _build_photo_scene_prompt(
         self, user: dict[str, Any], name: str, reason: str
@@ -5835,6 +5871,53 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return "", note
         except Exception as e:
             logger.warning(f"[PrivateCompanion] 在线图片 API 生图失败: {e}", exc_info=True)
+            return "", str(e)
+
+    def _find_gitee_aiimg_plugin(self) -> Any:
+        """Find gitee_aiimg plugin instance via AstrBot star_registry."""
+        try:
+            from astrbot.core.star.star import star_registry
+            for metadata in star_registry:
+                name = str(getattr(metadata, "name", "") or "").lower()
+                module_path = str(getattr(metadata, "module_path", "") or "").lower()
+                star_cls = getattr(metadata, "star_cls", None)
+                has_draw = hasattr(star_cls, "draw") if star_cls else False
+                logger.info("[PrivateCompanion] 扫描插件: name=%s module_path=%s has_draw=%s", name, module_path, has_draw)
+                if "gitee_aiimg" in name or "gitee_aiimg" in module_path:
+                    if star_cls is not None and has_draw:
+                        logger.info("[PrivateCompanion] 找到 gitee_aiimg 插件: %s", name)
+                        return star_cls
+                    logger.info("[PrivateCompanion] 找到 gitee_aiimg 但 star_cls=%s has_draw=%s attrs=%s", star_cls is not None, has_draw, [a for a in dir(star_cls) if not a.startswith("_") and "draw" in a.lower()] if star_cls else [])
+        except Exception as e:
+            logger.warning("[PrivateCompanion] _find_gitee_aiimg_plugin 异常: %s", e, exc_info=True)
+        return None
+
+    async def _run_gitee_aiimg_photo_generation(
+        self,
+        prompt_text: str,
+        *,
+        session_key: str,
+        image_size: str = "",
+    ) -> tuple[str, str]:
+        """Generate image via gitee_aiimg plugin's ImageDrawService."""
+        plugin = self._find_gitee_aiimg_plugin()
+        if plugin is None:
+            return "", "Gitee AI Image 插件未加载"
+        draw_service = getattr(plugin, "draw", None)
+        if draw_service is None:
+            return "", "Gitee AI Image 插件 draw_service 不可用"
+        try:
+            path = await asyncio.wait_for(
+                draw_service.generate(prompt_text),
+                timeout=180,
+            )
+            if path and Path(path).exists():
+                return str(path), "ok"
+            return "", "Gitee AI Image 未返回有效图片"
+        except asyncio.TimeoutError:
+            return "", "Gitee AI Image 生图超时"
+        except Exception as e:
+            logger.warning(f"[PrivateCompanion] Gitee AI Image 生图失败: {e}", exc_info=True)
             return "", str(e)
 
     async def _run_external_photo_edit_generation(

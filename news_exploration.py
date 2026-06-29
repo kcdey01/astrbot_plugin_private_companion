@@ -660,8 +660,10 @@ class NewsExplorationMixin:
 
     def _bilibili_plugin_dir(self) -> Path:
         candidates = [
+            Path(__file__).resolve().parent.parent / "astrbot_plugin_bilibili_ai_bot",
             Path(__file__).resolve().parent.parent / "astrbot_plugin_bilibili_bot",
             Path(__file__).resolve().parent.parent / "astrbot_plugin_bilibili",
+            Path(self.data_dir).parent.parent / "plugins" / "astrbot_plugin_bilibili_ai_bot",
             Path(self.data_dir).parent.parent / "plugins" / "astrbot_plugin_bilibili_bot",
             Path(self.data_dir).parent.parent / "plugins" / "astrbot_plugin_bilibili",
         ]

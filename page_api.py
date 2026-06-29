@@ -6804,40 +6804,42 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 if self.plugin._private_user_role(item, str(item.get("user_id") or "")) == "owner":
                     break
         umo = self._single_line((enabled_user or {}).get("umo"), 180) if isinstance(enabled_user, dict) else ""
-        config: dict[str, Any] = {}
-        provider_settings: dict[str, Any] = {}
-        provider = None
-        context = getattr(self.plugin, "context", None)
-        if context is not None:
-            getter = getattr(context, "get_config", None)
-            if callable(getter):
-                try:
-                    config = getter(umo) if umo else getter()
-                    if not isinstance(config, dict):
-                        config = {}
-                except Exception:
-                    config = {}
-            provider_settings = dict((config or {}).get("provider_tts_settings", {}) or {})
-            provider_getter = getattr(context, "get_using_tts_provider", None)
-            if callable(provider_getter):
-                try:
-                    provider = provider_getter(umo) if umo else provider_getter()
-                except Exception:
-                    provider = None
+        # Check mimo_tts plugin availability directly via star_registry
+        mimo_tts_plugin = None
+        mimo_tts_api_key = ""
+        try:
+            from astrbot.core.star.star import star_registry
+            for metadata in star_registry:
+                name = str(getattr(metadata, "name", "") or "").lower()
+                if "mimo_tts" in name:
+                    star_cls = getattr(metadata, "star_cls", None)
+                    if star_cls is not None:
+                        mimo_tts_plugin = star_cls
+                        # api_key may be on plugin_config or directly on instance
+                        mimo_tts_api_key = str(getattr(star_cls, "api_key", "") or "").strip()
+                        if not mimo_tts_api_key:
+                            pc = getattr(star_cls, "plugin_config", None)
+                            if pc is not None:
+                                mimo_tts_api_key = str(getattr(pc, "api_key", "") or "").strip()
+                        break
+        except Exception:
+            pass
+        provider_available = mimo_tts_plugin is not None and bool(mimo_tts_api_key)
         provider_label = ""
-        if provider is not None:
-            provider_id = self._provider_id(provider)
-            provider_label = self._provider_name(provider, provider_id) if provider_id else getattr(provider, "__class__", type(provider)).__name__
+        if mimo_tts_plugin is not None:
+            if mimo_tts_api_key:
+                provider_label = "mimo_tts (API Key 已配置)"
+            else:
+                provider_label = "mimo_tts (API Key 未配置)"
         return {
             "enhancement_enabled": bool(getattr(self.plugin, "enable_tts_enhancement", False)),
             "mode": self._single_line(getattr(self.plugin, "tts_generation_mode", ""), 24) or "fast_tag",
             "language": self.plugin._tts_language_label() if hasattr(self.plugin, "_tts_language_label") else "",
             "umo": umo,
-            "settings_enabled": bool(provider_settings.get("enable", False)),
-            "provider_available": provider is not None,
-            "provider_label": self._single_line(provider_label, 80) or "未知 provider",
+            "settings_enabled": mimo_tts_plugin is not None,
+            "provider_available": provider_available,
+            "provider_label": provider_label or "mimo_tts 插件未加载",
         }
-
     def _message_debounce_summary(self, data: dict[str, Any]) -> dict[str, Any]:
         raw = data.get("smart_message_debounce")
         if not isinstance(raw, dict):
