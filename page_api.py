@@ -6683,8 +6683,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             bili_available = bool(getattr(self.plugin, "_bilibili_available", lambda: False)())
             add(
                 "ok" if bili_available else "info",
-                "B 站 Bot 联动",
-                "已检测到 B 站插件或观看日志" if bili_available else "联动开关已开，但暂未检测到 B 站插件实例或日志",
+                "B站 AI Bot 联动",
+                "已检测到 B站 AI Bot 或观看日志" if bili_available else "联动开关已开，但暂未检测到 B站 AI Bot 实例或日志",
             )
 
         if features.get("enable_private_reading_integration"):
@@ -6815,7 +6815,6 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     star_cls = getattr(metadata, "star_cls", None)
                     if star_cls is not None:
                         mimo_tts_plugin = star_cls
-                        # api_key may be on plugin_config or directly on instance
                         mimo_tts_api_key = str(getattr(star_cls, "api_key", "") or "").strip()
                         if not mimo_tts_api_key:
                             pc = getattr(star_cls, "plugin_config", None)
@@ -6840,6 +6839,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "provider_available": provider_available,
             "provider_label": provider_label or "mimo_tts 插件未加载",
         }
+
+
     def _message_debounce_summary(self, data: dict[str, Any]) -> dict[str, Any]:
         raw = data.get("smart_message_debounce")
         if not isinstance(raw, dict):

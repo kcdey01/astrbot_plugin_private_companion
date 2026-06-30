@@ -126,6 +126,8 @@ DEFAULT_AI_DAILY_SOURCES = "\n".join(
         f"AI早报|黑鸦Heya|{DEFAULT_AI_DAILY_MORNING_UID}|早报 日报|12:00",
     ]
 )
+BILIBILI_AI_BOT_PLUGIN_NAME = "astrbot_plugin_bilibili_ai_bot"
+BILIBILI_PUBLIC_INFO_PLUGIN_NAME = "astrbot_plugin_bilibili"
 
 DEFAULT_NEWS_SOURCES = "\n".join(
     [
@@ -659,42 +661,92 @@ class NewsExplorationMixin:
         }
 
     def _bilibili_plugin_dir(self) -> Path:
-        candidates = [
-            Path(__file__).resolve().parent.parent / "astrbot_plugin_bilibili_ai_bot",
-            Path(__file__).resolve().parent.parent / "astrbot_plugin_bilibili_bot",
-            Path(__file__).resolve().parent.parent / "astrbot_plugin_bilibili",
-            Path(self.data_dir).parent.parent / "plugins" / "astrbot_plugin_bilibili_ai_bot",
-            Path(self.data_dir).parent.parent / "plugins" / "astrbot_plugin_bilibili_bot",
-            Path(self.data_dir).parent.parent / "plugins" / "astrbot_plugin_bilibili",
-        ]
+        candidates = self._bilibili_ai_bot_plugin_dirs()
         for path in candidates:
             if (path / "main.py").exists():
                 return path
-        return candidates[0]
+        return Path(self.data_dir).parent.parent / "plugins" / BILIBILI_AI_BOT_PLUGIN_NAME
+
+    def _bilibili_plugin_roots(self) -> list[Path]:
+        return [
+            Path(__file__).resolve().parent.parent,
+            Path(self.data_dir).parent.parent / "plugins",
+        ]
+
+    def _is_bilibili_ai_bot_dir(self, path: Path) -> bool:
+        if not (path / "main.py").exists():
+            return False
+        if path.name == BILIBILI_AI_BOT_PLUGIN_NAME:
+            return True
+        meta = path / "metadata.yaml"
+        if not meta.exists():
+            return False
+        try:
+            text = meta.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return False
+        return bool(
+            re.search(r"(?m)^name:\s*astrbot_plugin_bilibili_ai_bot\b", text)
+            or "github.com/chenluQwQ/astrbot_plugin_bilibili_ai_bot" in text
+        )
+
+    def _bilibili_ai_bot_plugin_dirs(self) -> list[Path]:
+        found: list[Path] = []
+        seen: set[str] = set()
+        for root in self._bilibili_plugin_roots():
+            direct = root / BILIBILI_AI_BOT_PLUGIN_NAME
+            for path in [direct, *root.glob("astrbot_plugin_bilibili*")]:
+                key = str(path.resolve()) if path.exists() else str(path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if self._is_bilibili_ai_bot_dir(path):
+                    found.append(path)
+        return found
+
+    def _bilibili_ai_bot_package_names(self) -> list[str]:
+        names = [BILIBILI_AI_BOT_PLUGIN_NAME]
+        for path in self._bilibili_ai_bot_plugin_dirs():
+            if path.name not in names:
+                names.append(path.name)
+        return names
+
+    def _bilibili_ai_bot_data_dirs(self) -> list[Path]:
+        candidates: list[Path] = []
+        for plugin_name in self._bilibili_ai_bot_package_names():
+            try:
+                candidates.append(Path(StarTools.get_data_dir(plugin_name)))
+            except Exception:
+                pass
+            candidates.append(self._bilibili_plugin_dir().parent.parent / "plugin_data" / plugin_name)
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for path in candidates:
+            key = str(path)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(path)
+        return deduped
 
     def _bilibili_watch_log_file(self) -> Path:
-        try:
-            module = importlib.import_module("data.plugins.astrbot_plugin_bilibili_bot.core.config")
-            path = getattr(module, "WATCH_LOG_FILE", "")
-            if path:
-                return Path(path)
-        except Exception:
-            pass
-        try:
-            module = importlib.import_module("astrbot_plugin_bilibili_bot.core.config")
-            path = getattr(module, "WATCH_LOG_FILE", "")
-            if path:
-                return Path(path)
-        except Exception:
-            pass
-        try:
-            return Path(StarTools.get_data_dir("astrbot_plugin_bilibili_ai_bot")) / "watch_log.json"
-        except Exception:
-            return self._bilibili_plugin_dir().parent.parent / "plugin_data" / "astrbot_plugin_bilibili_ai_bot" / "watch_log.json"
+        for package_name in self._bilibili_ai_bot_package_names():
+            for module_name in (f"data.plugins.{package_name}.core.config", f"{package_name}.core.config"):
+                try:
+                    module = importlib.import_module(module_name)
+                    path = getattr(module, "WATCH_LOG_FILE", "")
+                    if path:
+                        return Path(path)
+                except Exception:
+                    pass
+        data_candidates = [path / "watch_log.json" for path in self._bilibili_ai_bot_data_dirs()]
+        for path in data_candidates:
+            if path.exists():
+                return path
+        return data_candidates[0] if data_candidates else self._bilibili_plugin_dir() / "watch_log.json"
 
     def _bilibili_available(self) -> bool:
         try:
-            return self._bilibili_plugin_dir().exists() or self._bilibili_watch_log_file().exists()
+            return bool(self._bilibili_ai_bot_plugin_dirs()) or self._bilibili_watch_log_file().exists()
         except Exception:
             return False
 
@@ -702,7 +754,7 @@ class NewsExplorationMixin:
         try:
             getter = getattr(getattr(self, "context", None), "get_registered_star", None)
             if callable(getter):
-                for name in ("astrbot_plugin_bilibili_ai_bot", "astrbot_plugin_bilibili_bot"):
+                for name in self._bilibili_ai_bot_package_names():
                     obj = getter(name)
                     if obj is not None and (
                         callable(getattr(obj, "_run_proactive", None)) or hasattr(obj, "memory_api")
@@ -714,7 +766,7 @@ class NewsExplorationMixin:
             try:
                 cls = obj.__class__
                 module = str(getattr(cls, "__module__", ""))
-                if "astrbot_plugin_bilibili" not in module:
+                if not any(name in module for name in self._bilibili_ai_bot_package_names()):
                     continue
                 if (callable(getattr(obj, "_run_proactive", None)) and hasattr(obj, "_proactive_task")) or hasattr(obj, "memory_api"):
                     return obj
@@ -731,7 +783,7 @@ class NewsExplorationMixin:
             try:
                 cls = obj.__class__
                 module = str(getattr(cls, "__module__", ""))
-                if "astrbot_plugin_bilibili" not in module:
+                if not any(name in module for name in self._bilibili_ai_bot_package_names()):
                     continue
                 api = getattr(obj, "memory_api", None)
                 if api is not None and callable(getattr(api, "get_recent_memories", None)):
@@ -953,11 +1005,11 @@ class NewsExplorationMixin:
             state["last_boredom_watch_at"] = now
             state["last_boredom_watch_status"] = "triggered"
             self._save_data_sync()
-            logger.info("[PrivateCompanion] 已触发 B 站 bot 无聊刷视频联动")
+            logger.info("[PrivateCompanion] 已触发 B站 AI Bot 无聊刷视频联动")
         except Exception as e:
             state["last_boredom_watch_status"] = f"failed:{_single_line(str(e), 80)}"
             self._save_data_sync()
-            logger.debug(f"[PrivateCompanion] 触发 B 站 bot 刷视频失败: {e}")
+            logger.debug(f"[PrivateCompanion] 触发 B站 AI Bot 刷视频失败: {e}")
 
     def _maybe_schedule_bilibili_video_share(self) -> bool:
         if not self.enable_bilibili_integration:
